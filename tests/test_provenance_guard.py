@@ -1,6 +1,7 @@
 import hashlib
 import re
 from pathlib import Path
+from typing import List
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,11 +17,11 @@ LEGACY_PROMPT_FINGERPRINTS = {
 }
 
 
-def _tokens(text: str) -> list[str]:
+def _tokens(text: str) -> List[str]:
     return re.findall(r"\w+", text.casefold(), flags=re.UNICODE)
 
 
-def _fingerprint(tokens: list[str]) -> str:
+def _fingerprint(tokens: List[str]) -> str:
     return hashlib.sha256(" ".join(tokens).encode("utf-8")).hexdigest()
 
 
