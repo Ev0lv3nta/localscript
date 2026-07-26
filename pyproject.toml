@@ -6,6 +6,9 @@ build-backend = "setuptools.build_meta"
 name = "localscript"
 version = "0.1.0"
 description = "Judged-safe local LocalScript/Lua generator"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 requires-python = ">=3.11,<3.13"
 dependencies = [
   "fastapi==0.125.0",
@@ -25,16 +28,24 @@ dev = [
 localscript = "app.cli.main:run"
 
 [tool.setuptools]
-packages = [
-  "app",
-  "app.api",
-  "app.cli",
-  "app.core",
-  "app.domain",
-  "app.generation",
-  "app.repair",
-  "app.ui",
-  "app.validation",
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app", "app.*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+"app.resources" = [
+  "config/profiles/*.yaml",
+  "kb/*.yaml",
+  "datasets/*.jsonl",
+  "scripts/*.sh",
+]
+"app.ui" = [
+  "static/*.html",
+  "static/*.css",
+  "static/*.js",
 ]
 
 [tool.pytest.ini_options]
