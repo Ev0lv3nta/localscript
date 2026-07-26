@@ -1,14 +1,17 @@
 .RECIPEPREFIX := >
 
-.PHONY: install test smoke run
+UV ?= uv
+
+.PHONY: install lock-check test smoke run
 
 install:
->if [ ! -d .venv ]; then if ! python3 -m venv .venv; then python3 -m pip install --user virtualenv && python3 -m virtualenv .venv; fi; fi
->. .venv/bin/activate && pip install --upgrade pip
->. .venv/bin/activate && pip install -e .[dev]
+>$(UV) sync --frozen --all-extras
+
+lock-check:
+>$(UV) lock --check
 
 test:
->. .venv/bin/activate && pytest -q
+>.venv/bin/python -m pytest -q
 
 smoke:
 >./scripts/judge_smoke.sh

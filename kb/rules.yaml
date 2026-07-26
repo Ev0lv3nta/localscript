@@ -9,7 +9,7 @@ runtime_constraints:
   gpu_vram_cap_gb: 8.0
   local_ollama_profile:
     model: qwen3:8b-q4_K_M
-    fallback_model: qwen3:8b-q4_K_M
+    fallback_model: qwen3:4b-instruct-2507-q4_K_M
     num_ctx: 4096
     num_predict: 256
     batch: 1
