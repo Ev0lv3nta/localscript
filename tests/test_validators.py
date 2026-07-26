@@ -6,7 +6,7 @@ from app.validation.validators import ValidationPipeline
 def test_validation_pipeline_accepts_public_json_envelope():
     extractor = TaskExtractor()
     task_spec = extractor.extract(
-        prompt="Подготовь JSON envelope для числа 5: num — исходное число, squared — его квадрат.",
+        prompt="Добавь поле-переменную squared как квадрат числа 5 и верни JSON envelope.",
         context=None,
     )
     pipeline = ValidationPipeline()
