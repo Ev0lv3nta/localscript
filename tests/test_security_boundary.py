@@ -114,7 +114,9 @@ def test_request_body_limit_stops_chunked_stream_at_limit_plus_one():
 def test_runtime_scripts_default_to_loopback_and_compose_publishes_loopback():
     judge_up = (PROJECT_ROOT / "scripts" / "judge_up.sh").read_text(encoding="utf-8")
     compose = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
 
     assert 'LOCALSCRIPT_BIND_HOST:-127.0.0.1' in judge_up
     assert "non-loopback bind requires LOCALSCRIPT_REMOTE_MODE=1" in judge_up
     assert '"127.0.0.1:${LOCALSCRIPT_PORT:-8080}' in compose
+    assert "LOCALSCRIPT_OLLAMA_CONTAINER_ALIAS=ollama" in dockerfile
