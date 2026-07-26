@@ -29,7 +29,7 @@ QUALITY_EVAL_MANIFEST = (
 def quality_gate_failures(report):
     manifest = report.get("eval_manifest")
     if not manifest:
-        return [] if report.get("ok") is True else ["quality_benchmark_failed"]
+        return ["quality_manifest_missing"]
 
     failures = []
     for entry in manifest:

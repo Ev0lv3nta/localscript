@@ -10,12 +10,17 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.request import urlopen
+
+import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
 PREFERRED_PYTHON = ROOT / ".venv" / "bin" / "python"
 PREFERRED_VENV = PREFERRED_PYTHON.parent.parent.resolve()
-if PREFERRED_PYTHON.exists() and Path(sys.prefix).resolve() != PREFERRED_VENV:
+if (
+    __name__ == "__main__"
+    and PREFERRED_PYTHON.exists()
+    and Path(sys.prefix).resolve() != PREFERRED_VENV
+):
     os.execv(
         str(PREFERRED_PYTHON),
         [str(PREFERRED_PYTHON), str(Path(__file__).resolve()), *sys.argv[1:]],
@@ -155,12 +160,13 @@ def ollama_evidence(profile, selected_model):
     host = os.getenv("LOCALSCRIPT_OLLAMA_HOST", profile.ollama_host).rstrip("/")
     evidence = {"host": host, "reachable": False, "selected_model": selected_model}
     try:
-        with urlopen(host + "/api/version", timeout=5) as response:
-            evidence["version"] = json.loads(response.read().decode("utf-8")).get(
-                "version"
-            )
-        with urlopen(host + "/api/tags", timeout=5) as response:
-            tags = json.loads(response.read().decode("utf-8")).get("models", [])
+        with httpx.Client(timeout=5.0, trust_env=False) as client:
+            version_response = client.get(host + "/api/version")
+            version_response.raise_for_status()
+            evidence["version"] = version_response.json().get("version")
+            tags_response = client.get(host + "/api/tags")
+            tags_response.raise_for_status()
+            tags = tags_response.json().get("models", [])
         evidence["reachable"] = True
         model = next(
             (
@@ -293,6 +299,10 @@ def main(argv=None):
         failures.append("smoke_failed")
     if latency["returncode"] != 0 or latency_report.get("ok") is not True:
         failures.append("latency_failed")
+    if not doctor_lock or doctor_lock.get("locked") is not True:
+        failures.append("doctor_runtime_snapshot_invalid")
+    if not commit_sha:
+        failures.append("commit_sha_missing")
 
     try:
         datasets = dataset_evidence()
@@ -307,6 +317,14 @@ def main(argv=None):
         failures.append(
             "evidence_collection_failed::{0}::{1}".format(type(exc).__name__, exc)
         )
+    if not lua.get("available"):
+        failures.append("lua_identity_missing")
+    if not luac.get("available"):
+        failures.append("luac_identity_missing")
+    if not ollama.get("reachable"):
+        failures.append("ollama_evidence_unreachable")
+    if not ollama.get("model", {}).get("digest"):
+        failures.append("selected_model_digest_missing")
     failures = list(dict.fromkeys(failures))
 
     runtime_lock = dict(doctor_lock)

@@ -29,13 +29,13 @@ jobs:
       UV_NO_PROGRESS: "1"
     steps:
       - name: Получить исходный код
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
           clean: true
 
       - name: Установить Python 3.12
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -44,7 +44,7 @@ jobs:
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Установить uv
-        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.11.21"
           enable-cache: true
@@ -64,7 +64,7 @@ jobs:
 
       - name: Сохранить отчёты
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: release-gate-${{ steps.revision.outputs.sha }}
           path: |

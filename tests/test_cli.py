@@ -4,6 +4,7 @@ from typer.testing import CliRunner
 
 from app.cli.main import cli
 from app.core import config as config_module
+from app.core.benchmarks import QUALITY_EVAL_MANIFEST
 from app.generation.engine import GenerationResult
 from app.generation.ollama import OllamaBackend
 
@@ -57,13 +58,21 @@ def test_doctor_flag_parses_as_boolean(monkeypatch):
         "app.cli.main.run_quality_benchmark",
         lambda profile=None, backend=None, mode="competition": {
             "backend_type": "live_ollama",
+            "eval_manifest": [
+                {"name": entry["name"], "role": entry["role"]}
+                for entry in QUALITY_EVAL_MANIFEST
+            ],
             "public_gold": {"ok": True},
+            "stress_eval": {"ok": True},
+            "showcase_eval": {"ok": True},
             "model_backed_eval": {"ok": True},
             "multilingual_eval": {"ok": True},
             "ambiguity_eval": {"ok": True},
             "clarification_eval": {"ok": True},
             "composition_eval": {"ok": True},
             "regression_eval": {"ok": True},
+            "adversarial_eval": {"ok": True},
+            "large_context_eval": {"ok": True},
             "adversarial_ok": True,
             "ok": True,
         },
@@ -115,7 +124,13 @@ def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tm
         assert backend.profile.model == profile.model
         return {
             "backend_type": "live_ollama",
+            "eval_manifest": [
+                {"name": entry["name"], "role": entry["role"]}
+                for entry in QUALITY_EVAL_MANIFEST
+            ],
             "public_gold": {"ok": True},
+            "stress_eval": {"ok": True},
+            "showcase_eval": {"ok": True},
             "model_backed_eval": {"ok": True},
             "multilingual_eval": {"ok": True},
             "ambiguity_eval": {"ok": True},
@@ -123,6 +138,7 @@ def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tm
             "composition_eval": {"ok": True},
             "regression_eval": {"ok": True},
             "large_context_eval": {"ok": True},
+            "adversarial_eval": {"ok": True},
             "adversarial_ok": True,
             "ok": True,
         }

@@ -146,7 +146,11 @@ def test_release_gate_writes_sha_bound_artifact_and_runs_quality_once(
     monkeypatch.setattr(
         release_gate,
         "command_identity",
-        lambda command: {"available": True, "version": "Lua 5.4.6"},
+        lambda command: {
+            "available": True,
+            "version": "Lua 5.4.6",
+            "sha256": "sha256:lua",
+        },
     )
     monkeypatch.setattr(
         release_gate,
