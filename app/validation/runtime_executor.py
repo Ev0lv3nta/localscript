@@ -32,14 +32,18 @@ DANGEROUS_LUA_PATTERNS = [
 
 
 def detect_unsafe_lua_usage(code):
+    if not isinstance(code, str):
+        return None
     for token, error_code, message in DANGEROUS_LUA_PATTERNS:
-        if token in (code or ""):
+        if token in code:
             return token, error_code, message
     return None
 
 
 def _strip_lua_wrapper(code):
-    stripped = (code or "").strip()
+    if not isinstance(code, str):
+        return ""
+    stripped = code.strip()
     if stripped.startswith("lua{") and stripped.endswith("}lua"):
         return stripped[4:-4]
     return stripped
@@ -47,17 +51,30 @@ def _strip_lua_wrapper(code):
 
 def _extract_lua_chunks(code, output_style):
     if output_style != "json_envelope":
+        if not isinstance(code, str) or not code.strip():
+            return []
         return [_strip_lua_wrapper(code)]
+
+    if not isinstance(code, str):
+        return []
 
     try:
         payload = json.loads(code)
-    except json.JSONDecodeError:
+    except (ValueError, TypeError, RecursionError):
+        return []
+
+    if not isinstance(payload, dict) or not payload:
         return []
 
     chunks = []
     for value in payload.values():
-        if isinstance(value, str):
-            chunks.append(_strip_lua_wrapper(value))
+        if not (
+            isinstance(value, str)
+            and value.startswith("lua{")
+            and value.endswith("}lua")
+        ):
+            return []
+        chunks.append(_strip_lua_wrapper(value))
     return chunks
 
 
@@ -387,29 +404,77 @@ def _run_chunk(chunk, context):
 
 
 def execute_output(code, context=None, output_style="lua_block"):
-    if output_style == "json_envelope":
-        try:
-            payload = json.loads(code)
-        except json.JSONDecodeError as exc:
-            return RuntimeExecutionResult(
-                ok=False,
-                error_code="json_envelope_invalid",
-                error_message=str(exc),
-            )
-
-        result = {}
-        for key, chunk in payload.items():
-            chunk_result = _run_chunk(_extract_lua_chunks(json.dumps({key: chunk}), "json_envelope")[0], context)
-            if not chunk_result.ok:
-                return chunk_result
-            result[key] = chunk_result.value
-        return RuntimeExecutionResult(ok=True, value=result)
-
-    chunks = _extract_lua_chunks(code, output_style)
-    if not chunks:
+    if not isinstance(code, str):
         return RuntimeExecutionResult(
             ok=False,
-            error_code="lua_chunk_missing",
-            error_message="No executable Lua chunk could be extracted.",
+            error_code="contract_not_string",
+            error_message="Generated output must be a string.",
         )
-    return _run_chunk(chunks[0], context)
+
+    try:
+        if output_style == "json_envelope":
+            try:
+                payload = json.loads(code)
+            except (ValueError, TypeError, RecursionError) as exc:
+                return RuntimeExecutionResult(
+                    ok=False,
+                    error_code="json_envelope_invalid",
+                    error_message=str(exc),
+                )
+
+            if not isinstance(payload, dict):
+                return RuntimeExecutionResult(
+                    ok=False,
+                    error_code="json_envelope_not_object",
+                    error_message="Envelope must be a JSON object.",
+                )
+            if not payload:
+                return RuntimeExecutionResult(
+                    ok=False,
+                    error_code="json_envelope_empty",
+                    error_message="Envelope must contain at least one Lua value.",
+                )
+
+            for key, chunk in payload.items():
+                if not isinstance(chunk, str):
+                    return RuntimeExecutionResult(
+                        ok=False,
+                        error_code="json_envelope_value_not_string",
+                        error_message="Envelope value for `{0}` must be a string.".format(key),
+                    )
+                if not chunk.startswith("lua{") or not chunk.endswith("}lua"):
+                    return RuntimeExecutionResult(
+                        ok=False,
+                        error_code="json_envelope_value_not_lua_wrapper",
+                        error_message="Envelope value for `{0}` must use `lua{{...}}lua`.".format(key),
+                    )
+
+            result = {}
+            chunks = _extract_lua_chunks(code, "json_envelope")
+            if not chunks or any(not chunk.strip() for chunk in chunks):
+                return RuntimeExecutionResult(
+                    ok=False,
+                    error_code="lua_chunk_missing",
+                    error_message="No executable Lua chunk could be extracted.",
+                )
+            for (key, _), chunk in zip(payload.items(), chunks):
+                chunk_result = _run_chunk(chunk, context)
+                if not chunk_result.ok:
+                    return chunk_result
+                result[key] = chunk_result.value
+            return RuntimeExecutionResult(ok=True, value=result)
+
+        chunks = _extract_lua_chunks(code, output_style)
+        if not chunks:
+            return RuntimeExecutionResult(
+                ok=False,
+                error_code="lua_chunk_missing",
+                error_message="No executable Lua chunk could be extracted.",
+            )
+        return _run_chunk(chunks[0], context)
+    except Exception as exc:
+        return RuntimeExecutionResult(
+            ok=False,
+            error_code="runtime_executor_error",
+            error_message=str(exc),
+        )

@@ -71,6 +71,20 @@ def test_semantic_executor_accepts_conditional_array_projection_code():
     assert execution.value == ["A"]
 
 
+def test_semantic_executor_preserves_json_envelope_values():
+    execution = execute_output(
+        (
+            '{"first":"lua{return wf.vars.items[1]}lua",'
+            '"count":"lua{return #wf.vars.items}lua"}'
+        ),
+        {"wf": {"vars": {"items": [10, 20, 30]}}},
+        output_style="json_envelope",
+    )
+
+    assert execution.ok is True
+    assert execution.value == {"first": 10, "count": 3}
+
+
 def test_generic_semantic_validator_catches_return_shape_mismatch():
     extractor = TaskExtractor()
     task_spec = extractor.extract(
