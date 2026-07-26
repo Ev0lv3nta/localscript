@@ -16,7 +16,9 @@ SHADOW_PROTECTED_GLOBALS = ("table", "string", "math", "utf8", "_utils", "wf")
 
 
 def _strip_lua_wrapper(code):
-    stripped = (code or "").strip()
+    if not isinstance(code, str):
+        return ""
+    stripped = code.strip()
     if stripped.startswith("lua{") and stripped.endswith("}lua"):
         return stripped[4:-4]
     return stripped
@@ -24,17 +26,30 @@ def _strip_lua_wrapper(code):
 
 def _extract_lua_chunks(code, output_style):
     if output_style != "json_envelope":
+        if not isinstance(code, str) or not code.strip():
+            return []
         return [_strip_lua_wrapper(code)]
+
+    if not isinstance(code, str):
+        return []
 
     try:
         payload = json.loads(code)
-    except json.JSONDecodeError:
+    except (ValueError, TypeError, RecursionError):
+        return []
+
+    if not isinstance(payload, dict) or not payload:
         return []
 
     chunks = []
     for value in payload.values():
-        if isinstance(value, str):
-            chunks.append(_strip_lua_wrapper(value))
+        if not (
+            isinstance(value, str)
+            and value.startswith("lua{")
+            and value.endswith("}lua")
+        ):
+            return []
+        chunks.append(_strip_lua_wrapper(value))
     return chunks
 
 
@@ -107,14 +122,27 @@ class JsonEnvelopeValidator(BaseValidator):
         if context.task_spec.output_style != "json_envelope":
             return report
 
+        if not isinstance(code, str):
+            report.add(
+                self.name,
+                "error",
+                "json_envelope_invalid",
+                "Envelope must be provided as a JSON string.",
+            )
+            return report
+
         try:
             payload = json.loads(code)
-        except json.JSONDecodeError as exc:
+        except (ValueError, TypeError, RecursionError) as exc:
             report.add(self.name, "error", "json_envelope_invalid", "Envelope is not valid JSON: {0}".format(exc))
             return report
 
         if not isinstance(payload, dict):
             report.add(self.name, "error", "json_envelope_not_object", "Envelope must be a JSON object.")
+            return report
+
+        if not payload:
+            report.add(self.name, "error", "json_envelope_empty", "Envelope must contain at least one Lua value.")
             return report
 
         for key, value in payload.items():
@@ -721,4 +749,9 @@ class ValidationPipeline:
                 continue
             validator_report = validator.validate(code, context)
             report.messages.extend(validator_report.messages)
+            if validator_report.has_errors and isinstance(
+                validator,
+                (ContractValidator, JsonEnvelopeValidator),
+            ):
+                break
         return report
