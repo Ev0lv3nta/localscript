@@ -26,6 +26,7 @@ from app.api.schemas import (
     ValidationSummary,
 )
 from app.core.storage import InvalidIdentifierError
+from app.domain.outcomes import DiagnosticSeverity, GenerationStatus, ValidationStatus
 from app.generation.engine import BackendUnavailableError
 from app.core.verifier import verify_code
 from app.generation.taskspec import TaskSpec
@@ -34,6 +35,12 @@ from app.validation.runtime_executor import execute_output
 
 
 router = APIRouter()
+
+LEGACY_SESSION_STATUS_MAP = {
+    "clarification_needed": GenerationStatus.CLARIFICATION_REQUIRED.value,
+    "degraded_completed": GenerationStatus.VALIDATION_FAILED.value,
+    "failed_safe": GenerationStatus.POLICY_REJECTED.value,
+}
 
 UI_EXAMPLES = [
     ExampleEntry(
@@ -100,14 +107,104 @@ def _validate_payload_limits(request, prompt, context):
         _raise_constraint_error(exc)
 
 
+def _generation_headers(result):
+    return {
+        "X-Trace-Id": result.trace_id,
+        "X-Session-Id": result.session_id,
+        "X-Strategy": result.strategy,
+        "X-Repair-Rounds": str(result.repair_rounds),
+        "X-Degraded-Mode": "true" if result.degraded_mode else "false",
+        "X-Clarification-Suggested": (
+            "true" if result.clarification_suggested else "false"
+        ),
+        "X-Assumption-Risk": result.assumption_risk,
+    }
+
+
 def _apply_generation_headers(response, result):
-    response.headers["X-Trace-Id"] = result.trace_id
-    response.headers["X-Session-Id"] = result.session_id
-    response.headers["X-Strategy"] = result.strategy
-    response.headers["X-Repair-Rounds"] = str(result.repair_rounds)
-    response.headers["X-Degraded-Mode"] = "true" if result.degraded_mode else "false"
-    response.headers["X-Clarification-Suggested"] = "true" if result.clarification_suggested else "false"
-    response.headers["X-Assumption-Risk"] = result.assumption_risk
+    response.headers.update(_generation_headers(result))
+
+
+def _require_generation_outcome(result):
+    if result.outcome is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": "generation_outcome_missing",
+                "message": "Generation engine returned no typed outcome.",
+            },
+        )
+    return result.outcome
+
+
+def _outcome_error_detail(outcome):
+    if outcome.status is GenerationStatus.POLICY_REJECTED:
+        return {
+            "code": outcome.status.value,
+            "message": "Generation request was rejected by policy.",
+        }
+    if outcome.status is GenerationStatus.CLARIFICATION_REQUIRED:
+        return {
+            "code": outcome.status.value,
+            "message": outcome.question,
+        }
+    if outcome.status is GenerationStatus.BACKEND_UNAVAILABLE:
+        return {
+            "code": outcome.status.value,
+            "message": "Generation backend is unavailable.",
+        }
+    findings = outcome.validation.findings + outcome.diagnostics
+    message = next(
+        (finding.message for finding in findings if finding.message),
+        "Generation did not produce validated code.",
+    )
+    return {"code": outcome.status.value, "message": message}
+
+
+def _outcome_error_codes(outcome):
+    codes = []
+    for finding in outcome.validation.findings:
+        if (
+            finding.severity is DiagnosticSeverity.ERROR
+            or outcome.validation.status is ValidationStatus.INCOMPLETE
+        ) and finding.code not in codes:
+            codes.append(finding.code)
+    return codes
+
+
+def _outcome_messages(outcome):
+    return [
+        {
+            "validator": finding.stage,
+            "level": finding.severity.value,
+            "code": finding.code,
+            "message": finding.message,
+        }
+        for finding in outcome.validation.findings
+    ]
+
+
+def _raise_for_backend_outcome(outcome, result):
+    if outcome.status is GenerationStatus.BACKEND_UNAVAILABLE:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_outcome_error_detail(outcome),
+            headers=_generation_headers(result),
+        )
+
+
+def _public_session_summary(summary, outcome=None, validation_report=None):
+    summary = dict(summary)
+    if outcome is not None:
+        summary["status"] = outcome.status.value
+    elif (validation_report or {}).get("has_errors"):
+        summary["status"] = GenerationStatus.VALIDATION_FAILED.value
+    else:
+        summary["status"] = LEGACY_SESSION_STATUS_MAP.get(
+            summary["status"],
+            summary["status"],
+        )
+    return summary
 
 
 def _handle_identifier_error(exc):
@@ -176,8 +273,16 @@ def generate(payload: GenerateRequest, request: Request, response: Response):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "backend_unavailable", "message": str(exc)},
         )
+    outcome = _require_generation_outcome(result)
+    _raise_for_backend_outcome(outcome, result)
+    if outcome.status is not GenerationStatus.COMPLETED:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_outcome_error_detail(outcome),
+            headers=_generation_headers(result),
+        )
     _apply_generation_headers(response, result)
-    return GenerateResponse(code=result.code)
+    return GenerateResponse(code=outcome.code)
 
 
 @router.post("/api/generate", response_model=GenerateRichResponse)
@@ -201,23 +306,30 @@ def generate_rich(payload: GenerateRichRequest, request: Request, response: Resp
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "backend_unavailable", "message": str(exc)},
         )
+    outcome = _require_generation_outcome(result)
+    _raise_for_backend_outcome(outcome, result)
     _apply_generation_headers(response, result)
+    session_summary = _public_session_summary(
+        result.session_summary,
+        outcome=outcome,
+    )
     return GenerateRichResponse(
-        status=result.status,
+        status=outcome.status,
         session_id=result.session_id,
         trace_id=result.trace_id,
         strategy=result.strategy,
-        question=result.question or None,
+        question=outcome.question,
         assumptions=result.assumptions,
-        code=result.code or None,
+        code=outcome.code,
         validation=ValidationSummary(
-            ok=not result.validation_report.get("has_errors", False),
-            errors=result.verification_errors,
+            status=outcome.validation.status,
+            ok=outcome.validation.ok,
+            errors=_outcome_error_codes(outcome),
             degraded_mode=result.degraded_mode,
             repair_rounds=result.repair_rounds,
-            messages=result.validation_report.get("messages", []),
+            messages=_outcome_messages(outcome),
         ),
-        session=SessionStateSummary(**result.session_summary),
+        session=SessionStateSummary(**session_summary),
     )
 
 
@@ -240,7 +352,12 @@ def get_session(session_id: str, request: Request):
         _handle_identifier_error(exc)
     if payload is None:
         raise HTTPException(status_code=404, detail="session_not_found")
-    return SessionStateSummary(**request.app.state.engine.build_session_summary(payload))
+    return SessionStateSummary(
+        **_public_session_summary(
+            request.app.state.engine.build_session_summary(payload),
+            validation_report=payload.get("previous_validation_report"),
+        )
+    )
 
 
 @router.get("/api/traces/{trace_id}", response_model=TraceResponse)
@@ -295,23 +412,41 @@ def validate_code(payload: ValidateRequest, request: Request):
     for error_code in report.error_codes() + verify_code(payload.code):
         if error_code not in verification_errors:
             verification_errors.append(error_code)
-    semantic_result = execute_output(
-        code=payload.code,
-        context=payload.context,
-        output_style=output_style,
-    )
-    return ValidateResponse(
-        ok=not verification_errors and not report.has_errors,
-        verification_errors=verification_errors,
-        validation_report=report.to_dict(),
-        degraded_mode=request.app.state.engine._is_degraded(strategy="validate", validation_report=report),
-        semantic_result=SemanticResultSummary(
+    if report.has_errors:
+        first_error = next(
+            message for message in report.messages if message.level == "error"
+        )
+        semantic_summary = SemanticResultSummary(
+            ok=False,
+            error_code=first_error.code,
+            error_message=(
+                "Semantic execution skipped after validation error: "
+                + first_error.message
+            ),
+        )
+    else:
+        semantic_result = execute_output(
+            code=payload.code,
+            context=payload.context,
+            output_style=output_style,
+        )
+        semantic_summary = SemanticResultSummary(
             ok=semantic_result.ok,
             value=semantic_result.value,
             error_code=semantic_result.error_code or None,
             error_message=semantic_result.error_message or None,
             degraded=semantic_result.degraded,
+        )
+    return ValidateResponse(
+        ok=(
+            not verification_errors
+            and not report.has_errors
+            and semantic_summary.ok
         ),
+        verification_errors=verification_errors,
+        validation_report=report.to_dict(),
+        degraded_mode=request.app.state.engine._is_degraded(strategy="validate", validation_report=report),
+        semantic_result=semantic_summary,
     )
 
 

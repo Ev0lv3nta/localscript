@@ -93,7 +93,7 @@ def test_rich_api_requires_prompt_or_session_id(tmp_path):
     assert response.status_code == 400
 
 
-def test_rich_api_returns_clarification_needed_and_persists_session(tmp_path):
+def test_rich_api_returns_clarification_required_and_persists_session(tmp_path):
     client = _make_client(tmp_path, ClarificationBackend())
 
     response = client.post(
@@ -111,7 +111,7 @@ def test_rich_api_returns_clarification_needed_and_persists_session(tmp_path):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "clarification_needed"
+    assert payload["status"] == "clarification_required"
     assert payload["question"] == "Use wf.vars or wf.initVariables for email root?"
     assert payload["code"] is None
     assert payload["session"]["open_clarification_question"] == payload["question"]
@@ -136,8 +136,11 @@ def test_rich_api_replays_existing_clarification_state_until_answer(tmp_path):
     second = client.post("/api/generate", json={"session_id": session_id})
 
     assert second.status_code == 200
-    assert second.json()["status"] == "clarification_needed"
+    assert second.json()["status"] == "clarification_required"
     assert second.json()["question"] == first.json()["question"]
+    session = client.get("/api/sessions/{0}".format(session_id))
+    assert session.status_code == 200
+    assert session.json()["status"] == "clarification_required"
 
 
 def test_rich_api_continues_after_clarification_answer(tmp_path):
@@ -315,6 +318,7 @@ def test_rich_api_completed_response_contains_validation_summary(tmp_path):
 
     assert completed.status_code == 200
     assert completed.json()["validation"] == {
+        "status": "passed",
         "ok": True,
         "errors": [],
         "degraded_mode": False,
