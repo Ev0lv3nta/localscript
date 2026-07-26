@@ -87,7 +87,14 @@ def test_doctor_flag_parses_as_boolean(monkeypatch):
     )
 
     judge_result = runner.invoke(cli, ["doctor", "--judge"])
-    assert judge_result.exit_code != 2
+    assert judge_result.exit_code == 0
+    payload = json.loads(judge_result.stdout)
+    assert payload["judge_mode"] is True
+    assert payload["selection_reason"] in {
+        "primary_selected",
+        "primary_selected_vram_skipped",
+        "primary_within_vram_cap",
+    }
 
 
 def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tmp_path):

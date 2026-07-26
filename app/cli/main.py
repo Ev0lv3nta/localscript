@@ -191,7 +191,7 @@ def benchmark(dataset=typer.Option("datasets/public_gold.jsonl", help="JSONL dat
 
 
 @cli.command()
-def doctor(judge: bool = typer.Option(False, "--judge", is_flag=True, help="Run judged-path checks.")):
+def doctor(judge: bool = typer.Option(False, "--judge", help="Run judged-path checks.")):
     profile = get_runtime_profile()
     backend = OllamaBackend(profile)
     report = {
