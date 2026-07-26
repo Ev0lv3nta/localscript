@@ -4,6 +4,7 @@ import pytest
 
 from app.core.config import get_runtime_profile
 from app.core.traces import TraceStore
+from app.domain.outcomes import GenerationStatus, ValidationStatus
 from app.generation.engine import BackendUnavailableError, GenerationEngine
 from app.generation.extractor import TaskExtractor
 from app.generation.model_chain import SameModelChain
@@ -37,6 +38,32 @@ def test_engine_routes_broken_envelope_prompt_to_safety_guard(tmp_path):
     assert result.strategy == "safe_fallback"
     assert result.code == "-- judged-safe fallback\nreturn nil"
     assert result.verification_errors == []
+    assert result.outcome.status is GenerationStatus.POLICY_REJECTED
+    assert result.outcome.code is None
+
+
+def test_engine_clarification_has_not_run_validation(tmp_path):
+    trace_store = TraceStore(root=tmp_path / "traces")
+    engine = GenerationEngine(
+        profile=get_runtime_profile(),
+        trace_store=trace_store,
+        backend=FailIfCalledBackend(),
+    )
+
+    result = engine.generate_rich(
+        prompt="Нормализуй email и верни его в lower-case.",
+        context={
+            "wf": {
+                "vars": {"email": "A@EXAMPLE.COM"},
+                "initVariables": {"email": "B@EXAMPLE.COM"},
+            }
+        },
+    )
+
+    assert result.outcome.status is GenerationStatus.CLARIFICATION_REQUIRED
+    assert result.outcome.validation.status is ValidationStatus.NOT_RUN
+    assert result.outcome.question == result.question
+    assert result.outcome.code is None
 
 
 def test_parse_planner_downgrades_inconsistent_array_family_to_generic_scalar():
