@@ -5,6 +5,7 @@ from pathlib import Path
 from app.core.config import PROJECT_ROOT, get_runtime_profile
 from app.core.public_eval import evaluate_case, load_cases
 from app.core.resources import materialized_resource, resource_exists
+from app.core.state import get_state_root
 from app.core.traces import TraceStore
 from app.generation.engine import GenerationEngine
 from app.generation.ollama import OllamaBackend
@@ -73,7 +74,7 @@ def run_dataset_benchmark(dataset_path, profile=None, backend=None):
         cases = load_cases(resolved_dataset_path)
         engine = GenerationEngine(
             profile=runtime_profile,
-            trace_store=TraceStore(root=PROJECT_ROOT / "traces" / "benchmarks"),
+            trace_store=TraceStore(root=get_state_root() / "traces" / "benchmarks"),
             backend=runtime_backend,
         )
 
@@ -116,7 +117,7 @@ def run_rich_dataset_benchmark(dataset_path, profile=None, backend=None):
         cases = load_cases(resolved_dataset_path)
         engine = GenerationEngine(
             profile=runtime_profile,
-            trace_store=TraceStore(root=PROJECT_ROOT / "traces" / "benchmarks"),
+            trace_store=TraceStore(root=get_state_root() / "traces" / "benchmarks"),
             backend=runtime_backend,
         )
 

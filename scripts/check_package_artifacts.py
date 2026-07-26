@@ -7,6 +7,7 @@ import sys
 import tarfile
 import tempfile
 import zipfile
+from email.parser import Parser
 from pathlib import Path
 
 
@@ -47,7 +48,7 @@ SDIST_REQUIRED_SUFFIXES = WHEEL_REQUIRED | {
     "scripts/bootstrap_lua54.sh",
     "scripts/release_gate.py",
     "tests/conftest.py",
-    "tests/contracts/test_outcome_contract.py",
+    "tests/contracts/test_outcomes_contract.py",
     "tests/characterization/test_generation_fail_closed.py",
     "third_party/lua/lua-5.4.6.tar.gz",
 }
@@ -64,15 +65,21 @@ def _assert_wheel_manifest(wheel_path):
         if len(metadata_names) != 1:
             raise SystemExit("wheel_invalid_metadata_count::{0}".format(len(metadata_names)))
         metadata = archive.read(metadata_names[0]).decode("utf-8")
+        parsed_metadata = Parser().parsestr(metadata)
     missing = sorted(WHEEL_REQUIRED - names)
     if missing:
         raise SystemExit("wheel_missing_files::{0}".format(",".join(missing)))
     for license_name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
         if not any(name.endswith(".dist-info/licenses/" + license_name) for name in names):
             raise SystemExit("wheel_missing_license::{0}".format(license_name))
-    if "Requires-Python: >=3.11,<3.13" not in metadata:
+    python_constraints = {
+        constraint.strip()
+        for constraint in (parsed_metadata.get("Requires-Python") or "").split(",")
+        if constraint.strip()
+    }
+    if python_constraints != {">=3.11", "<3.13"}:
         raise SystemExit("wheel_invalid_requires_python")
-    if "License-Expression: MIT" not in metadata:
+    if parsed_metadata.get("License-Expression") != "MIT":
         raise SystemExit("wheel_invalid_license_expression")
 
 
@@ -114,6 +121,7 @@ def _installed_wheel_smoke(wheel_path):
             }
         )
         _run([str(venv / "bin" / "localscript"), "--help"], cwd=empty_cwd, env=smoke_env)
+        _run([str(venv / "bin" / "localscript"), "doctor"], cwd=empty_cwd, env=smoke_env)
         _run(
             [
                 str(venv / "bin" / "python"),
@@ -128,7 +136,7 @@ def _installed_wheel_smoke(wheel_path):
                     "p=get_runtime_profile();"
                     "assert p.name=='competition';"
                     "assert load_rules() and load_examples() and load_critic_rules();"
-                    "assert TraceStore().root.is_relative_to(Path(os.environ['LOCALSCRIPT_STATE_DIR']));"
+                    "assert TraceStore().root.is_relative_to(Path(os.environ['LOCALSCRIPT_STATE_DIR']).resolve());"
                     "assert create_app().state.ui_enabled"
                 ),
             ],

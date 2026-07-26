@@ -33,20 +33,14 @@ include-package-data = true
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app", "app.*"]
-namespaces = false
+namespaces = true
 
 [tool.setuptools.package-data]
-"app.resources" = [
-  "config/profiles/*.yaml",
-  "kb/*.yaml",
-  "datasets/*.jsonl",
-  "scripts/*.sh",
-]
-"app.ui" = [
-  "static/*.html",
-  "static/*.css",
-  "static/*.js",
-]
+"app.resources.config.profiles" = ["*.yaml"]
+"app.resources.datasets" = ["*.jsonl"]
+"app.resources.kb" = ["*.yaml"]
+"app.resources.scripts" = ["*.sh"]
+"app.ui.static" = ["*.html", "*.css", "*.js"]
 
 [tool.pytest.ini_options]
 markers = [
