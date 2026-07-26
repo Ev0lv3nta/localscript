@@ -30,6 +30,7 @@ packages = [
   "app.api",
   "app.cli",
   "app.core",
+  "app.domain",
   "app.generation",
   "app.repair",
   "app.ui",
