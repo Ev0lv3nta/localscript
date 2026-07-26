@@ -46,6 +46,19 @@ def test_execute_output_reports_missing_plain_lua_chunk():
     assert result.error_code == "lua_chunk_missing"
 
 
+def test_execute_output_does_not_mask_programmer_errors(monkeypatch):
+    def fail_with_programmer_error(chunk, context):
+        raise AssertionError("unexpected executor defect")
+
+    monkeypatch.setattr(
+        "app.validation.runtime_executor._run_chunk",
+        fail_with_programmer_error,
+    )
+
+    with pytest.raises(AssertionError, match="unexpected executor defect"):
+        execute_output("return 1", output_style="lua_block")
+
+
 class UnexpectedValidator(BaseValidator):
     name = "unexpected"
 
