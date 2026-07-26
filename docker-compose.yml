@@ -30,7 +30,7 @@ services:
       ollama:
         condition: service_healthy
     ports:
-      - "${LOCALSCRIPT_PORT:-8080}:${LOCALSCRIPT_PORT:-8080}"
+      - "127.0.0.1:${LOCALSCRIPT_PORT:-8080}:${LOCALSCRIPT_PORT:-8080}"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:${LOCALSCRIPT_PORT:-8080}/ready"]
       interval: 10s

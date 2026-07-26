@@ -13,7 +13,9 @@ STARTUP_TIMEOUT_SECONDS="${LOCALSCRIPT_STARTUP_TIMEOUT_SECONDS:-120}"
 OLLAMA_POLL_INTERVAL_SECONDS="${LOCALSCRIPT_OLLAMA_POLL_INTERVAL_SECONDS:-2}"
 SUPPORTED_PYTHON_MIN_MINOR="${LOCALSCRIPT_PYTHON_MIN_MINOR:-11}"
 SUPPORTED_PYTHON_MAX_MINOR="${LOCALSCRIPT_PYTHON_MAX_MINOR:-12}"
-UVI_HOST="${LOCALSCRIPT_BIND_HOST:-0.0.0.0}"
+UVI_HOST="${LOCALSCRIPT_BIND_HOST:-127.0.0.1}"
+REMOTE_MODE="${LOCALSCRIPT_REMOTE_MODE:-0}"
+REMOTE_TOKEN="${LOCALSCRIPT_REMOTE_TOKEN:-}"
 
 fail() {
   printf 'localscript judge_up: %s\n' "$1" >&2
@@ -96,10 +98,11 @@ detect_mode() {
 fetch_model_tags() {
   "${PYTHON_BIN}" - <<PY
 import json
-from urllib.request import urlopen
+from urllib.request import ProxyHandler, build_opener
 
 host = "${OLLAMA_HOST}".rstrip("/")
-with urlopen(host + "/api/tags", timeout=10) as response:
+opener = build_opener(ProxyHandler({}))
+with opener.open(host + "/api/tags", timeout=10) as response:
     payload = json.loads(response.read().decode("utf-8"))
 
 for item in payload.get("models", []):
@@ -114,13 +117,13 @@ wait_for_ollama() {
   deadline="${STARTUP_TIMEOUT_SECONDS}"
   elapsed=0
   while [ "${elapsed}" -lt "${deadline}" ]; do
-    if curl -fsS "${OLLAMA_HOST}/api/tags" >/dev/null 2>&1; then
+    if curl --noproxy '*' -fsS "${OLLAMA_HOST}/api/tags" >/dev/null 2>&1; then
       return 0
     fi
     sleep "${OLLAMA_POLL_INTERVAL_SECONDS}"
     elapsed=$((elapsed + OLLAMA_POLL_INTERVAL_SECONDS))
   done
-  fail "Ollama did not become reachable at ${OLLAMA_HOST} within ${STARTUP_TIMEOUT_SECONDS}s"
+  fail "Ollama did not become reachable at the configured endpoint within ${STARTUP_TIMEOUT_SECONDS}s"
 }
 
 require_model_tag() {
@@ -138,7 +141,21 @@ require_model_tag() {
     fi
   fi
 
-  fail "required model tag \`${model}\` is missing on ${OLLAMA_HOST}"
+  fail "required model tag \`${model}\` is missing at the configured Ollama endpoint"
+}
+
+validate_bind_policy() {
+  case "${UVI_HOST}" in
+    127.0.0.1|localhost|::1)
+      return 0
+      ;;
+  esac
+  if [ "${REMOTE_MODE}" != "1" ]; then
+    fail "non-loopback bind requires LOCALSCRIPT_REMOTE_MODE=1"
+  fi
+  if [ "${#REMOTE_TOKEN}" -lt 32 ]; then
+    fail "remote mode requires LOCALSCRIPT_REMOTE_TOKEN with at least 32 characters"
+  fi
 }
 
 ensure_service_port_free() {
@@ -167,6 +184,7 @@ export PATH
 
 require_command curl
 require_command uvicorn
+validate_bind_policy
 
 PYTHON_VERSION_CHECK="$(validate_python_runtime 2>&1 || true)"
 if [ -n "${PYTHON_VERSION_CHECK}" ]; then
@@ -198,10 +216,10 @@ export LOCALSCRIPT_PROFILE="${LOCALSCRIPT_PROFILE:-competition}"
 export LOCALSCRIPT_OLLAMA_HOST="${OLLAMA_HOST}"
 export LOCALSCRIPT_OLLAMA_MODE="${SELECTED_OLLAMA_MODE}"
 export LOCALSCRIPT_UI_ENABLED="${LOCALSCRIPT_UI_ENABLED:-1}"
+export LOCALSCRIPT_REMOTE_MODE="${REMOTE_MODE}"
 
 printf 'localscript judge_up: python %s\n' "$(python_version_triplet)"
 printf 'localscript judge_up: Ollama mode %s\n' "${SELECTED_OLLAMA_MODE}"
-printf 'localscript judge_up: Ollama host %s\n' "${OLLAMA_HOST}"
 printf 'localscript judge_up: service URL http://127.0.0.1:%s\n' "${PORT}"
 printf 'localscript judge_up: Swagger URL http://127.0.0.1:%s/docs\n' "${PORT}"
 printf 'localscript judge_up: run ./scripts/preflight_judge.sh for full judged preflight\n'
