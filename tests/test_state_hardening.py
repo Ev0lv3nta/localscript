@@ -10,7 +10,12 @@ import pytest
 
 from app.core.sessions import SessionStore
 from app.core.state import UnsafeStatePathError
-from app.core.storage import CorruptStateError, REDACTED
+from app.core.storage import (
+    CorruptStateError,
+    InvalidIdentifierError,
+    REDACTED,
+    validate_identifier,
+)
 from app.core.traces import TraceStore
 
 
@@ -138,6 +143,12 @@ def test_trace_redaction_public_projection_and_uuid4_ids(tmp_path):
     assert datetime.fromisoformat(persisted["created_at"].replace("Z", "+00:00")).tzinfo
 
 
+def test_uuid_shaped_ids_must_be_version_four_but_legacy_slugs_remain_compatible():
+    validate_identifier("persisted-session", "invalid_session_id")
+    with pytest.raises(InvalidIdentifierError):
+        validate_identifier(str(uuid.uuid1()), "invalid_session_id")
+
+
 def test_trace_lookup_uses_index_without_recursive_glob(monkeypatch, tmp_path):
     traces = TraceStore(root=tmp_path / "traces")
     session_id = uuid.uuid4().hex
@@ -181,6 +192,17 @@ def test_corrupt_session_is_quarantined_with_typed_error(tmp_path):
 
     assert raised.value.code == "corrupt_state_json"
     assert raised.value.quarantine_path.exists()
+    assert not path.exists()
+
+
+def test_structurally_corrupt_session_is_quarantined(tmp_path):
+    store = SessionStore(root=tmp_path / "sessions")
+    path = store.path_for(SESSION_ID)
+    path.write_text("[]", encoding="utf-8")
+
+    with pytest.raises(CorruptStateError):
+        store.read(SESSION_ID)
+
     assert not path.exists()
 
 

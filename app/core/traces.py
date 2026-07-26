@@ -128,12 +128,14 @@ class TraceStore:
         with file_lock(self._lock_path):
             index_path = self._trace_index_path(trace_id)
             if index_path.exists():
-                trace_path = self._path_from_pointer(read_json(index_path))
+                trace_path = self._path_from_pointer(
+                    read_json(index_path, expected_type=dict)
+                )
             else:
                 trace_path = self._find_legacy_path_unlocked(trace_id)
             if trace_path is None or not trace_path.exists():
                 return None
-            return read_json(trace_path)
+            return read_json(trace_path, expected_type=dict)
 
     def latest_for_session(self, session_id):
         validate_identifier(session_id, "invalid_session_id")
@@ -148,7 +150,7 @@ class TraceStore:
                         or pointer_path.suffix != ".json"
                     ):
                         continue
-                    pointer = read_json(pointer_path)
+                    pointer = read_json(pointer_path, expected_type=dict)
                     try:
                         pointers.append((parse_utc(pointer["created_at"]), pointer))
                     except (KeyError, TypeError, ValueError):
@@ -156,11 +158,11 @@ class TraceStore:
                 for _, pointer in sorted(pointers, reverse=True):
                     trace_path = self._path_from_pointer(pointer)
                     if trace_path.exists():
-                        return read_json(trace_path)
+                        return read_json(trace_path, expected_type=dict)
 
             latest = None
             for trace_path in self._iter_trace_paths_unlocked():
-                payload = read_json(trace_path)
+                payload = read_json(trace_path, expected_type=dict)
                 if payload.get("session_id") != session_id:
                     continue
                 try:
@@ -206,7 +208,7 @@ class TraceStore:
         now = utc_now(self._clock)
         entries = []
         for path in self._iter_trace_paths_unlocked():
-            payload = read_json(path)
+            payload = read_json(path, expected_type=dict)
             try:
                 timestamp = parse_utc(payload.get("created_at"))
             except (TypeError, ValueError):
@@ -250,9 +252,9 @@ class TraceStore:
             "planner": {},
             "critic": {},
             "repair_trace": [],
-            "rules_applied": list(payload.get("rules_applied", [])),
-            "examples_used": list(payload.get("examples_used", [])),
-            "critic_rules_used": list(payload.get("critic_rules_used", [])),
+            "rules_applied": [],
+            "examples_used": [],
+            "critic_rules_used": [],
             "semantic_checks": [],
             "backend_error": None,
             "code": "",

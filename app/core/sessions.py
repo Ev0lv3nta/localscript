@@ -60,7 +60,7 @@ class SessionStore:
         path = self.path_for(session_id)
         if not path.exists():
             return None
-        return read_json(path)
+        return read_json(path, expected_type=dict)
 
     def read(self, session_id):
         with file_lock(self._lock_path):
@@ -124,7 +124,7 @@ class SessionStore:
                 continue
             if not path.is_file() or path.suffix != ".json" or path.name.startswith("."):
                 continue
-            payload = read_json(path)
+            payload = read_json(path, expected_type=dict)
             timestamp = None
             if isinstance(payload, dict):
                 try:

@@ -10,9 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-SAFE_IDENTIFIER_RE = re.compile(r"^(?:[a-f0-9]{32}|[0-9a-fA-F-]{36}|[A-Za-z0-9_-]{8,64})$")
 UUID_RE = re.compile(
     r"^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$",
+    re.IGNORECASE,
+)
+UUID_SHAPE_RE = re.compile(
+    r"^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$",
     re.IGNORECASE,
 )
 LEGACY_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
@@ -80,8 +83,10 @@ def validate_identifier(value, code, allow_legacy=True):
             valid_uuid = parsed.version == 4
         except ValueError:
             valid_uuid = False
+    uuid_shaped = bool(isinstance(value, str) and UUID_SHAPE_RE.fullmatch(value))
     valid_legacy = bool(
         allow_legacy
+        and not uuid_shaped
         and isinstance(value, str)
         and LEGACY_IDENTIFIER_RE.fullmatch(value)
     )
@@ -179,7 +184,10 @@ def file_lock(path):
     _assert_not_symlink(lock_path)
     thread_lock = _thread_lock_for(lock_path)
     with thread_lock:
-        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+        flags = os.O_RDWR | os.O_CREAT
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(str(lock_path), flags, 0o600)
         try:
             if os.name == "nt":
                 import msvcrt
@@ -214,13 +222,22 @@ def _quarantine_corrupt_file(path):
     return quarantine
 
 
-def read_json(path, quarantine=True):
+def read_json(path, quarantine=True, expected_type=None):
     source = Path(path)
     _assert_not_symlink(source)
     try:
-        with source.open("r", encoding="utf-8") as handle:
-            return json.load(handle)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(str(source), flags)
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if expected_type is not None and not isinstance(payload, expected_type):
+            raise TypeError(
+                "state JSON must contain {0}".format(expected_type.__name__)
+            )
+        return payload
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as exc:
         quarantine_path = _quarantine_corrupt_file(source) if quarantine else None
         raise CorruptStateError(source, quarantine_path, exc) from exc
 
