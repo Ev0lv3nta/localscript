@@ -1,11 +1,10 @@
-from pathlib import Path
-
 from app.core.public_eval import load_cases
+from app.core.resources import materialized_resource
 
 
 def test_showcase_eval_dataset_declares_live_semantic_expectations():
-    dataset_path = Path(__file__).resolve().parents[1] / "datasets" / "showcase_eval.jsonl"
-    cases = load_cases(dataset_path)
+    with materialized_resource("datasets/showcase_eval.jsonl") as dataset_path:
+        cases = load_cases(dataset_path)
 
     assert len(cases) == 16
     for case in cases:

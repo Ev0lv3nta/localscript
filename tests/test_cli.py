@@ -77,7 +77,7 @@ def test_doctor_flag_parses_as_boolean(monkeypatch):
     monkeypatch.setattr(
         "app.cli.main.subprocess.run",
         lambda args, stdout=None, stderr=None, text=None: Completed(
-            json.dumps({"status": "ok", "model": args[1]})
+            json.dumps({"status": "ok", "model": args[2]})
         ),
     )
     monkeypatch.setattr(
@@ -135,7 +135,8 @@ def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tm
             self.stderr = ""
 
     def fake_run(args, stdout=None, stderr=None, text=None):
-        model = args[1]
+        assert args[0] == "bash"
+        model = args[2]
         status = "over_cap" if model == "qwen3:8b-q4_K_M" else "ok"
         return Completed(json.dumps({"status": status, "model": model}))
 

@@ -1,19 +1,13 @@
 import json
 from datetime import datetime
-from pathlib import Path
 
-import os
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+from app.core.state import resolve_state_path
 
 
 def get_runtime_lock_path():
-    return Path(
-        os.getenv(
-            "LOCALSCRIPT_RUNTIME_LOCK_PATH",
-            str(PROJECT_ROOT / "artifacts" / "validation" / "runtime_profile.lock.json"),
-        )
+    return resolve_state_path(
+        "LOCALSCRIPT_RUNTIME_LOCK_PATH",
+        "runtime_profile.lock.json",
     )
 
 

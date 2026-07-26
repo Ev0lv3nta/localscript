@@ -1,12 +1,11 @@
-from pathlib import Path
-
 from app.core.public_eval import load_cases
+from app.core.resources import materialized_resource
 from app.generation.extractor import TaskExtractor
 
 
 def test_public_gold_dataset_declares_live_semantic_expectations():
-    dataset_path = Path(__file__).resolve().parents[1] / "datasets" / "public_gold.jsonl"
-    cases = load_cases(dataset_path)
+    with materialized_resource("datasets/public_gold.jsonl") as dataset_path:
+        cases = load_cases(dataset_path)
 
     assert len(cases) == 8
     for case in cases:
@@ -20,10 +19,11 @@ def test_public_gold_dataset_declares_live_semantic_expectations():
 
 
 def test_public_gold_synthetic_cases_match_declared_families():
-    dataset_path = Path(__file__).resolve().parents[1] / "datasets" / "public_gold.jsonl"
     extractor = TaskExtractor()
 
-    for case in load_cases(dataset_path):
+    with materialized_resource("datasets/public_gold.jsonl") as dataset_path:
+        cases = load_cases(dataset_path)
+    for case in cases:
         task_spec = extractor.extract(case["prompt"], case.get("context"))
 
         assert task_spec.family == case["family"], case["id"]

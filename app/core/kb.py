@@ -1,17 +1,17 @@
 from functools import lru_cache
-from pathlib import Path
 import re
 
 import yaml
 
-from app.core.config import PROJECT_ROOT
+from app.core.resources import read_resource_text
 
 
 def _load_yaml(relative_path):
-    path = PROJECT_ROOT / relative_path
-    if not path.exists():
+    try:
+        content = read_resource_text(relative_path)
+    except FileNotFoundError:
         return {}
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return yaml.safe_load(content) or {}
 
 
 @lru_cache(maxsize=1)

@@ -4,6 +4,7 @@ from pathlib import Path
 import yaml
 
 from app.core import config as config_module
+from app.core.resources import read_resource_text
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -53,9 +54,8 @@ def test_runtime_profile_applies_model_environment_overrides(monkeypatch):
 
 def test_documented_and_script_defaults_match_runtime_profile():
     env_example = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
-    rules = yaml.safe_load((PROJECT_ROOT / "kb" / "rules.yaml").read_text(encoding="utf-8"))
+    rules = yaml.safe_load(read_resource_text("kb/rules.yaml"))
     shell_defaults = {
-        PROJECT_ROOT / "scripts" / "bench_vram.sh": f'FALLBACK_MODEL="${{2:-{FALLBACK_MODEL}}}"',
         PROJECT_ROOT
         / "scripts"
         / "docker_entrypoint.sh": f'FALLBACK_MODEL="${{LOCALSCRIPT_FALLBACK_MODEL:-{FALLBACK_MODEL}}}"',
@@ -77,6 +77,10 @@ def test_documented_and_script_defaults_match_runtime_profile():
         "batch": 1,
         "parallel": 1,
     }
+    assert (
+        f'FALLBACK_MODEL="${{2:-{FALLBACK_MODEL}}}"'
+        in read_resource_text("scripts/bench_vram.sh").splitlines()
+    )
     for script, expected_assignment in shell_defaults.items():
         assert expected_assignment in script.read_text(encoding="utf-8").splitlines()
 
