@@ -82,11 +82,15 @@ def test_compat_generate_rejects_invalid_candidate(tmp_path):
 
 @pytest.mark.xfail(
     strict=True,
-    raises=AttributeError,
-    reason="validation endpoint raises for non-object JSON envelopes",
+    raises=(AttributeError, AssertionError),
+    reason="validation endpoint does not stop after a structural error",
 )
 @pytest.mark.parametrize("code", ["[]", "null", "42", '"text"'])
-def test_validate_never_returns_500_for_json_shaped_code(tmp_path, code):
+def test_validate_skips_execution_after_structural_error(monkeypatch, tmp_path, code):
+    def unexpected_execution(**kwargs):
+        raise AssertionError("semantic execution must not run after structural failure")
+
+    monkeypatch.setattr("app.api.routes.execute_output", unexpected_execution)
     response = _make_client(tmp_path).post(
         "/api/validate",
         json={"code": code, "output_style": "json_envelope"},
