@@ -48,7 +48,7 @@ def test_analyze_non_email_root_ambiguity_requests_generic_clarification(tmp_pat
     assert payload["clarification_question"] == "Use wf.vars or wf.initVariables for this task?"
 
 
-def test_rich_generate_returns_clarification_needed_for_customer_city_ambiguity(tmp_path):
+def test_rich_generate_returns_clarification_required_for_customer_city_ambiguity(tmp_path):
     client = _make_client(tmp_path)
 
     response = client.post(
@@ -66,7 +66,7 @@ def test_rich_generate_returns_clarification_needed_for_customer_city_ambiguity(
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "clarification_needed"
+    assert payload["status"] == "clarification_required"
     assert payload["question"] == "Use wf.vars or wf.initVariables for this task?"
 
 
