@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LocalScript</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>LocalScript</h1>
+        <p class="subtitle">Локальный агентный сервис генерации LocalScript/Lua с уточнениями, проверкой и trace-прозрачностью.</p>
+      </div>
+      <div class="status-strip">
+        <span class="meta-chip"><span class="meta-label">Health</span><span id="statusHealth">loading</span></span>
+        <span class="meta-chip"><span class="meta-label">Profile</span><span id="statusProfile">loading</span></span>
+        <span class="meta-chip"><span class="meta-label">Model</span><span id="statusModel">loading</span></span>
+      </div>
+      <div class="top-links">
+        <a href="/docs" target="_blank" rel="noreferrer">Swagger</a>
+        <a href="/openapi.json" target="_blank" rel="noreferrer">OpenAPI</a>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel request-panel">
+        <div class="panel-header">
+          <h2>Запрос</h2>
+          <p>Выбери пример или введи свою задачу и контекст. Канонический интерактивный путь идёт через агентную цепочку.</p>
+        </div>
+
+        <label for="exampleSelect">Пример</label>
+        <div class="inline-row">
+          <select id="exampleSelect"></select>
+          <button id="loadExampleBtn" type="button" class="secondary-btn">Загрузить</button>
+        </div>
+
+        <label for="promptInput">Задача</label>
+        <textarea id="promptInput" class="prompt-box" placeholder="Опиши, какой LocalScript/Lua нужно получить."></textarea>
+
+        <label for="contextInput">Контекст JSON</label>
+        <textarea id="contextInput" class="context-box" placeholder='{"wf":{"vars":{}}}'></textarea>
+        <div class="inline-row compact-row">
+          <button id="formatJsonBtn" type="button" class="ghost-btn">Форматировать JSON</button>
+          <span id="jsonStatus" class="muted">Контекст проверяется локально до сетевого запроса.</span>
+        </div>
+
+        <button id="generateBtn" type="button" class="primary-btn">Сгенерировать</button>
+      </section>
+
+      <section class="panel result-panel">
+        <div class="panel-header">
+          <h2>Результат</h2>
+          <p>Здесь появляется итоговый код, статус генерации и краткая информация о риске.</p>
+        </div>
+
+        <div class="badge-row">
+          <span class="state-badge neutral" id="statusBadge">status: idle</span>
+          <span class="state-badge neutral" id="strategyBadge">strategy: none</span>
+          <span class="state-badge neutral" id="riskBadge">risk: low</span>
+        </div>
+
+        <label for="codeOutput">Итоговый код</label>
+        <textarea id="codeOutput" class="code-output" readonly placeholder="После генерации здесь появится финальный Lua-код или JSON envelope."></textarea>
+
+        <div class="inline-row action-row">
+          <button id="copyCodeBtn" type="button" class="secondary-btn">Скопировать код</button>
+          <button id="validateBtn" type="button" class="secondary-btn">Проверить код</button>
+          <button id="copyCurlBtn" type="button" class="ghost-btn">Скопировать cURL</button>
+        </div>
+
+        <div id="validationSummary" class="result-note">Проверка ещё не запускалась.</div>
+
+        <div class="timeline-block">
+          <h3>Ход обработки</h3>
+          <div id="timeline" class="timeline"></div>
+        </div>
+      </section>
+
+      <section class="panel iteration-panel">
+        <div class="panel-header">
+          <h2>Итерация</h2>
+          <p>Если системе нужно уточнение или ты хочешь поправить результат, продолжай работу в этой секции.</p>
+        </div>
+
+        <div id="clarificationBox" class="clarification-box hidden">
+          <div class="clarification-title">Нужно уточнение</div>
+          <div id="clarificationQuestion" class="clarification-question"></div>
+        </div>
+
+        <label for="clarificationInput">Ответ на уточнение</label>
+        <textarea id="clarificationInput" class="small-box" placeholder="Например: Use wf.vars for email root."></textarea>
+        <button id="continueBtn" type="button" class="secondary-btn">Продолжить</button>
+
+        <label for="feedbackInput">Замечание к результату</label>
+        <textarea id="feedbackInput" class="small-box" placeholder="Опиши, что именно нужно поправить в текущем результате."></textarea>
+        <button id="feedbackBtn" type="button" class="secondary-btn">Применить правку</button>
+
+        <div class="session-strip">
+          <span class="meta-chip"><span class="meta-label">Session</span><span id="sessionBadge">none</span></span>
+          <span class="meta-chip"><span class="meta-label">Trace</span><span id="traceBadge">none</span></span>
+        </div>
+
+        <button id="resetBtn" type="button" class="ghost-btn danger">Сбросить сессию</button>
+      </section>
+    </main>
+
+    <section class="diagnostics-wrap">
+      <details id="diagnosticsDetails">
+        <summary>Показать диагностику</summary>
+        <div class="diagnostics-grid">
+          <article class="diag-card">
+            <h3>Session</h3>
+            <pre id="sessionPanel">{}</pre>
+          </article>
+          <article class="diag-card">
+            <h3>Validation</h3>
+            <pre id="validationPanel">{}</pre>
+          </article>
+          <article class="diag-card">
+            <h3>Trace</h3>
+            <pre id="tracePanel">{}</pre>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

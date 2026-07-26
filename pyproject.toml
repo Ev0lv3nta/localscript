@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "localscript"
+version = "0.1.0"
+description = "Judged-safe local LocalScript/Lua generator"
+requires-python = ">=3.8,<3.12"
+dependencies = [
+  "fastapi==0.103.2",
+  "uvicorn[standard]==0.23.2",
+  "pydantic==1.10.13",
+  "PyYAML==6.0.1",
+  "typer==0.9.0",
+  "httpx==0.25.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==7.4.4",
+]
+
+[project.scripts]
+localscript = "app.cli.main:run"
+
+[tool.setuptools]
+packages = [
+  "app",
+  "app.api",
+  "app.cli",
+  "app.core",
+  "app.generation",
+  "app.repair",
+  "app.ui",
+  "app.validation",
+]
+
+[tool.pytest.ini_options]
+markers = [
+  "unit: hermetic tests that do not require a live model backend",
+  "integration: tests that require real runtime integration",
+  "ollama: tests that require a live Ollama backend",
+  "gpu: tests that rely on the judged GPU runtime profile",
+]

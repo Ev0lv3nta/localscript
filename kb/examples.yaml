@@ -1,0 +1,185 @@
+schema_version: 1
+provenance:
+  origin: synthetic
+  author: repository_owner
+  license: MIT
+
+examples:
+  - id: synthetic_last_sensor_reading
+    family: last_array_item
+    prompt: "Из wf.vars.sensorReadings верни самое свежее измерение в конце массива."
+    expected_output_style: lua_expression
+    key_constraints:
+      - Read the source array from wf.vars.sensorReadings.
+      - Return nil when the array is empty.
+      - Return the last item through the Lua length operator.
+    reference_code: |
+      local readings = wf.vars.sensorReadings or {}
+      if #readings == 0 then
+        return nil
+      end
+      return readings[#readings]
+
+  - id: synthetic_increment_page_counter
+    family: counter_increment
+    prompt: "Увеличь wf.vars.pageCounter на единицу и верни новое число."
+    expected_output_style: lua_expression
+    key_constraints:
+      - Read pageCounter from wf.vars.
+      - Add exactly one without mutating workflow state.
+    reference_code: |
+      return wf.vars.pageCounter + 1
+
+  - id: synthetic_keep_issue_fields
+    family: rest_cleanup
+    prompt: "В serviceResponse.result сохрани в каждой записи только issueKey, state и assignee."
+    expected_output_style: lua_block
+    key_constraints:
+      - Keep only issueKey, state and assignee.
+      - Remove every other key through a generic keep-only loop.
+      - Return the cleaned result array.
+    reference_code: |
+      local result = wf.vars.serviceResponse.result or {}
+      for _, entry in pairs(result) do
+        for key, _ in pairs(entry) do
+          if key ~= "issueKey" and key ~= "state" and key ~= "assignee" then
+            entry[key] = nil
+          end
+        end
+      end
+      return result
+
+  - id: synthetic_compact_report_time
+    family: datum_time_to_iso8601
+    prompt: "Преобразуй report.DATUM и report.TIME в UTC-строку ISO 8601."
+    expected_output_style: lua_block
+    key_constraints:
+      - Read compact date and time values from wf.vars.report.
+      - Strip non-digits and right-pad a short time to six digits.
+      - Return a UTC ISO 8601 string.
+    reference_code: |
+      local compactDate = wf.vars.report.DATUM or ""
+      local digits = string.gsub(wf.vars.report.TIME or "", "%D", "")
+      local compactTime = string.sub(digits .. "000000", 1, 6)
+      local year = string.sub(compactDate, 1, 4)
+      local month = string.sub(compactDate, 5, 6)
+      local day = string.sub(compactDate, 7, 8)
+      local hour = string.sub(compactTime, 1, 2)
+      local minute = string.sub(compactTime, 3, 4)
+      local second = string.sub(compactTime, 5, 6)
+      return string.format(
+        "%s-%s-%sT%s:%s:%s.00000Z",
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second
+      )
+
+  - id: synthetic_inventory_item_arrays
+    family: ensure_items_array
+    prompt: "Нормализуй items внутри wf.vars.inventory.ZCDF_PACKAGES: одиночные значения оберни в массив."
+    expected_output_style: lua_block
+    key_constraints:
+      - Preserve an existing numeric array.
+      - Wrap a single object into an array.
+      - Do not add an items field when it is absent.
+    reference_code: |
+      local function asArray(value)
+        if type(value) ~= "table" then
+          return {value}
+        end
+        for key, _ in pairs(value) do
+          if type(key) ~= "number" or math.floor(key) ~= key then
+            return {value}
+          end
+        end
+        return value
+      end
+      local packages = wf.vars.inventory.ZCDF_PACKAGES or {}
+      for _, packageItem in ipairs(packages) do
+        if type(packageItem) == "table" and packageItem.items ~= nil then
+          packageItem.items = asArray(packageItem.items)
+        end
+      end
+      return packages
+
+  - id: synthetic_campaign_adjustment_filter
+    family: filter_discount_markdown
+    prompt: "Из wf.vars.campaignRows оставь строки с заполненным Discount либо Markdown."
+    expected_output_style: lua_block
+    key_constraints:
+      - Build a new array through _utils.array.new().
+      - Preserve rows with a non-empty Discount or Markdown value.
+      - Return the filtered array.
+    reference_code: |
+      local result = _utils.array.new()
+      for _, row in ipairs(wf.vars.campaignRows or {}) do
+        if (row.Discount ~= nil and row.Discount ~= "") or
+           (row.Markdown ~= nil and row.Markdown ~= "") then
+          table.insert(result, row)
+        end
+      end
+      return result
+
+  - id: synthetic_square_nine_envelope
+    family: augment_existing_code
+    prompt: "Добавь в JSON envelope переменные num и squared для числа 9."
+    expected_output_style: json_envelope
+    key_constraints:
+      - Return exactly the num and squared keys.
+      - Keep each value inside a lua wrapper string.
+      - Compute the square from the same source number.
+    reference_code: |
+      {
+        "num": "lua{return tonumber('9')}lua",
+        "squared": "lua{local value = tonumber('9')\nreturn value * value}lua"
+      }
+
+  - id: synthetic_schedule_epoch
+    family: iso8601_to_epoch
+    prompt: "Верни Unix timestamp для wf.initVariables.recallTime."
+    expected_output_style: lua_block
+    key_constraints:
+      - Read the ISO 8601 string from wf.initVariables.recallTime.
+      - Apply the explicit timezone offset.
+      - Return epoch seconds or nil for an invalid value.
+    reference_code: |
+      local stamp = wf.initVariables.recallTime
+      if not stamp then
+        return nil
+      end
+      local year, month, day, hour, minute, second, sign, offsetHours, offsetMinutes =
+        stamp:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d):(%d%d):(%d%d)([+-])(%d%d):(%d%d)$")
+      if not year then
+        return nil
+      end
+      year = tonumber(year)
+      month = tonumber(month)
+      day = tonumber(day)
+      hour = tonumber(hour)
+      minute = tonumber(minute)
+      second = tonumber(second)
+      offsetHours = tonumber(offsetHours)
+      offsetMinutes = tonumber(offsetMinutes)
+      local function isLeap(value)
+        return (value % 4 == 0 and value % 100 ~= 0) or value % 400 == 0
+      end
+      local monthDays = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
+      local elapsedDays = day - 1
+      for currentYear = 1970, year - 1 do
+        elapsedDays = elapsedDays + (isLeap(currentYear) and 366 or 365)
+      end
+      for currentMonth = 1, month - 1 do
+        elapsedDays = elapsedDays + monthDays[currentMonth]
+        if currentMonth == 2 and isLeap(year) then
+          elapsedDays = elapsedDays + 1
+        end
+      end
+      local epoch = elapsedDays * 86400 + hour * 3600 + minute * 60 + second
+      local offset = offsetHours * 3600 + offsetMinutes * 60
+      if sign == "-" then
+        offset = -offset
+      end
+      return epoch - offset

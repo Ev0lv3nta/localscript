@@ -1,0 +1,16 @@
+templates:
+  - id: safety_guard_fallback
+    family: safety_guard
+    source: internal_guardrail
+    prompt_contains_any:
+      - broken envelope
+      - workflow.variables
+      - ctx.body
+      - external ai api
+      - python code
+      - return sql
+    expected_output_style: lua_block
+    assumptions:
+      - Prefer a judged-safe Lua fallback when the prompt asks for malformed, cross-language, or unsafe output.
+    code: |-
+      return nil

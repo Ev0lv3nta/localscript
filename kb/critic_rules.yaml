@@ -1,0 +1,63 @@
+critic_rules:
+  - id: no_jsonpath
+    severity: error
+    detect:
+      contains_any:
+        - "$."
+        - "$["
+    repair: Replace JsonPath with direct access via wf.vars or wf.initVariables.
+
+  - id: launch_variables_root
+    severity: error
+    detect:
+      prompt_hints:
+        - launch variable
+        - init variable
+        - recallTime
+    repair: Use wf.initVariables for input variables received when the scheme starts.
+
+  - id: array_constructor
+    severity: warn
+    detect:
+      prompt_hints:
+        - array
+        - массив
+      code_hints:
+        - table.insert
+    repair: Initialize new arrays with _utils.array.new() before inserting elements.
+
+  - id: explicit_array_loop
+    severity: warn
+    detect:
+      prompt_hints:
+        - array
+        - массив
+      code_hints:
+        - _utils.array.new(function
+    repair: Prefer explicit local result loops over callback-style _utils.array.new(function(...), source) for portability.
+
+  - id: markdown_fences
+    severity: error
+    detect:
+      contains_any:
+        - "```"
+    repair: Remove markdown fences and return only LocalScript/Lua code.
+
+  - id: envelope_consistency
+    severity: warn
+    detect:
+      prompt_hints:
+        - existing code
+        - variable
+        - envelope
+    repair: If the task adds or updates named variables, return a valid JSON envelope with `lua{...}lua` string values.
+
+  - id: guard_malformed_dates
+    severity: warn
+    detect:
+      prompt_hints:
+        - ISO 8601
+        - unix
+        - DATUM
+        - TIME
+    repair: Add nil/format guards before parsing date or time values.
