@@ -2,6 +2,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from app.domain.outcomes import GenerationStatus, ValidationStatus
+
 
 class GenerateRequest(BaseModel):
     prompt: str
@@ -15,6 +17,7 @@ class GenerateResponse(BaseModel):
 
 
 class ValidationSummary(BaseModel):
+    status: ValidationStatus
     ok: bool
     errors: List[str]
     degraded_mode: bool
@@ -43,7 +46,7 @@ class GenerateRichRequest(BaseModel):
 
 
 class GenerateRichResponse(BaseModel):
-    status: str
+    status: GenerationStatus
     session_id: str
     trace_id: str
     strategy: str
