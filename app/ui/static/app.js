@@ -174,7 +174,7 @@ function renderResult(body, responseHeaders) {
   renderDiagnostics();
 
   const statusKind =
-    body.status === "completed" ? "ok" : body.status === "clarification_needed" ? "warn" : "error";
+    body.status === "completed" ? "ok" : body.status === "clarification_required" ? "warn" : "error";
   setBadge(elements.statusBadge, `status: ${body.status}`, statusKind);
   setBadge(elements.strategyBadge, `strategy: ${body.strategy}`, body.strategy === "ollama_chain" ? "ok" : "warn");
 
@@ -246,7 +246,7 @@ async function generate() {
   });
   renderResult(body, response.headers);
   const timelineTitle =
-    body.status === "clarification_needed" ? "Найдено уточнение" : "Код сгенерирован";
+    body.status === "clarification_required" ? "Найдено уточнение" : "Код сгенерирован";
   pushTimeline(timelineTitle, body.question || body.code || "Код получен.", body.strategy);
   await refreshSession();
   await refreshTrace();

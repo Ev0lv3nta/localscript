@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from app.core.config import get_runtime_profile
 from app.core.traces import TraceStore
 from app.main import create_app
-from tests.support_backends import DeterministicTestBackend
+from tests.support_backends import DeterministicTestBackend, FailIfCalledBackend
 
 
 class ReadyBackend(DeterministicTestBackend):
@@ -69,6 +69,32 @@ def test_ready_endpoint_reports_not_ready(tmp_path, monkeypatch):
     payload = response.json()
     assert payload["status"] == "not_ready"
     assert "backend_reachable" in payload["errors"]
+
+
+def test_generate_endpoint_rejects_policy_fallback_without_publishing_code(tmp_path):
+    app = create_app(
+        profile=get_runtime_profile(),
+        trace_store=TraceStore(root=tmp_path / "traces"),
+        backend=FailIfCalledBackend(),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/generate",
+        json={"prompt": "Broken envelope: {num: lua{return 1}lua}."},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "policy_rejected",
+        "message": "Generation request was rejected by policy.",
+    }
+    assert "return nil" not in response.text
+    session = client.get(
+        "/api/sessions/{0}".format(response.headers["X-Session-Id"])
+    )
+    assert session.status_code == 200
+    assert session.json()["status"] == "policy_rejected"
 
 
 def test_generate_endpoint_writes_trace(tmp_path):
