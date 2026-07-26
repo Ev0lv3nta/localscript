@@ -45,6 +45,12 @@ def get_profile_path(profile_name=None):
 def get_runtime_profile(profile_name=None):
     profile_path = get_profile_path(profile_name)
     raw = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+    primary_model = os.getenv("LOCALSCRIPT_PRIMARY_MODEL")
+    fallback_model = os.getenv("LOCALSCRIPT_FALLBACK_MODEL")
+    if primary_model:
+        raw["model"] = primary_model
+    if fallback_model:
+        raw["fallback_model"] = fallback_model
     if os.getenv("LOCALSCRIPT_USE_RUNTIME_LOCK", "0") == "1":
         from app.core.runtime_lock import load_runtime_lock
 
