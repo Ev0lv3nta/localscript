@@ -1,9 +1,17 @@
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 import uuid
 
 from app.core.sessions import SessionStore
 from app.core.verifier import verify_code
+from app.domain.outcomes import (
+    Diagnostic,
+    DiagnosticSeverity,
+    GenerationOutcome,
+    GenerationStatus,
+    ValidationOutcome,
+    ValidationStatus,
+)
 from app.generation.extractor import TaskExtractor
 from app.generation.formatter import OutputFormatter
 from app.generation.model_chain import SameModelChain
@@ -35,6 +43,7 @@ class GenerationResult:
     session_summary: dict = field(default_factory=dict)
     clarification_suggested: bool = False
     assumption_risk: str = "low"
+    outcome: Optional[GenerationOutcome] = None
 
 
 class GenerationEngine:
@@ -182,6 +191,7 @@ class GenerationEngine:
                 session_summary=self.build_session_summary(session_state),
                 clarification_suggested=True,
                 assumption_risk=assumption_risk,
+                outcome=self._build_clarification_outcome(rule_based_question),
             )
 
         if task_spec.safety_fallback:
@@ -270,6 +280,7 @@ class GenerationEngine:
                         session_summary=self.build_session_summary(session_state),
                         clarification_suggested=True,
                         assumption_risk=assumption_risk,
+                        outcome=self._build_clarification_outcome(chain_result.question),
                     )
                 strategy = "feedback_revision" if feedback else "ollama_chain"
                 assumptions = list(task_spec.assumptions) + [
@@ -354,6 +365,11 @@ class GenerationEngine:
         session_state["latest_trace_id"] = trace_id
         session_state["trace_ids"].append(trace_id)
         self.session_store.write(session_id, session_state)
+        outcome = self._build_generation_outcome(
+            strategy=strategy,
+            code=code,
+            validation_report=validation_report,
+        )
         return GenerationResult(
             code=code,
             trace_id=trace_id,
@@ -368,6 +384,7 @@ class GenerationEngine:
             session_summary=self.build_session_summary(session_state),
             clarification_suggested=bool(rule_based_question),
             assumption_risk=assumption_risk,
+            outcome=outcome,
         )
 
     def _prepare_session_state(self, session_id, prompt, context, feedback, clarification_answer):
@@ -430,6 +447,9 @@ class GenerationEngine:
             session_summary=self.build_session_summary(session_state),
             clarification_suggested=True,
             assumption_risk="high",
+            outcome=self._build_clarification_outcome(
+                session_state.get("open_clarification_question", "")
+            ),
         )
 
     def analyze(self, prompt, context=None):
@@ -471,6 +491,57 @@ class GenerationEngine:
         if degraded_mode:
             return "degraded_completed"
         return "completed"
+
+    @staticmethod
+    def _build_clarification_outcome(question):
+        return GenerationOutcome(
+            status=GenerationStatus.CLARIFICATION_REQUIRED,
+            validation=ValidationOutcome(status=ValidationStatus.NOT_RUN),
+            question=question,
+        )
+
+    @staticmethod
+    def _build_generation_outcome(strategy, code, validation_report):
+        findings = tuple(
+            Diagnostic(
+                code=message.code,
+                message=message.message,
+                severity=DiagnosticSeverity(message.level),
+                stage=message.validator,
+            )
+            for message in validation_report.messages
+        )
+        incomplete_codes = {
+            "lua_runtime_missing",
+            "semantic_runtime_missing",
+        }
+        if validation_report.has_errors:
+            validation_status = ValidationStatus.FAILED
+        elif any(message.code in incomplete_codes for message in validation_report.messages):
+            validation_status = ValidationStatus.INCOMPLETE
+        else:
+            validation_status = ValidationStatus.PASSED
+
+        validation = ValidationOutcome(
+            status=validation_status,
+            findings=findings,
+        )
+        if strategy == "safe_fallback":
+            generation_status = GenerationStatus.POLICY_REJECTED
+            outcome_code = None
+        elif validation_status is ValidationStatus.PASSED:
+            generation_status = GenerationStatus.COMPLETED
+            outcome_code = code
+        else:
+            generation_status = GenerationStatus.VALIDATION_FAILED
+            outcome_code = None
+
+        return GenerationOutcome(
+            status=generation_status,
+            validation=validation,
+            code=outcome_code,
+            diagnostics=findings,
+        )
 
     @staticmethod
     def build_session_summary(session_state):
