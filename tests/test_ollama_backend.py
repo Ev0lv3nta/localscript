@@ -1,6 +1,7 @@
 import json
 import threading
 import time
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
@@ -160,6 +161,29 @@ def test_tag_details_expose_digest_and_model_metadata(monkeypatch):
     backend.close()
 
 
+def test_resolved_model_is_cached_until_explicit_refresh(monkeypatch):
+    fake = FakeClient(
+        [
+            FakeResponse(tags_payload(digest="sha256:first")),
+            FakeResponse({"model": "qwen3:8b-q4_K_M", "response": "return 1"}),
+            FakeResponse({"model": "qwen3:8b-q4_K_M", "response": "return 2"}),
+            FakeResponse(tags_payload(digest="sha256:second")),
+        ]
+    )
+    install_fake_client(monkeypatch, fake)
+    backend = OllamaBackend(make_profile())
+
+    assert backend.complete("first") == "return 1"
+    assert backend.complete("second") == "return 2"
+    assert [path for _, path, _ in fake.requests].count("/api/tags") == 1
+
+    refreshed = backend.refresh_model()
+
+    assert refreshed.digest == "sha256:second"
+    assert [path for _, path, _ in fake.requests].count("/api/tags") == 2
+    backend.close()
+
+
 def test_close_is_idempotent_and_context_managed(monkeypatch):
     fake = FakeClient()
     install_fake_client(monkeypatch, fake)
@@ -253,6 +277,13 @@ def test_transport_failures_are_typed_and_sanitized(
     assert exc_info.value.reason == reason
     assert "secret" not in str(exc_info.value)
     assert "user" not in str(exc_info.value)
+    rendered = "".join(
+        traceback.format_exception(
+            type(exc_info.value), exc_info.value, exc_info.value.__traceback__
+        )
+    )
+    assert "secret" not in rendered
+    assert "user" not in rendered
     backend.close()
 
 
@@ -291,7 +322,7 @@ def test_empty_generation_is_protocol_error(monkeypatch):
     with pytest.raises(BackendProtocol) as exc_info:
         backend.complete("prompt")
 
-    assert str(exc_info.value) == "ollama_empty_response"
+    assert str(exc_info.value) == "Backend returned an invalid response."
     assert exc_info.value.reason == "empty_response"
     backend.close()
 

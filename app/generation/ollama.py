@@ -35,7 +35,8 @@ class OllamaBackend:
         self._active_requests = 0
         self._closing = False
         self._closed = False
-        self._evidence_lock = threading.Lock()
+        self._model_lock = threading.RLock()
+        self._resolved_models = {}
         self._last_resolved_model = None
         self._client = httpx.Client(
             base_url=self.host,
@@ -95,16 +96,25 @@ class OllamaBackend:
             for item in self._fetch_tag_details()
         ]
 
-    def resolve_model(self, model=None):
+    def resolve_model(self, model=None, *, refresh=False):
         selected = model or self.profile.model
-        resolved = resolve_model(selected, self._fetch_tag_details())
-        with self._evidence_lock:
+        cache_key = (selected or "").strip()
+        with self._model_lock:
+            if not refresh and cache_key in self._resolved_models:
+                resolved = self._resolved_models[cache_key]
+                self._last_resolved_model = resolved
+                return resolved
+            resolved = resolve_model(selected, self._fetch_tag_details())
+            self._resolved_models[cache_key] = resolved
             self._last_resolved_model = resolved
         return resolved
 
+    def refresh_model(self, model=None):
+        return self.resolve_model(model, refresh=True)
+
     @property
     def last_resolved_model(self):
-        with self._evidence_lock:
+        with self._model_lock:
             return self._last_resolved_model
 
     def complete(self, prompt, model=None, response_format=None):
@@ -127,9 +137,12 @@ class OllamaBackend:
         if not model_identities_match(resolved, data.get("model")):
             raise BackendModel(reason="model_identity_mismatch")
 
-        candidate = (data.get("response") or "").strip()
+        raw_candidate = data.get("response")
+        if not isinstance(raw_candidate, str):
+            raise BackendProtocol(reason="invalid_response_text")
+        candidate = raw_candidate.strip()
         if not candidate:
-            raise BackendProtocol("ollama_empty_response", reason="empty_response")
+            raise BackendProtocol(reason="empty_response")
         return candidate
 
     def generate(self, prompt, context=None):
@@ -174,21 +187,21 @@ class OllamaBackend:
             with self._request_slot():
                 response = self._client.request(method, path, **kwargs)
                 response.raise_for_status()
-        except httpx.TimeoutException as exc:
-            raise BackendTimeout(reason="request_timeout") from exc
+        except httpx.TimeoutException:
+            raise BackendTimeout(reason="request_timeout") from None
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code if exc.response is not None else None
             raise BackendProtocol(
                 reason="bad_status",
                 status_code=status_code,
-            ) from exc
-        except httpx.HTTPError as exc:
-            raise BackendUnavailable(reason="transport_error") from exc
+            ) from None
+        except httpx.HTTPError:
+            raise BackendUnavailable(reason="transport_error") from None
 
         try:
             payload = response.json()
-        except (TypeError, ValueError) as exc:
-            raise BackendProtocol(reason="invalid_json") from exc
+        except (TypeError, ValueError):
+            raise BackendProtocol(reason="invalid_json") from None
         if not isinstance(payload, Mapping):
             raise BackendProtocol(reason="invalid_json_shape")
         return payload

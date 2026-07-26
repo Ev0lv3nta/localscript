@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
-from app.generation.backend_errors import BackendModelError
+from app.generation.backend_errors import BackendModelError, BackendProtocolError
 
 
 @dataclass(frozen=True)
@@ -19,11 +19,11 @@ class ModelTag:
 
 def parse_model_tags(payload: object) -> tuple[ModelTag, ...]:
     if not isinstance(payload, Mapping):
-        raise BackendModelError(reason="invalid_tags_payload")
+        raise BackendProtocolError(reason="invalid_tags_payload")
 
     raw_models = payload.get("models")
     if not isinstance(raw_models, list):
-        raise BackendModelError(reason="invalid_tags_payload")
+        raise BackendProtocolError(reason="invalid_tags_payload")
 
     parsed = []
     for item in raw_models:
