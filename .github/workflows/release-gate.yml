@@ -1,0 +1,74 @@
+name: Release gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit SHA или tag для проверки"
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: localscript-release-gate
+  cancel-in-progress: false
+
+jobs:
+  live:
+    name: live GPU
+    runs-on: [self-hosted, linux, x64, gpu, localscript-release-gate]
+    environment: release-gate
+    timeout-minutes: 120
+    env:
+      LOCALSCRIPT_REQUIRE_LIVE: "1"
+      LOCALSCRIPT_STATE_DIR: ${{ github.workspace }}/artifacts/state
+      UV_FROZEN: "1"
+      UV_NO_PROGRESS: "1"
+    steps:
+      - name: Получить исходный код
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.ref }}
+          clean: true
+
+      - name: Установить Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Зафиксировать проверяемую ревизию
+        id: revision
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Установить uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: "0.11.21"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Установить зависимости из lock-файла
+        run: uv sync --frozen --extra dev --python 3.12
+
+      - name: Подготовить Lua 5.4
+        run: ./scripts/bootstrap_lua54.sh
+
+      - name: Выполнить release gate
+        run: >-
+          .venv/bin/python scripts/release_gate.py
+          --mode competition
+          --output artifacts/validation/release-gate.json
+
+      - name: Сохранить отчёты
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-gate-${{ steps.revision.outputs.sha }}
+          path: |
+            artifacts/validation/release-gate.json
+            artifacts/state/runtime_profile.lock.json
+          if-no-files-found: warn
+          retention-days: 30
