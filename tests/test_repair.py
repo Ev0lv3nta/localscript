@@ -540,7 +540,7 @@ def test_engine_repairs_augment_existing_code_literal_syntax(tmp_path):
     )
 
     result = engine.generate(
-        prompt="Сформируй JSON envelope для числа 7 с полями num и squared.",
+        prompt="Сформируй JSON envelope: переменная num равна 7, а squared хранит её квадрат.",
         context=None,
     )
 
