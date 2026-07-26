@@ -11,6 +11,41 @@ from app.generation.engine import GenerationEngine
 from app.generation.ollama import OllamaBackend
 
 
+QUALITY_EVAL_MANIFEST = (
+    {"name": "public_gold", "runner": "standard", "role": "mandatory"},
+    {"name": "stress_eval", "runner": "standard", "role": "diagnostic"},
+    {"name": "showcase_eval", "runner": "standard", "role": "diagnostic"},
+    {"name": "model_backed_eval", "runner": "standard", "role": "mandatory"},
+    {"name": "composition_eval", "runner": "standard", "role": "mandatory"},
+    {"name": "regression_eval", "runner": "standard", "role": "mandatory"},
+    {"name": "multilingual_eval", "runner": "standard", "role": "mandatory"},
+    {"name": "ambiguity_eval", "runner": "rich", "role": "mandatory"},
+    {"name": "clarification_eval", "runner": "rich", "role": "mandatory"},
+    {"name": "adversarial_eval", "runner": "standard", "role": "mandatory"},
+    {"name": "large_context_eval", "runner": "standard", "role": "mandatory"},
+)
+
+
+def quality_gate_failures(report):
+    manifest = report.get("eval_manifest")
+    failures = []
+    expected_manifest = [
+        {"name": entry["name"], "role": entry["role"]}
+        for entry in QUALITY_EVAL_MANIFEST
+    ]
+    if manifest != expected_manifest:
+        failures.append("quality_manifest_mismatch")
+
+    for entry in expected_manifest:
+        if entry.get("role") != "mandatory":
+            continue
+        name = entry["name"]
+        result = report.get(name)
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            failures.append("{0}_failed".format(name))
+    return failures
+
+
 def _display_user_dataset_path(dataset_path):
     path = Path(dataset_path)
     try:
@@ -181,134 +216,63 @@ def run_quality_benchmark(profile=None, backend=None, mode="competition"):
             "ok": False,
             "errors": ["strict_requires_live_ollama_backend"],
         }
-    public_report = run_dataset_benchmark(
-        "datasets/public_gold.jsonl",
-        profile=runtime_profile,
-        backend=runtime_backend,
-    )
-    stress_report = run_dataset_benchmark(
-        "datasets/stress_eval.jsonl",
-        profile=runtime_profile,
-        backend=runtime_backend,
-    )
     report = {
         "profile": runtime_profile.name,
         "backend_type": metadata["backend_type"],
         "model": metadata["model"],
         "host": metadata.get("host"),
         "ran_at": metadata["ran_at"],
-        "public_gold": public_report,
-        "stress_eval": stress_report,
-        "ok": public_report["ok"] and stress_report["ok"],
+        "eval_manifest": [
+            {"name": entry["name"], "role": entry["role"]}
+            for entry in QUALITY_EVAL_MANIFEST
+        ],
+        "mandatory_eval_sets": [
+            entry["name"]
+            for entry in QUALITY_EVAL_MANIFEST
+            if entry["role"] == "mandatory"
+        ],
+        "diagnostic_eval_sets": [
+            entry["name"]
+            for entry in QUALITY_EVAL_MANIFEST
+            if entry["role"] == "diagnostic"
+        ],
     }
-    showcase_path = "datasets/showcase_eval.jsonl"
-    if resource_exists(showcase_path):
-        showcase_report = run_dataset_benchmark(
-            showcase_path,
+    for entry in QUALITY_EVAL_MANIFEST:
+        name = entry["name"]
+        dataset_path = "datasets/{0}.jsonl".format(name)
+        if not resource_exists(dataset_path):
+            continue
+        runner = (
+            run_rich_dataset_benchmark
+            if entry["runner"] == "rich"
+            else run_dataset_benchmark
+        )
+        result = runner(
+            dataset_path,
             profile=runtime_profile,
             backend=runtime_backend,
         )
-        report["showcase_eval"] = showcase_report
-        if mode != "competition":
-            report["ok"] = report["ok"] and showcase_report["ok"]
-    model_backed_path = "datasets/model_backed_eval.jsonl"
-    if resource_exists(model_backed_path):
-        model_backed_report = run_dataset_benchmark(
-            model_backed_path,
-            profile=runtime_profile,
-            backend=runtime_backend,
-        )
-        report["model_backed_eval"] = model_backed_report
-        report["ok"] = report["ok"] and model_backed_report["ok"]
-    composition_path = "datasets/composition_eval.jsonl"
-    if resource_exists(composition_path):
-        composition_report = run_dataset_benchmark(
-            composition_path,
-            profile=runtime_profile,
-            backend=runtime_backend,
-        )
-        report["composition_eval"] = composition_report
-        report["ok"] = report["ok"] and composition_report["ok"]
-    regression_path = "datasets/regression_eval.jsonl"
-    if resource_exists(regression_path):
-        regression_report = run_dataset_benchmark(
-            regression_path,
-            profile=runtime_profile,
-            backend=runtime_backend,
-        )
-        report["regression_eval"] = regression_report
-        report["ok"] = report["ok"] and regression_report["ok"]
-    multilingual_path = "datasets/multilingual_eval.jsonl"
-    if resource_exists(multilingual_path):
-        multilingual_report = run_dataset_benchmark(
-            multilingual_path,
-            profile=runtime_profile,
-            backend=runtime_backend,
-        )
-        report["multilingual_eval"] = multilingual_report
-        report["ok"] = report["ok"] and multilingual_report["ok"]
-    ambiguity_path = "datasets/ambiguity_eval.jsonl"
-    if resource_exists(ambiguity_path):
-        ambiguity_report = run_rich_dataset_benchmark(
-            ambiguity_path,
-            profile=runtime_profile,
-            backend=runtime_backend,
-        )
-        report["ambiguity_eval"] = ambiguity_report
-        report["ok"] = report["ok"] and ambiguity_report["ok"]
-    clarification_path = "datasets/clarification_eval.jsonl"
-    if resource_exists(clarification_path):
-        clarification_report = run_rich_dataset_benchmark(
-            clarification_path,
-            profile=runtime_profile,
-            backend=runtime_backend,
-        )
-        report["clarification_eval"] = clarification_report
-        report["ok"] = report["ok"] and clarification_report["ok"]
-    adversarial_path = "datasets/adversarial_eval.jsonl"
-    if resource_exists(adversarial_path):
-        adversarial_report = run_dataset_benchmark(
-            adversarial_path,
-            profile=runtime_profile,
-            backend=runtime_backend,
-        )
-        report["adversarial_eval"] = adversarial_report
-        report["adversarial_ok"] = adversarial_report["failed"] == 0 if mode == "competition" else (
-            adversarial_report["total"] == 0
-            or (float(adversarial_report["passed"]) / float(adversarial_report["total"])) >= 0.75
-        )
-        report["ok"] = report["ok"] and report["adversarial_ok"]
-    large_context_path = "datasets/large_context_eval.jsonl"
-    if resource_exists(large_context_path):
-        large_context_report = run_dataset_benchmark(
-            large_context_path,
-            profile=runtime_profile,
-            backend=runtime_backend,
-        )
-        report["large_context_eval"] = large_context_report
-        report["ok"] = report["ok"] and large_context_report["ok"]
+        if name == "adversarial_eval" and mode != "competition":
+            result = dict(result)
+            result["ok"] = (
+                result["total"] == 0
+                or (float(result["passed"]) / float(result["total"])) >= 0.75
+            )
+        report[name] = result
+
     if mode == "competition":
-        report["strict_live_sets"] = [
-            "public_gold",
-            "model_backed_eval",
-            "composition_eval",
-            "regression_eval",
-            "multilingual_eval",
-            "ambiguity_eval",
-            "clarification_eval",
-            "adversarial_eval",
-            "large_context_eval",
-        ]
-        report["ok"] = (
-            report["public_gold"]["ok"]
-            and report.get("model_backed_eval", {}).get("ok") is True
-            and report.get("composition_eval", {}).get("ok") is True
-            and report.get("regression_eval", {}).get("ok") is True
-            and report.get("multilingual_eval", {}).get("ok") is True
-            and report.get("ambiguity_eval", {}).get("ok") is True
-            and report.get("clarification_eval", {}).get("ok") is True
-            and report.get("adversarial_ok") is True
-            and report.get("large_context_eval", {}).get("ok") is True
+        report["strict_live_sets"] = list(report["mandatory_eval_sets"])
+        report["gate_failures"] = quality_gate_failures(report)
+        report["ok"] = not report["gate_failures"]
+    else:
+        report["ok"] = all(
+            result.get("ok") is True
+            for name, result in report.items()
+            if name.endswith("_eval") or name == "public_gold"
         )
+        report["gate_failures"] = []
+    adversarial_report = report.get("adversarial_eval")
+    if adversarial_report is not None:
+        report["adversarial_ok"] = adversarial_report.get("ok") is True
     report["mode"] = mode
     return report

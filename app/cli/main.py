@@ -4,7 +4,11 @@ from pathlib import Path
 
 import typer
 
-from app.core.benchmarks import run_dataset_benchmark, run_quality_benchmark
+from app.core.benchmarks import (
+    quality_gate_failures,
+    run_dataset_benchmark,
+    run_quality_benchmark,
+)
 from app.core.config import get_runtime_profile
 from app.core.resources import materialized_resource, resource_exists
 from app.core.runtime_lock import build_runtime_lock, write_runtime_lock
@@ -248,22 +252,7 @@ def doctor(judge: bool = typer.Option(False, "--judge", help="Run judged-path ch
             hard_gate_failures.append("ollama_unreachable")
         if quality_report.get("backend_type") != "live_ollama":
             hard_gate_failures.append("quality_backend_not_live_ollama")
-        if not quality_report["public_gold"]["ok"]:
-            hard_gate_failures.append("public_gold_failed")
-        if quality_report.get("model_backed_eval", {}).get("ok") is not True:
-            hard_gate_failures.append("model_backed_eval_failed")
-        if quality_report.get("multilingual_eval", {}).get("ok") is not True:
-            hard_gate_failures.append("multilingual_eval_failed")
-        if quality_report.get("ambiguity_eval", {}).get("ok") is not True:
-            hard_gate_failures.append("ambiguity_eval_failed")
-        if quality_report.get("clarification_eval", {}).get("ok") is not True:
-            hard_gate_failures.append("clarification_eval_failed")
-        if quality_report.get("composition_eval", {}).get("ok") is not True:
-            hard_gate_failures.append("composition_eval_failed")
-        if quality_report.get("regression_eval", {}).get("ok") is not True:
-            hard_gate_failures.append("regression_eval_failed")
-        if quality_report.get("adversarial_ok") is not True:
-            hard_gate_failures.append("adversarial_eval_failed")
+        hard_gate_failures.extend(quality_gate_failures(quality_report))
         if available_tags and selected_model not in available_tags:
             hard_gate_failures.append("selected_model_tag_missing")
         if selected_vram_report.get("status") != "ok":
