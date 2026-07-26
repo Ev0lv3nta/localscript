@@ -2,7 +2,7 @@
 set -euo pipefail
 
 MODEL="${1:-qwen3:8b-q4_K_M}"
-FALLBACK_MODEL="${2:-${MODEL}}"
+FALLBACK_MODEL="${2:-qwen3:4b-instruct-2507-q4_K_M}"
 MODE="${3:-both}"
 OLLAMA_HOST="${LOCALSCRIPT_OLLAMA_HOST:-http://127.0.0.1:11434}"
 PROMPT="${LOCALSCRIPT_VRAM_PROMPT:-Return Lua code only: return 1}"

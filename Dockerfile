@@ -1,8 +1,11 @@
-FROM python:3.11-slim AS build
+FROM python:3.12-slim AS build
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_LINK_MODE=copy
 
 WORKDIR /workspace
 
@@ -12,17 +15,16 @@ RUN apt-get update \
 
 COPY . /workspace
 
-RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}" \
     LOCALSCRIPT_PYTHON_BIN=/opt/venv/bin/python
 
-RUN pip install --upgrade pip \
-    && pip install .
+RUN python -m pip install uv==0.11.21 \
+    && uv sync --frozen --no-editable
 
 RUN ./scripts/bootstrap_lua54.sh
 
 
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

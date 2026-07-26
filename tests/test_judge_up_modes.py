@@ -138,3 +138,26 @@ exit 0
     assert completed.returncode == 0
     assert "Ollama mode local_cli" in completed.stdout
     assert f"fake_uvicorn:local_cli:http://127.0.0.1:{server.server_port}" in completed.stdout
+
+
+def test_judge_up_rejects_unsupported_project_python(tmp_path):
+    root, fake_bin = _prepare_fake_project(tmp_path)
+
+    completed = subprocess.run(
+        ["bash", str(root / "scripts" / "judge_up.sh")],
+        cwd=str(root),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "LOCALSCRIPT_PYTHON_BIN": str(root / ".venv" / "bin" / "python"),
+            "LOCALSCRIPT_PYTHON_MIN_MINOR": "99",
+            "LOCALSCRIPT_PYTHON_MAX_MINOR": "99",
+        },
+    )
+
+    assert completed.returncode != 0
+    assert "unsupported_python" in completed.stderr
+    assert "fake_uvicorn" not in completed.stdout
