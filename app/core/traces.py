@@ -60,7 +60,7 @@ class TraceStore:
     def _trace_index_path(self, trace_id):
         validate_identifier(trace_id, "invalid_trace_id")
         return resolve_within_root(
-            self._trace_index, "{0}.json".format(trace_id), "invalid_trace_id"
+            self._trace_index, "{0}.idx".format(trace_id), "invalid_trace_id"
         )
 
     def _session_index_dir(self, session_id):
@@ -98,7 +98,7 @@ class TraceStore:
             }
             atomic_write_json(self._trace_index_path(trace_id), pointer)
             session_dir = ensure_directory(self._session_index_dir(session_id))
-            atomic_write_json(session_dir / "{0}.json".format(trace_id), pointer)
+            atomic_write_json(session_dir / "{0}.idx".format(trace_id), pointer)
             self._cleanup_unlocked()
         return trace_id
 
@@ -147,7 +147,7 @@ class TraceStore:
                     if (
                         pointer_path.is_symlink()
                         or not pointer_path.is_file()
-                        or pointer_path.suffix != ".json"
+                        or pointer_path.suffix != ".idx"
                     ):
                         continue
                     pointer = read_json(pointer_path, expected_type=dict)
@@ -199,7 +199,7 @@ class TraceStore:
         delete_file(self._trace_index_path(trace_id))
         if session_id:
             session_dir = self._session_index_dir(session_id)
-            delete_file(session_dir / "{0}.json".format(trace_id))
+            delete_file(session_dir / "{0}.idx".format(trace_id))
         return trace_id
 
     def _cleanup_unlocked(self):
