@@ -77,6 +77,10 @@ def test_quality_manifest_gates_every_mandatory_set_but_not_diagnostics():
     report["large_context_eval"]["ok"] = False
     assert quality_gate_failures(report) == ["large_context_eval_failed"]
 
+    report = _quality_report(diagnostic_ok=False)
+    report["eval_manifest"] = report["eval_manifest"][:-1]
+    assert quality_gate_failures(report) == ["quality_manifest_mismatch"]
+
 
 def test_runtime_lock_is_not_locked_when_gate_has_failures():
     profile = release_gate.get_runtime_profile()

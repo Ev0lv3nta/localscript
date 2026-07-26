@@ -28,11 +28,15 @@ QUALITY_EVAL_MANIFEST = (
 
 def quality_gate_failures(report):
     manifest = report.get("eval_manifest")
-    if not manifest:
-        return ["quality_manifest_missing"]
-
     failures = []
-    for entry in manifest:
+    expected_manifest = [
+        {"name": entry["name"], "role": entry["role"]}
+        for entry in QUALITY_EVAL_MANIFEST
+    ]
+    if manifest != expected_manifest:
+        failures.append("quality_manifest_mismatch")
+
+    for entry in expected_manifest:
         if entry.get("role") != "mandatory":
             continue
         name = entry["name"]

@@ -32,8 +32,7 @@ build-check: lock-check package-check
 
 container-check:
 	docker build --tag localscript:ci .
-	docker run --rm --entrypoint bash localscript:ci -euc \
-	  'localscript --help >/dev/null; ./.tools/lua54/bin/lua -e "assert(_VERSION == \"Lua 5.4\")"'
+	./scripts/check_container.sh localscript:ci
 
 check: install policy-check test-unit build-check
 
