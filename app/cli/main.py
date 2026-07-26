@@ -203,7 +203,6 @@ def doctor(judge: bool = typer.Option(False, "--judge", help="Run judged-path ch
         "judge_mode": judge,
     }
     if judge:
-        quality_report = run_quality_benchmark(profile=profile, backend=backend, mode="competition")
         vram_script = Path(__file__).resolve().parents[2] / "scripts" / "bench_vram.sh"
         available_tags = backend.list_tags()
         primary_vram_report = run_vram_probe(vram_script, profile.model, profile.fallback_model)
@@ -228,6 +227,17 @@ def doctor(judge: bool = typer.Option(False, "--judge", help="Run judged-path ch
         selected_vram_report = primary_vram_report
         if selected_model == profile.fallback_model and fallback_vram_report is not None:
             selected_vram_report = fallback_vram_report
+
+        selected_profile = profile
+        selected_backend = backend
+        if selected_model != profile.model:
+            selected_profile = profile.copy(update={"model": selected_model})
+            selected_backend = OllamaBackend(selected_profile)
+        quality_report = run_quality_benchmark(
+            profile=selected_profile,
+            backend=selected_backend,
+            mode="competition",
+        )
 
         hard_gate_failures = []
         if not report["ollama_reachable"]:

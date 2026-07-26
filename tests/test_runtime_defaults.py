@@ -12,11 +12,18 @@ FALLBACK_MODEL = "qwen3:4b-instruct-2507-q4_K_M"
 
 
 def test_supported_python_and_dependencies_are_explicit():
-    project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    project = pyproject["project"]
+    lock = tomllib.loads((PROJECT_ROOT / "uv.lock").read_text(encoding="utf-8"))
+    locked_versions = {package["name"]: package["version"] for package in lock["package"]}
 
     assert project["requires-python"] == ">=3.11,<3.13"
+    assert pyproject["build-system"]["requires"] == ["setuptools==80.9.0", "wheel==0.45.1"]
     assert "typer==0.27.0" in project["dependencies"]
     assert not any(dependency.lower().startswith("click") for dependency in project["dependencies"])
+    assert lock["requires-python"] == ">=3.11, <3.13"
+    assert locked_versions["typer"] == "0.27.0"
+    assert locked_versions["click"] == "8.4.2"
 
 
 def test_runtime_profile_has_a_distinct_fallback(monkeypatch):
@@ -32,15 +39,33 @@ def test_runtime_profile_has_a_distinct_fallback(monkeypatch):
     config_module.get_runtime_profile.cache_clear()
 
 
+def test_runtime_profile_applies_model_environment_overrides(monkeypatch):
+    monkeypatch.setenv("LOCALSCRIPT_PRIMARY_MODEL", "custom-primary")
+    monkeypatch.setenv("LOCALSCRIPT_FALLBACK_MODEL", "custom-fallback")
+    config_module.get_runtime_profile.cache_clear()
+
+    profile = config_module.get_runtime_profile()
+
+    assert profile.model == "custom-primary"
+    assert profile.fallback_model == "custom-fallback"
+    config_module.get_runtime_profile.cache_clear()
+
+
 def test_documented_and_script_defaults_match_runtime_profile():
     env_example = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
     rules = yaml.safe_load((PROJECT_ROOT / "kb" / "rules.yaml").read_text(encoding="utf-8"))
-    shell_defaults = [
-        PROJECT_ROOT / "scripts" / "bench_vram.sh",
-        PROJECT_ROOT / "scripts" / "docker_entrypoint.sh",
-        PROJECT_ROOT / "scripts" / "judge_up.sh",
-        PROJECT_ROOT / "scripts" / "preflight_judge.sh",
-    ]
+    shell_defaults = {
+        PROJECT_ROOT / "scripts" / "bench_vram.sh": f'FALLBACK_MODEL="${{2:-{FALLBACK_MODEL}}}"',
+        PROJECT_ROOT
+        / "scripts"
+        / "docker_entrypoint.sh": f'FALLBACK_MODEL="${{LOCALSCRIPT_FALLBACK_MODEL:-{FALLBACK_MODEL}}}"',
+        PROJECT_ROOT
+        / "scripts"
+        / "judge_up.sh": f'FALLBACK_MODEL="${{LOCALSCRIPT_FALLBACK_MODEL:-{FALLBACK_MODEL}}}"',
+        PROJECT_ROOT
+        / "scripts"
+        / "preflight_judge.sh": f'FALLBACK_MODEL="${{LOCALSCRIPT_FALLBACK_MODEL:-{FALLBACK_MODEL}}}"',
+    }
 
     assert f"LOCALSCRIPT_PRIMARY_MODEL={PRIMARY_MODEL}" in env_example
     assert f"LOCALSCRIPT_FALLBACK_MODEL={FALLBACK_MODEL}" in env_example
@@ -52,8 +77,8 @@ def test_documented_and_script_defaults_match_runtime_profile():
         "batch": 1,
         "parallel": 1,
     }
-    for script in shell_defaults:
-        assert FALLBACK_MODEL in script.read_text(encoding="utf-8")
+    for script, expected_assignment in shell_defaults.items():
+        assert expected_assignment in script.read_text(encoding="utf-8").splitlines()
 
 
 def test_judge_up_defaults_to_supported_python_minors():
@@ -61,3 +86,12 @@ def test_judge_up_defaults_to_supported_python_minors():
 
     assert 'SUPPORTED_PYTHON_MIN_MINOR="${LOCALSCRIPT_PYTHON_MIN_MINOR:-11}"' in script
     assert 'SUPPORTED_PYTHON_MAX_MINOR="${LOCALSCRIPT_PYTHON_MAX_MINOR:-12}"' in script
+
+
+def test_primary_install_paths_consume_the_lock():
+    makefile = (PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")
+    dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "$(UV) sync --frozen --all-extras" in makefile
+    assert "uv sync --frozen --no-editable" in dockerfile
+    assert "pip install ." not in dockerfile

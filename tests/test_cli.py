@@ -99,6 +99,7 @@ def test_doctor_flag_parses_as_boolean(monkeypatch):
 
 def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tmp_path):
     lock_path = tmp_path / ".runtime_profile.lock.json"
+    benchmark_models = []
     monkeypatch.setenv("LOCALSCRIPT_RUNTIME_LOCK_PATH", str(lock_path))
     monkeypatch.setenv("LOCALSCRIPT_TRACE_DIR", str(tmp_path / "traces"))
     config_module.get_runtime_profile.cache_clear()
@@ -109,9 +110,10 @@ def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tm
         "list_tags",
         lambda self: ["qwen3:8b-q4_K_M", "qwen3:4b-instruct-2507-q4_K_M"],
     )
-    monkeypatch.setattr(
-        "app.cli.main.run_quality_benchmark",
-        lambda profile=None, backend=None, mode="competition": {
+    def fake_quality_benchmark(profile=None, backend=None, mode="competition"):
+        benchmark_models.append(profile.model)
+        assert backend.profile.model == profile.model
+        return {
             "backend_type": "live_ollama",
             "public_gold": {"ok": True},
             "model_backed_eval": {"ok": True},
@@ -123,8 +125,9 @@ def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tm
             "large_context_eval": {"ok": True},
             "adversarial_ok": True,
             "ok": True,
-        },
-    )
+        }
+
+    monkeypatch.setattr("app.cli.main.run_quality_benchmark", fake_quality_benchmark)
 
     class Completed:
         def __init__(self, stdout):
@@ -145,6 +148,7 @@ def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tm
     assert payload["selected_model"] == "qwen3:4b-instruct-2507-q4_K_M"
     assert payload["selection_reason"] == "primary_over_vram_cap"
     assert payload["hard_gate_failures"] == []
+    assert benchmark_models == ["qwen3:4b-instruct-2507-q4_K_M"]
     assert json.loads(lock_path.read_text(encoding="utf-8"))["selected_model"] == "qwen3:4b-instruct-2507-q4_K_M"
     config_module.get_runtime_profile.cache_clear()
 

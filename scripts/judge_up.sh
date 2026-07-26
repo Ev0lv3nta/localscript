@@ -60,16 +60,12 @@ import sys
 minimum = (3, int("${SUPPORTED_PYTHON_MIN_MINOR}"))
 maximum = (3, int("${SUPPORTED_PYTHON_MAX_MINOR}"))
 current = sys.version_info[:2]
-is_project_python = ${USING_PROJECT_PYTHON}
 if current < minimum or current > maximum:
-    if is_project_python:
-        print("legacy_project_python::{0}.{1}".format(*current))
-    else:
-        raise SystemExit(
-            "unsupported_python::{0}.{1}::expected >=3.{2},<=3.{3}".format(
-                current[0], current[1], minimum[1], maximum[1]
-            )
+    raise SystemExit(
+        "unsupported_python::{0}.{1}::expected >=3.{2},<=3.{3}".format(
+            current[0], current[1], minimum[1], maximum[1]
         )
+    )
 PY
 }
 
@@ -166,13 +162,6 @@ if [ ! -x "${PYTHON_BIN}" ]; then
   fail "python interpreter \`${PYTHON_BIN}\` is not executable"
 fi
 
-USING_PROJECT_PYTHON=0
-case "${PYTHON_BIN}" in
-  "${ROOT_DIR}/.venv/"*|/opt/venv/*)
-    USING_PROJECT_PYTHON=1
-    ;;
-esac
-
 PATH="$(dirname "${PYTHON_BIN}"):${PATH}"
 export PATH
 
@@ -181,14 +170,7 @@ require_command uvicorn
 
 PYTHON_VERSION_CHECK="$(validate_python_runtime 2>&1 || true)"
 if [ -n "${PYTHON_VERSION_CHECK}" ]; then
-  case "${PYTHON_VERSION_CHECK}" in
-    legacy_project_python::*)
-      warn "using legacy project interpreter ${PYTHON_VERSION_CHECK#legacy_project_python::}; official host-run support is Python 3.${SUPPORTED_PYTHON_MIN_MINOR}-3.${SUPPORTED_PYTHON_MAX_MINOR}"
-      ;;
-    *)
-      fail "${PYTHON_VERSION_CHECK}"
-      ;;
-  esac
+  fail "${PYTHON_VERSION_CHECK}"
 fi
 
 SELECTED_OLLAMA_MODE="$(detect_mode)"
