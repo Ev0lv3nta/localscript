@@ -1,17 +1,14 @@
 import json
-import os
 import uuid
 from datetime import datetime
-from pathlib import Path
 
-from app.core.config import PROJECT_ROOT
+from app.core.state import resolve_state_path
 from app.core.storage import atomic_write_json, validate_identifier
 
 
 class TraceStore:
     def __init__(self, root=None):
-        default_root = PROJECT_ROOT / "traces"
-        self.root = Path(os.getenv("LOCALSCRIPT_TRACE_DIR", root or default_root)).resolve()
+        self.root = resolve_state_path("LOCALSCRIPT_TRACE_DIR", "traces", root=root)
         self.root.mkdir(parents=True, exist_ok=True)
 
     def write(self, trace):

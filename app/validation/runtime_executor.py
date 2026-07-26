@@ -2,12 +2,11 @@ import json
 import math
 import os
 import resource
-import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
 
-from app.core.config import PROJECT_ROOT
+from app.validation.runtime import find_lua_binary
 
 
 @dataclass
@@ -79,24 +78,7 @@ def _extract_lua_chunks(code, output_style):
 
 
 def _find_lua_binary():
-    local_candidates = [
-        PROJECT_ROOT / ".tools" / "lua54" / "bin" / "lua",
-        PROJECT_ROOT / ".tools" / "lua-5.4.6" / "src" / "lua",
-    ]
-    for candidate in local_candidates:
-        if candidate.exists() and os.access(candidate, os.X_OK):
-            return str(candidate)
-
-    preferred = os.getenv("LOCALSCRIPT_LUA_BIN")
-    if preferred:
-        if os.path.isfile(preferred) and os.access(preferred, os.X_OK):
-            return preferred
-
-    for candidate in ["lua5.4", "lua"]:
-        path = shutil.which(candidate)
-        if path:
-            return path
-    return None
+    return find_lua_binary()
 
 
 def _lua_string_literal(value):

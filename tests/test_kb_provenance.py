@@ -1,10 +1,8 @@
 import json
-from pathlib import Path
 
 import yaml
 
-
-ROOT = Path(__file__).resolve().parents[1]
+from app.core.resources import get_resource, read_resource_text
 
 
 def _normalize_prompt(value):
@@ -13,8 +11,12 @@ def _normalize_prompt(value):
 
 def _load_eval_prompts():
     prompts = {}
-    for dataset_path in sorted((ROOT / "datasets").glob("*.jsonl")):
-        for line_number, raw_line in enumerate(dataset_path.read_text(encoding="utf-8").splitlines(), start=1):
+    datasets = sorted(get_resource("datasets").iterdir(), key=lambda item: item.name)
+    for dataset_path in datasets:
+        if not dataset_path.name.endswith(".jsonl"):
+            continue
+        lines = dataset_path.read_text(encoding="utf-8").splitlines()
+        for line_number, raw_line in enumerate(lines, start=1):
             if not raw_line.strip():
                 continue
             case = json.loads(raw_line)
@@ -27,7 +29,7 @@ def _load_eval_prompts():
 
 
 def test_kb_examples_have_explicit_synthetic_provenance():
-    payload = yaml.safe_load((ROOT / "kb" / "examples.yaml").read_text(encoding="utf-8"))
+    payload = yaml.safe_load(read_resource_text("kb/examples.yaml"))
 
     assert payload["schema_version"] == 1
     assert payload["provenance"] == {
@@ -43,7 +45,7 @@ def test_kb_examples_have_explicit_synthetic_provenance():
 
 
 def test_kb_prompts_do_not_duplicate_eval_prompts():
-    payload = yaml.safe_load((ROOT / "kb" / "examples.yaml").read_text(encoding="utf-8"))
+    payload = yaml.safe_load(read_resource_text("kb/examples.yaml"))
     kb_prompts = {
         _normalize_prompt(example["prompt"]): example["id"]
         for example in payload["examples"]

@@ -6,6 +6,7 @@ import typer
 
 from app.core.benchmarks import run_dataset_benchmark, run_quality_benchmark
 from app.core.config import get_runtime_profile
+from app.core.resources import materialized_resource, resource_exists
 from app.core.runtime_lock import build_runtime_lock, write_runtime_lock
 from app.core.traces import TraceStore
 from app.core.verifier import verify_code
@@ -36,13 +37,14 @@ def build_engine():
     )
 
 
-def run_vram_probe(vram_script, model, fallback_model):
-    completed = subprocess.run(
-        [str(vram_script), model, fallback_model, "judged_probe"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+def run_vram_probe(model, fallback_model):
+    with materialized_resource("scripts/bench_vram.sh") as vram_script:
+        completed = subprocess.run(
+            ["bash", str(vram_script), model, fallback_model, "judged_probe"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
     try:
         report = json.loads(completed.stdout.strip() or "{}")
     except json.JSONDecodeError:
@@ -176,7 +178,10 @@ def verify(
 @cli.command()
 def benchmark(dataset=typer.Option("datasets/public_gold.jsonl", help="JSONL dataset path.")):
     dataset_path = Path(dataset)
-    if not dataset_path.exists():
+    packaged_dataset = dataset.replace("\\", "/")
+    if not dataset_path.is_file() and not (
+        packaged_dataset.startswith("datasets/") and resource_exists(packaged_dataset)
+    ):
         typer.echo(
             json.dumps(
                 {"ok": False, "error": "dataset_not_found", "dataset": str(dataset_path)},
@@ -203,9 +208,8 @@ def doctor(judge: bool = typer.Option(False, "--judge", help="Run judged-path ch
         "judge_mode": judge,
     }
     if judge:
-        vram_script = Path(__file__).resolve().parents[2] / "scripts" / "bench_vram.sh"
         available_tags = backend.list_tags()
-        primary_vram_report = run_vram_probe(vram_script, profile.model, profile.fallback_model)
+        primary_vram_report = run_vram_probe(profile.model, profile.fallback_model)
         fallback_vram_report = None
         selected_model = profile.model
         selection_reason = "primary_selected"
@@ -213,11 +217,11 @@ def doctor(judge: bool = typer.Option(False, "--judge", help="Run judged-path ch
         if available_tags and profile.model not in available_tags and profile.fallback_model in available_tags:
             selected_model = profile.fallback_model
             selection_reason = "primary_tag_missing"
-            fallback_vram_report = run_vram_probe(vram_script, profile.fallback_model, profile.fallback_model)
+            fallback_vram_report = run_vram_probe(profile.fallback_model, profile.fallback_model)
         elif primary_vram_report.get("status") == "over_cap":
             selected_model = profile.fallback_model
             selection_reason = "primary_over_vram_cap"
-            fallback_vram_report = run_vram_probe(vram_script, profile.fallback_model, profile.fallback_model)
+            fallback_vram_report = run_vram_probe(profile.fallback_model, profile.fallback_model)
         elif primary_vram_report.get("status") == "ok":
             selected_model = profile.model
             selection_reason = "primary_within_vram_cap"

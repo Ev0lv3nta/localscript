@@ -14,7 +14,8 @@ if PREFERRED_PYTHON.exists() and Path(sys.prefix).resolve() != PREFERRED_VENV:
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.core.config import PROJECT_ROOT, get_runtime_profile
+from app.core.config import get_runtime_profile
+from app.core.state import get_state_root
 from app.core.traces import TraceStore
 from app.generation.engine import GenerationEngine
 from app.generation.ollama import OllamaBackend
@@ -52,7 +53,7 @@ def measure_case(name, engine, prompt, context=None, expected_strategy=None, min
 
 def main():
     profile = get_runtime_profile()
-    trace_root = PROJECT_ROOT / "traces" / "benchmarks" / "latency"
+    trace_root = get_state_root() / "traces" / "benchmarks" / "latency"
 
     public_engine = GenerationEngine(
         profile=profile,

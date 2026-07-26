@@ -5,6 +5,8 @@ import os
 import yaml
 from pydantic import BaseModel
 
+from app.core.resources import get_resource
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PROFILE = "competition"
 
@@ -38,7 +40,7 @@ class RuntimeProfile(BaseModel):
 
 def get_profile_path(profile_name=None):
     selected = profile_name or os.getenv("LOCALSCRIPT_PROFILE", DEFAULT_PROFILE)
-    return PROJECT_ROOT / "config" / "profiles" / "{0}.yaml".format(selected)
+    return get_resource("config/profiles/{0}.yaml".format(selected))
 
 
 @lru_cache(maxsize=4)
