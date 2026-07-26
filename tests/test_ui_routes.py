@@ -97,7 +97,7 @@ def test_ui_flow_smoke_covers_analyze_clarify_trace_and_validate(tmp_path):
 
     first = client.post("/api/generate", json={"prompt": "Нормализуй email и верни его в lower-case.", "context": context})
     assert first.status_code == 200
-    assert first.json()["status"] == "clarification_needed"
+    assert first.json()["status"] == "clarification_required"
 
     continued = client.post(
         "/api/generate",
