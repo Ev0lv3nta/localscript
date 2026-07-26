@@ -119,7 +119,7 @@ class GenerationEngine:
         if session_state.get("clarified_root"):
             task_spec.target_root = session_state["clarified_root"]
         session_state["normalized_task"] = task_spec.normalized_prompt
-        session_state["extracted_slots"] = task_spec.dict()
+        session_state["extracted_slots"] = task_spec.model_dump()
         backend_error = None
         rules_applied = []
         examples_used = []
@@ -149,7 +149,7 @@ class GenerationEngine:
                 "clarification_answer": clarification_answer,
                 "status": "clarification_needed",
                 "strategy": "clarification",
-                "task_spec": task_spec.dict(),
+                "task_spec": task_spec.model_dump(),
                 "assumptions": assumptions,
                 "verification_errors": [],
                 "validation_report": {"has_errors": False, "has_warnings": False, "messages": []},
@@ -238,7 +238,7 @@ class GenerationEngine:
                         "clarification_answer": clarification_answer,
                         "status": "clarification_needed",
                         "strategy": "clarification",
-                        "task_spec": task_spec.dict(),
+                        "task_spec": task_spec.model_dump(),
                         "assumptions": assumptions,
                         "verification_errors": [],
                         "validation_report": {"has_errors": False, "has_warnings": False, "messages": []},
@@ -340,7 +340,7 @@ class GenerationEngine:
             "clarification_answer": clarification_answer,
             "status": status,
             "strategy": strategy,
-            "task_spec": task_spec.dict(),
+            "task_spec": task_spec.model_dump(),
             "assumptions": assumptions,
             "verification_errors": verification_errors,
             "validation_report": validation_report.to_dict(),
@@ -464,7 +464,7 @@ class GenerationEngine:
                 else ("safe_fallback" if task_spec.safety_fallback else "ollama_chain")
             ),
             "clarification_question": clarification_question,
-            "task_spec": task_spec.dict(),
+            "task_spec": task_spec.model_dump(),
             "reduced_context": reduced_context,
             "available_paths": task_spec.context_paths,
             "assumptions": task_spec.assumptions,

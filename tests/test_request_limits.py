@@ -7,7 +7,7 @@ from tests.support_backends import DeterministicTestBackend
 
 
 def _make_client(tmp_path, **limits):
-    profile = get_runtime_profile().copy(update=limits)
+    profile = get_runtime_profile().model_copy(update=limits)
     app = create_app(
         profile=profile,
         trace_store=TraceStore(root=tmp_path / "traces"),

@@ -239,7 +239,7 @@ def doctor(judge: bool = typer.Option(False, "--judge", help="Run judged-path ch
         selected_profile = profile
         selected_backend = backend
         if selected_model != profile.model:
-            selected_profile = profile.copy(update={"model": selected_model})
+            selected_profile = profile.model_copy(update={"model": selected_model})
             selected_backend = OllamaBackend(selected_profile)
         quality_report = run_quality_benchmark(
             profile=selected_profile,
