@@ -119,8 +119,8 @@ class _RuntimeLockOverlay(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
 
     locked: bool
-    profile: str
-    selected_model: str = Field(min_length=1)
+    profile: str | None = None
+    selected_model: str | None = Field(default=None, min_length=1)
     fallback_model: str | None = Field(default=None, min_length=1)
 
 
@@ -187,6 +187,11 @@ def _load_runtime_lock(profile: RuntimeProfile) -> dict[str, str]:
         ) from error
     if not lock.locked or lock.profile != profile.name:
         return {}
+    if lock.selected_model is None:
+        raise ConfigurationError(
+            "configuration_runtime_lock_invalid",
+            ("selected_model:missing",),
+        )
     values = {"model": lock.selected_model}
     if lock.fallback_model is not None:
         values["fallback_model"] = lock.fallback_model

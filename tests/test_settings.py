@@ -3,6 +3,16 @@ import json
 import pytest
 from pydantic import ValidationError
 
+from app.api.schemas import (
+    MAX_SCHEMA_CLARIFICATION_ANSWER_CHARS,
+    MAX_SCHEMA_CODE_CHARS,
+    MAX_SCHEMA_FEEDBACK_CHARS,
+    MAX_SCHEMA_PROMPT_CHARS,
+    MAX_SCHEMA_SESSION_ID_CHARS,
+    GenerateRequest,
+    GenerateRichRequest,
+    ValidateRequest,
+)
 from app.core import config as config_module
 
 
@@ -111,6 +121,15 @@ def test_runtime_lock_overrides_profile_only_after_explicit_opt_in(monkeypatch, 
     assert config_module.get_runtime_profile().model == "locked-primary"
 
 
+def test_unlocked_runtime_artifact_does_not_require_model_selection(monkeypatch, tmp_path):
+    lock_path = tmp_path / "runtime.lock.json"
+    lock_path.write_text(json.dumps({"locked": False}), encoding="utf-8")
+    monkeypatch.setenv("LOCALSCRIPT_RUNTIME_LOCK_PATH", str(lock_path))
+    monkeypatch.setenv("LOCALSCRIPT_USE_RUNTIME_LOCK", "true")
+
+    assert config_module.get_runtime_profile().name == "competition"
+
+
 def test_invalid_environment_boolean_is_a_safe_configuration_error(monkeypatch):
     monkeypatch.setenv("LOCALSCRIPT_USE_RUNTIME_LOCK", "yes-please")
 
@@ -119,3 +138,38 @@ def test_invalid_environment_boolean_is_a_safe_configuration_error(monkeypatch):
 
     assert raised.value.code == "configuration_environment_invalid"
     assert "yes-please" not in str(raised.value)
+
+
+def test_public_request_models_keep_extra_field_compatibility():
+    request = GenerateRequest.model_validate({"prompt": "return 1", "future": "field"})
+
+    assert request.prompt == "return 1"
+    assert not hasattr(request, "future")
+
+
+def test_public_text_fields_publish_explicit_positive_schema_limits():
+    limits = [
+        (
+            GenerateRequest.model_json_schema()["properties"]["prompt"]["maxLength"],
+            MAX_SCHEMA_PROMPT_CHARS,
+        ),
+        (
+            GenerateRequest.model_json_schema()["properties"]["session_id"]["anyOf"][0]["maxLength"],
+            MAX_SCHEMA_SESSION_ID_CHARS,
+        ),
+        (
+            GenerateRichRequest.model_json_schema()["properties"]["feedback"]["anyOf"][0]["maxLength"],
+            MAX_SCHEMA_FEEDBACK_CHARS,
+        ),
+        (
+            GenerateRichRequest.model_json_schema()["properties"]["clarification_answer"]["anyOf"][0]["maxLength"],
+            MAX_SCHEMA_CLARIFICATION_ANSWER_CHARS,
+        ),
+        (
+            ValidateRequest.model_json_schema()["properties"]["code"]["maxLength"],
+            MAX_SCHEMA_CODE_CHARS,
+        ),
+    ]
+
+    assert limits
+    assert all(actual == expected and expected > 0 for actual, expected in limits)
