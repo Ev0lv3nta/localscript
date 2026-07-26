@@ -1,15 +1,12 @@
 import json
-import os
-from pathlib import Path
 
-from app.core.config import PROJECT_ROOT
+from app.core.state import resolve_state_path
 from app.core.storage import atomic_write_json, resolve_within_root, validate_identifier
 
 
 class SessionStore:
     def __init__(self, root=None):
-        default_root = PROJECT_ROOT / "sessions"
-        self.root = Path(os.getenv("LOCALSCRIPT_SESSION_DIR", root or default_root)).resolve()
+        self.root = resolve_state_path("LOCALSCRIPT_SESSION_DIR", "sessions", root=root)
         self.root.mkdir(parents=True, exist_ok=True)
 
     def path_for(self, session_id):
