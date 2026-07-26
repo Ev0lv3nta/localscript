@@ -1,13 +1,16 @@
 from collections import Counter
-from pathlib import Path
 
 from app.core.public_eval import load_cases
+from app.core.resources import materialized_resource
+
+
+def _load_stress_cases():
+    with materialized_resource("datasets/stress_eval.jsonl") as dataset_path:
+        return load_cases(dataset_path)
 
 
 def test_stress_eval_dataset_shape():
-    dataset_path = Path(__file__).resolve().parents[1] / "datasets" / "stress_eval.jsonl"
-    cases = load_cases(dataset_path)
-
+    cases = _load_stress_cases()
     assert len(cases) == 64
 
     counts = Counter(case["case_type"] for case in cases)
@@ -45,8 +48,7 @@ def test_stress_eval_dataset_shape():
 
 
 def test_stress_eval_repair_cases_are_flagged():
-    dataset_path = Path(__file__).resolve().parents[1] / "datasets" / "stress_eval.jsonl"
-    cases = load_cases(dataset_path)
+    cases = _load_stress_cases()
 
     repair_cases = [case for case in cases if case["case_type"] == "repair_focused"]
     assert len(repair_cases) == 12

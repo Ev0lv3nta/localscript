@@ -1,14 +1,13 @@
 import json
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 from copy import deepcopy
 
-from app.core.config import PROJECT_ROOT
 from app.validation.oracles import UNSUPPORTED, build_expected_result, compare_expected_and_actual
 from app.validation.base import BaseValidator, ValidationReport, ValidatorContext
+from app.validation.runtime import find_lua_binary, find_luac_binary
 from app.validation.runtime_executor import DANGEROUS_LUA_PATTERNS, execute_output
 
 
@@ -54,51 +53,11 @@ def _extract_lua_chunks(code, output_style):
 
 
 def _find_lua_binary():
-    local_candidates = [
-        PROJECT_ROOT / ".tools" / "lua54" / "bin" / "lua",
-        PROJECT_ROOT / ".tools" / "lua-5.4.6" / "src" / "lua",
-    ]
-    for candidate in local_candidates:
-        if candidate.exists() and os.access(candidate, os.X_OK):
-            return str(candidate)
-
-    preferred = os.getenv("LOCALSCRIPT_LUA_BIN")
-    if preferred:
-        if os.path.isfile(preferred) and os.access(preferred, os.X_OK):
-            return preferred
-        resolved = shutil.which(preferred)
-        if resolved:
-            return resolved
-
-    for candidate in ["lua5.4", "lua"]:
-        path = shutil.which(candidate)
-        if path:
-            return path
-    return None
+    return find_lua_binary()
 
 
 def _find_luac_binary():
-    local_candidates = [
-        PROJECT_ROOT / ".tools" / "lua54" / "bin" / "luac",
-        PROJECT_ROOT / ".tools" / "lua-5.4.6" / "src" / "luac",
-    ]
-    for candidate in local_candidates:
-        if candidate.exists() and os.access(candidate, os.X_OK):
-            return str(candidate)
-
-    preferred = os.getenv("LOCALSCRIPT_LUAC_BIN")
-    if preferred:
-        if os.path.isfile(preferred) and os.access(preferred, os.X_OK):
-            return preferred
-        resolved = shutil.which(preferred)
-        if resolved:
-            return resolved
-
-    for candidate in ["luac5.4", "luac"]:
-        path = shutil.which(candidate)
-        if path:
-            return path
-    return None
+    return find_luac_binary()
 
 
 class ContractValidator(BaseValidator):
