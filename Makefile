@@ -1,6 +1,6 @@
 UV ?= uv
 
-.PHONY: install lua-bootstrap lock-check license-check eval-integrity lint type-check quality-check policy-check test test-unit \
+.PHONY: install lua-bootstrap lock-check license-check dependency-audit eval-integrity lint type-check quality-check policy-check test test-unit \
 	build package-check build-check container-check check smoke run
 
 install:
@@ -14,6 +14,12 @@ lock-check:
 
 license-check:
 	.venv/bin/python scripts/check_licenses.py --lock uv.lock --notices THIRD_PARTY_NOTICES.md
+
+AUDIT_REQUIREMENTS ?= /tmp/localscript-audit-requirements.txt
+
+dependency-audit:
+	$(UV) export --quiet --frozen --no-dev --no-emit-project --format requirements-txt --output-file $(AUDIT_REQUIREMENTS)
+	$(UV)x --from pip-audit==2.10.0 pip-audit --requirement $(AUDIT_REQUIREMENTS) --disable-pip
 
 eval-integrity:
 	.venv/bin/python scripts/check_eval_integrity.py
