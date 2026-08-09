@@ -16,6 +16,7 @@ SHADOW_RENAME_RULES = {
         "allowed_methods": ("abs", "ceil", "floor", "max", "min", "modf", "random", "randomseed", "sqrt", "huge"),
     },
     "utf8": {"replacement": "utf8_value", "allowed_methods": ("char", "codes", "codepoint", "len", "offset")},
+    "package": {"replacement": "package_item", "allowed_methods": ()},
     "_utils": {"replacement": "utils_value", "allowed_methods": ()},
     "wf": {"replacement": "wf_value", "allowed_methods": ()},
 }
@@ -114,7 +115,13 @@ class MinimalRepairer:
     def _rename_shadowed_stdlib_locals(code):
         repaired = code
         for identifier, rule in SHADOW_RENAME_RULES.items():
-            if not re.search(r"\blocal\s+{0}\b".format(re.escape(identifier)), repaired):
+            escaped = re.escape(identifier)
+            local_declaration = r"\blocal\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*,\s*)*{0}\b".format(escaped)
+            loop_declaration = r"\bfor\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*,\s*)*{0}\s*(?:,|\bin\b)".format(escaped)
+            if not (
+                re.search(local_declaration, repaired)
+                or re.search(loop_declaration, repaired)
+            ):
                 continue
 
             replacement = rule["replacement"]
