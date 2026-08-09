@@ -3,7 +3,6 @@ import re
 from pathlib import Path
 from typing import List
 
-
 ROOT = Path(__file__).resolve().parents[1]
 LEGACY_PROMPT_FINGERPRINTS = {
     (5, "6cf3557601e94be892a10775b6c487425e89a2a2b3a87647eea3da995c98f8e9"),

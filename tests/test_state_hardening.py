@@ -11,13 +11,12 @@ import pytest
 from app.core.sessions import SessionStore
 from app.core.state import UnsafeStatePathError
 from app.core.storage import (
+    REDACTED,
     CorruptStateError,
     InvalidIdentifierError,
-    REDACTED,
     validate_identifier,
 )
 from app.core.traces import TraceStore
-
 
 SESSION_ID = "parallel-session"
 

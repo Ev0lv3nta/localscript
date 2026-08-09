@@ -4,7 +4,6 @@ import pytest
 
 from app.validation import runtime
 
-
 RUNTIME_CASES = (
     (
         runtime.find_lua_binary,

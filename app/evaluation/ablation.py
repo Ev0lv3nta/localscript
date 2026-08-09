@@ -26,7 +26,6 @@ from app.generation.task_resolver import TaskResolver
 from app.repair.loop import RepairLoop
 from app.validation.validators import ValidationPipeline
 
-
 ABLATION_PROFILES = (
     "one_shot_writer",
     "planner_writer",

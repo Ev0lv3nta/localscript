@@ -14,7 +14,6 @@ from app.core.resources import (
 )
 from tests.support_backends import DeterministicTestBackend
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 

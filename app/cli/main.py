@@ -19,7 +19,6 @@ from app.generation.ollama import OllamaBackend
 from app.generation.taskspec import TaskSpec
 from app.validation.validators import ValidationPipeline
 
-
 cli = typer.Typer(help="LocalScript local CLI")
 
 

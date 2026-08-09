@@ -7,11 +7,10 @@ from copy import deepcopy
 
 from app.families import get_family_definition
 from app.generation.taskspec import TaskResolutionSource
-from app.validation.oracles import UNSUPPORTED, build_expected_result, compare_expected_and_actual
 from app.validation.base import BaseValidator, ValidationReport, ValidatorContext
+from app.validation.oracles import UNSUPPORTED, build_expected_result, compare_expected_and_actual
 from app.validation.runtime import find_lua_binary, find_luac_binary
 from app.validation.runtime_executor import DANGEROUS_LUA_PATTERNS, execute_output
-
 
 SHADOW_PROTECTED_GLOBALS = (
     "table",

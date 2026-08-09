@@ -1,6 +1,5 @@
 import json
 
-
 from app.generation.backend_errors import BackendUnavailable
 
 

@@ -9,7 +9,6 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
-
 UUID_RE = re.compile(
     r"^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$",
     re.IGNORECASE,

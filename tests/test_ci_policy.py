@@ -3,7 +3,6 @@ from pathlib import Path
 
 import yaml
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = PROJECT_ROOT / ".github/workflows/ci.yml"
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
