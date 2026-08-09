@@ -94,7 +94,10 @@ class ValidationCritic:
                 )
             )
 
-        if "generic_return_shape_array_mismatch" in error_codes:
+        if (
+            "generic_return_shape_array_mismatch" in error_codes
+            or "semantic_return_shape_array_mismatch" in error_codes
+        ):
             actions.append(
                 RepairAction(
                     name="normalize_array_return_shape",
@@ -102,7 +105,10 @@ class ValidationCritic:
                 )
             )
 
-        if "generic_return_shape_scalar_mismatch" in error_codes:
+        if (
+            "generic_return_shape_scalar_mismatch" in error_codes
+            or "semantic_return_shape_scalar_mismatch" in error_codes
+        ):
             actions.append(
                 RepairAction(
                     name="normalize_scalar_return_shape",

@@ -139,6 +139,84 @@ def test_generic_semantic_validator_accepts_empty_array_behavior():
     assert "generic_empty_array_behavior_mismatch" not in report.error_codes()
 
 
+def test_extractor_oracle_takes_precedence_over_planner_return_shape():
+    context = {
+        "wf": {
+            "vars": {
+                "auditEvents": [
+                    {"id": "first"},
+                    {"id": "last"},
+                ]
+            }
+        }
+    }
+    candidate = TaskExtractor().extract(
+        prompt="Верни последний элемент массива wf.vars.auditEvents.",
+        context=context,
+    )
+    task_spec = TaskResolver().resolve(candidate, planner={"family": "last_array_item"})
+    code = (
+        "local events = wf.vars.auditEvents or _utils.array.new()\n"
+        "if #events == 0 then return nil end\n"
+        "return events[#events]"
+    )
+
+    report = ValidationPipeline().run(
+        code=code,
+        task_spec=task_spec,
+        profile=get_runtime_profile(),
+        source_context=context,
+        planner_semantic_checks=[{"kind": "return_shape", "value": "scalar"}],
+    )
+
+    assert task_spec.resolution_source.value == "extractor"
+    assert "generic_return_shape_scalar_mismatch" not in report.error_codes()
+    assert "semantic_mismatch" not in report.error_codes()
+
+
+def test_family_structure_accepts_equivalent_lua_method_syntax():
+    context = {"wf": {"vars": {"email": "  USER@example.com  "}}}
+    candidate = TaskExtractor().extract(
+        prompt="Нормализуй email: убери пробелы по краям и приведи к нижнему регистру.",
+        context=context,
+    )
+    task_spec = TaskResolver().resolve(candidate)
+    code = (
+        'local email = wf.vars.email or ""\n'
+        'return (email:match("^%s*(.-)%s*$") or ""):lower()'
+    )
+
+    report = ValidationPipeline().run(
+        code=code,
+        task_spec=task_spec,
+        profile=get_runtime_profile(),
+        source_context=context,
+    )
+
+    assert "normalize_email_trim_missing" not in report.error_codes()
+    assert "semantic_mismatch" not in report.error_codes()
+
+
+def test_extractor_oracle_reports_actionable_scalar_shape_mismatch():
+    context = {"wf": {"vars": {"email": "USER@example.com"}}}
+    candidate = TaskExtractor().extract(
+        prompt="Нормализуй wf.vars.email и верни lower-case строку.",
+        context=context,
+    )
+    task_spec = TaskResolver().resolve(candidate)
+
+    report = ValidationPipeline().run(
+        code='return _utils.array.new({(wf.vars.email or ""):lower()})',
+        task_spec=task_spec,
+        profile=get_runtime_profile(),
+        source_context=context,
+        planner_semantic_checks=[{"kind": "return_shape", "value": "scalar"}],
+    )
+
+    assert "generic_return_shape_scalar_mismatch" not in report.error_codes()
+    assert "semantic_return_shape_scalar_mismatch" in report.error_codes()
+
+
 def test_planner_family_without_extractor_hints_uses_generic_semantics():
     context = {
         "wf": {
