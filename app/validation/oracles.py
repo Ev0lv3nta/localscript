@@ -13,6 +13,17 @@ def build_expected_result(task_spec, context):
 
 
 def compare_expected_and_actual(expected, actual):
+    if isinstance(expected, dict) and isinstance(actual, dict):
+        keys = set(expected) | set(actual)
+        return all(
+            compare_expected_and_actual(expected.get(key), actual.get(key))
+            for key in keys
+        )
+    if isinstance(expected, list) and isinstance(actual, list):
+        return len(expected) == len(actual) and all(
+            compare_expected_and_actual(expected_item, actual_item)
+            for expected_item, actual_item in zip(expected, actual)
+        )
     return expected == actual
 
 
