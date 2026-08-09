@@ -503,8 +503,13 @@ class TaskExtractor:
         if "unix" not in normalized_prompt:
             return None
 
-        iso_path = self._select_prompt_path({"explicit": [path for path in prompt_paths.get("explicit", []) if "recalltime" in path.lower()], "bare": [path for path in prompt_paths.get("bare", []) if "recalltime" in path.lower()]}, expected_kind="init") or self._find_recall_path(context)
-        if not iso_path and not self._contains_any(normalized_prompt, ["recalltime", "recall time", "recall_time"]):
+        iso_path = self._select_prompt_path(prompt_paths, expected_kind="init")
+        if not iso_path:
+            iso_path = self._find_recall_path(context)
+        if not iso_path and not self._contains_any(
+            normalized_prompt,
+            ["recalltime", "recall time", "recall_time"],
+        ):
             return None
         if not iso_path:
             return None

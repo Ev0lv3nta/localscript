@@ -4,7 +4,16 @@ from app.generation.extractor import TaskExtractor
 from app.generation.task_resolver import TaskResolver
 from app.generation.taskspec import TaskSpec
 from app.validation.runtime_executor import execute_output
+from app.validation.oracles import compare_expected_and_actual
 from app.validation.validators import ValidationPipeline
+
+
+def test_semantic_comparison_treats_json_null_as_lua_nil_field():
+    expected = [{"Sku": "X3", "Discount": None, "Markdown": "clearance"}]
+    actual = [{"Sku": "X3", "Markdown": "clearance"}]
+
+    assert compare_expected_and_actual(expected, actual)
+    assert not compare_expected_and_actual(expected, [{"Sku": "X3"}])
 
 
 def test_semantic_executor_accepts_valid_email_code():

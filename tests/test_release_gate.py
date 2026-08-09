@@ -49,6 +49,42 @@ def _command_report(name, payload=None, returncode=0):
     }
 
 
+def _mock_release_preflight(monkeypatch, commit_sha):
+    monkeypatch.setattr(
+        release_gate,
+        "run_integrity_check",
+        lambda private_holdout_path=None: {
+            "ok": True,
+            "private_holdout": {
+                "name": "holdout_v1",
+                "case_count": 8,
+                "sha256": "sha256:holdout",
+                "ok": True,
+            },
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(
+        release_gate,
+        "git_evidence",
+        lambda: {"commit_sha": commit_sha, "dirty": False},
+    )
+    monkeypatch.setattr(
+        release_gate,
+        "gpu_evidence",
+        lambda: {
+            "available": True,
+            "gpus": [
+                {
+                    "name": "Test GPU",
+                    "driver_version": "1.0",
+                    "memory_total_mib": 8192,
+                }
+            ],
+        },
+    )
+
+
 def test_live_fixture_fails_closed_when_backend_is_required(monkeypatch):
     monkeypatch.setenv("LOCALSCRIPT_REQUIRE_LIVE", "1")
     monkeypatch.setattr(OllamaBackend, "ping", lambda self: False)
@@ -118,6 +154,36 @@ def test_command_timeout_is_reported_without_hanging(monkeypatch):
     assert report["stdout"] == "partial"
 
 
+def test_release_gate_rejects_missing_private_holdout_before_expensive_commands(
+    monkeypatch,
+    tmp_path,
+):
+    lock_path = tmp_path / "runtime-profile.lock.json"
+    output = tmp_path / "preflight-failure.json"
+    monkeypatch.setenv("LOCALSCRIPT_RUNTIME_LOCK_PATH", str(lock_path))
+    monkeypatch.setattr(
+        release_gate,
+        "git_evidence",
+        lambda: {"commit_sha": "deadbeef", "dirty": False},
+    )
+    monkeypatch.setattr(
+        release_gate,
+        "run_command",
+        lambda *args, **kwargs: pytest.fail("expensive command must not run"),
+    )
+
+    with pytest.raises(SystemExit):
+        release_gate.main(
+            ["--mode", "competition", "--output", str(output)]
+        )
+
+    report = json.loads(output.read_text(encoding="utf-8"))
+    runtime_lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    assert report["preflight_only"] is True
+    assert report["failures"] == ["private_holdout_not_supplied"]
+    assert runtime_lock["locked"] is False
+
+
 def test_release_gate_writes_sha_bound_artifact_and_runs_quality_once(
     monkeypatch, tmp_path
 ):
@@ -144,7 +210,12 @@ def test_release_gate_writes_sha_bound_artifact_and_runs_quality_once(
                     stream,
                 )
             return _command_report(name, doctor_report)
-        if name in {"smoke", "latency"}:
+        if name in {
+            "smoke",
+            "latency",
+            "private_holdout",
+            "repeat_stability",
+        }:
             return _command_report(name, {"ok": True})
         return _command_report(name)
 
@@ -152,7 +223,7 @@ def test_release_gate_writes_sha_bound_artifact_and_runs_quality_once(
     lock_path = tmp_path / "runtime-profile.lock.json"
     monkeypatch.setenv("LOCALSCRIPT_RUNTIME_LOCK_PATH", str(lock_path))
     monkeypatch.setattr(release_gate, "run_command", fake_run_command)
-    monkeypatch.setattr(release_gate, "git_commit_sha", lambda: "deadbeef")
+    _mock_release_preflight(monkeypatch, "deadbeef")
     monkeypatch.setattr(
         release_gate,
         "command_identity",
@@ -174,13 +245,27 @@ def test_release_gate_writes_sha_bound_artifact_and_runs_quality_once(
     )
 
     report = release_gate.main(
-        ["--mode", "competition", "--output", str(output)]
+        [
+            "--mode",
+            "competition",
+            "--output",
+            str(output),
+            "--private-holdout",
+            str(tmp_path / "holdout-v1.jsonl"),
+        ]
     )
 
     assert report["ok"] is True
     assert report["commit_sha"] == "deadbeef"
     assert report["runtime"]["ollama"]["model"]["digest"] == "sha256:model"
-    assert calls == ["pytest_live", "doctor", "smoke", "latency"]
+    assert calls == [
+        "pytest_live",
+        "doctor",
+        "private_holdout",
+        "repeat_stability",
+        "smoke",
+        "latency",
+    ]
     assert json.loads(output.read_text(encoding="utf-8"))["ok"] is True
     assert json.loads(lock_path.read_text(encoding="utf-8"))["locked"] is True
 
@@ -207,7 +292,12 @@ def test_release_gate_failure_writes_unlocked_runtime_snapshot(
             ) as stream:
                 json.dump({"profile": "competition", "locked": False}, stream)
             return _command_report(name, doctor_report, returncode=1)
-        if name in {"smoke", "latency"}:
+        if name in {
+            "smoke",
+            "latency",
+            "private_holdout",
+            "repeat_stability",
+        }:
             return _command_report(name, {"ok": True})
         return _command_report(name)
 
@@ -215,13 +305,20 @@ def test_release_gate_failure_writes_unlocked_runtime_snapshot(
     lock_path = tmp_path / "runtime-profile.lock.json"
     monkeypatch.setenv("LOCALSCRIPT_RUNTIME_LOCK_PATH", str(lock_path))
     monkeypatch.setattr(release_gate, "run_command", fake_run_command)
-    monkeypatch.setattr(release_gate, "git_commit_sha", lambda: "badc0de")
+    _mock_release_preflight(monkeypatch, "badc0de")
     monkeypatch.setattr(release_gate, "command_identity", lambda command: {})
     monkeypatch.setattr(release_gate, "ollama_evidence", lambda *args: {})
 
     with pytest.raises(SystemExit):
         release_gate.main(
-            ["--mode", "competition", "--output", str(output)]
+            [
+                "--mode",
+                "competition",
+                "--output",
+                str(output),
+                "--private-holdout",
+                str(tmp_path / "holdout-v1.jsonl"),
+            ]
         )
 
     artifact = json.loads(output.read_text(encoding="utf-8"))

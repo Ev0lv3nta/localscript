@@ -60,6 +60,7 @@ def _family_writer_guidance(planner):
             "Use the exact Lua pattern from the planner/source hints and return one scalar match value or nil.",
         ],
         "iso8601_to_epoch": [
+            "Read the exact `iso_path` from extractor hints; never substitute a path from a reference example.",
             "Parse the ISO string with one Lua pattern match into year, month, day, hour, minute, second, sign, offset hour, and offset minute.",
             "Compute epoch seconds with pure arithmetic and leap-year logic from 1970-01-01.",
             "Subtract the parsed timezone offset in seconds.",

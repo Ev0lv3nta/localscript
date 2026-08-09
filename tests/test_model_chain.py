@@ -65,9 +65,13 @@ def test_engine_uses_same_model_chain_and_redacts_private_trace_artifacts(tmp_pa
     assert trace_payload["code"] == REDACTED
     assert trace_payload["task_spec"]["family"] == "generic_lua"
     assert trace_payload["task_spec"]["resolution_source"] == "planner"
-    assert trace_payload["stage_events"] == [
-        {"stage": "session_ready"},
-        {"stage": "task_resolved"},
-        {"stage": "candidate_generated"},
-        {"stage": "outcome_finalized"},
+    assert [event["stage"] for event in trace_payload["stage_events"]] == [
+        "session_ready",
+        "task_resolved",
+        "candidate_generated",
+        "outcome_finalized",
     ]
+    assert all(
+        event["stage_duration_ms"] >= 0
+        for event in trace_payload["stage_events"]
+    )
