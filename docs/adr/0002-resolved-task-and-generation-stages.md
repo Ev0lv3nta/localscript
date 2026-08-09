@@ -19,6 +19,8 @@ Extractor возвращает неизменяемый кандидат `TaskSp
 
 Orchestration фиксирует переходы `session_ready → task_resolved → candidate_generated → candidate_repaired → outcome_finalized`. Ветка уточнения проходит через `clarification_required` и после этого не может генерировать candidate. Repair-этап необязателен, но после `outcome_finalized` переходы запрещены.
 
+Результат model-chain преобразуется во внутренний тип `GeneratedCandidate` либо `PlannerClarification`. Генерация, deterministic repair и финализация session/trace разделены на самостоятельные операции; orchestration связывает их, но не хранит россыпь промежуточных переменных.
+
 ## Последствия
 
 Неподдерживаемое состояние завершается ошибкой рядом с источником, а trace содержит упорядоченный список этапов без prompt, context или model response. Внешний HTTP/CLI-контракт не меняется. Family registry и разделение validators смогут опираться на один resolved contract, не создавая второй classifier.

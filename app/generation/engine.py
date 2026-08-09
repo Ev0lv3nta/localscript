@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import List, Optional
 import uuid
 
@@ -13,7 +13,8 @@ from app.domain.outcomes import (
     ValidationStatus,
 )
 from app.generation.extractor import TaskExtractor
-from app.generation.backend_errors import BackendError, BackendUnavailable
+from app.generation.backend_errors import BackendUnavailable
+from app.generation.candidates import GeneratedCandidate, PlannerClarification
 from app.generation.clarification import ClarificationPolicy
 from app.generation.formatter import OutputFormatter
 from app.generation.model_chain import SameModelChain
@@ -155,15 +156,6 @@ class GenerationEngine:
             )
         session_state["normalized_task"] = task_spec.normalized_prompt
         session_state["extracted_slots"] = task_spec.model_dump()
-        backend_error = None
-        rules_applied = []
-        examples_used = []
-        critic_rules_used = []
-        planner_payload = {}
-        critic_payload = {}
-        repair_trace = []
-        repair_rounds = 0
-        semantic_checks = []
         clarification_decision = self.clarification_policy.evaluate(
             task_spec,
             session_state,
@@ -196,114 +188,60 @@ class GenerationEngine:
                 assumption_risk=assumption_risk,
             )
 
-        if task_spec.safety_fallback:
-            task_spec = self.task_resolver.resolve(task_spec)
-            session_state["extracted_slots"] = task_spec.model_dump(mode="json")
-            execution.transition(GenerationStage.TASK_RESOLVED)
-            raw_code = SAFE_FALLBACK_CODE
-            strategy = "safe_fallback"
-            assumptions = list(task_spec.assumptions)
-            assumptions.append("Unsafe or malformed task was denied by the safety guardrail.")
-            code = self.formatter.format(raw_code, task_spec.output_style)
-            validation_report = self.validation_pipeline.run(
-                code=code,
+        generation_step = self._generate_candidate(
+            effective_prompt=effective_prompt,
+            effective_context=effective_context,
+            task_spec=task_spec,
+            session_state=session_state,
+            rich_mode=rich_mode,
+            feedback=feedback,
+        )
+        task_spec = generation_step.task_spec
+        session_state["extracted_slots"] = task_spec.model_dump(mode="json")
+        execution.transition(GenerationStage.TASK_RESOLVED)
+        if isinstance(generation_step, PlannerClarification):
+            return self._complete_clarification(
+                prompt=prompt,
+                effective_prompt=effective_prompt,
+                effective_context=effective_context,
+                feedback=feedback,
+                clarification_answer=clarification_answer,
                 task_spec=task_spec,
-                profile=self.profile,
-                source_context=effective_context,
-                prompt=effective_prompt,
-                planner_semantic_checks=None,
+                session_state=session_state,
+                execution=execution,
+                question=generation_step.question,
+                assumptions=list(generation_step.assumptions),
+                assumption_risk=assumption_risk,
+                planner_payload=generation_step.planner_payload,
+                repair_trace=generation_step.repair_trace,
+                rules_applied=generation_step.rules_applied,
+                semantic_checks=generation_step.semantic_checks,
             )
-        else:
-            try:
-                chain_result = self.model_chain.run(
-                    prompt=effective_prompt,
-                    context=effective_context,
-                    task_spec=task_spec,
-                    profile=self.profile,
-                    max_rounds=max(1, int(getattr(self.profile, "model_chain_rounds", 1))),
-                    session_state=session_state,
-                    stop_on_clarification=rich_mode,
-                )
-                task_spec = getattr(chain_result, "task_spec", None) or self.task_resolver.resolve(
-                    task_spec,
-                    planner=getattr(chain_result, "planner", None),
-                )
-                session_state["extracted_slots"] = task_spec.model_dump(mode="json")
-                execution.transition(GenerationStage.TASK_RESOLVED)
-                if chain_result.status == "clarification_needed":
-                    assumptions = list(task_spec.assumptions) + [
-                        "Planner detected an ambiguity and requested one clarification before code generation.",
-                    ]
-                    assumptions.extend(chain_result.planner.get("assumptions", []))
-                    planner_payload = chain_result.planner
-                    semantic_checks = chain_result.semantic_checks
-                    return self._complete_clarification(
-                        prompt=prompt,
-                        effective_prompt=effective_prompt,
-                        effective_context=effective_context,
-                        feedback=feedback,
-                        clarification_answer=clarification_answer,
-                        task_spec=task_spec,
-                        session_state=session_state,
-                        execution=execution,
-                        question=chain_result.question,
-                        assumptions=assumptions,
-                        assumption_risk=assumption_risk,
-                        planner_payload=planner_payload,
-                        repair_trace=chain_result.history,
-                        rules_applied=chain_result.rules_applied,
-                        semantic_checks=semantic_checks,
-                    )
-                strategy = "feedback_revision" if feedback else "ollama_chain"
-                assumptions = list(task_spec.assumptions) + [
-                    "The same-model planner/writer chain handled the request.",
-                ]
-                assumptions.extend(chain_result.planner.get("assumptions", []))
-                code = chain_result.code
-                validation_report = chain_result.validation_report
-                repair_trace = chain_result.history
-                repair_rounds = chain_result.rounds
-                rules_applied = chain_result.rules_applied
-                examples_used = chain_result.examples_used
-                critic_rules_used = chain_result.critic_rules_used
-                planner_payload = chain_result.planner
-                critic_payload = chain_result.critic
-                semantic_checks = chain_result.semantic_checks
-            except BackendError:
-                raise
 
+        candidate = generation_step
         execution.transition(GenerationStage.CANDIDATE_GENERATED)
-        if validation_report.has_errors and strategy != "safe_fallback":
-            remaining_rounds = max(int(self.profile.max_repair_rounds) - int(repair_rounds), 1)
-            repair_result = self.repair_loop.run(
-                code=code,
-                task_spec=task_spec,
-                validation_report=validation_report,
-                profile=self.profile,
-                max_rounds=remaining_rounds,
-                source_context=effective_context,
-                prompt=effective_prompt,
-                planner_semantic_checks=semantic_checks,
-            )
-            code = repair_result.code
-            validation_report = repair_result.validation_report
-            repair_trace = repair_trace + [
-                {"stage": "deterministic_repair", "history": repair_result.history}
-            ]
-            repair_rounds = repair_rounds + repair_result.rounds
+        candidate, repaired = self._repair_candidate(
+            candidate,
+            effective_prompt=effective_prompt,
+            effective_context=effective_context,
+        )
+        if repaired:
             execution.transition(GenerationStage.CANDIDATE_REPAIRED)
         verification_errors = []
-        for error_code in validation_report.error_codes() + verify_code(code):
+        for error_code in candidate.validation_report.error_codes() + verify_code(candidate.code):
             if error_code not in verification_errors:
                 verification_errors.append(error_code)
-        degraded_mode = self._is_degraded(strategy=strategy, validation_report=validation_report)
-        status = self._build_status(strategy=strategy, degraded_mode=degraded_mode)
+        degraded_mode = self._is_degraded(
+            strategy=candidate.strategy,
+            validation_report=candidate.validation_report,
+        )
+        status = self._build_status(strategy=candidate.strategy, degraded_mode=degraded_mode)
         session_state["status"] = status
-        session_state["planner_state"] = planner_payload
-        session_state["previous_candidate_code"] = code
-        session_state["previous_validation_report"] = validation_report.to_dict()
-        session_state["assumptions"] = assumptions
-        session_state["last_strategy"] = strategy
+        session_state["planner_state"] = candidate.planner_payload
+        session_state["previous_candidate_code"] = candidate.code
+        session_state["previous_validation_report"] = candidate.validation_report.to_dict()
+        session_state["assumptions"] = candidate.assumptions
+        session_state["last_strategy"] = candidate.strategy
         session_state["open_clarification_question"] = ""
         execution.transition(GenerationStage.OUTCOME_FINALIZED)
         trace_payload = {
@@ -313,23 +251,23 @@ class GenerationEngine:
             "feedback": feedback,
             "clarification_answer": clarification_answer,
             "status": status,
-            "strategy": strategy,
+            "strategy": candidate.strategy,
             "task_spec": task_spec.model_dump(),
-            "assumptions": assumptions,
+            "assumptions": candidate.assumptions,
             "verification_errors": verification_errors,
-            "validation_report": validation_report.to_dict(),
-            "repair_rounds": repair_rounds,
-            "repair_trace": repair_trace,
-            "planner": planner_payload,
-            "critic": critic_payload,
-            "rules_applied": rules_applied,
-            "examples_used": examples_used,
-            "critic_rules_used": critic_rules_used,
-            "semantic_checks": semantic_checks,
-            "backend_error": backend_error,
+            "validation_report": candidate.validation_report.to_dict(),
+            "repair_rounds": candidate.repair_rounds,
+            "repair_trace": candidate.repair_trace,
+            "planner": candidate.planner_payload,
+            "critic": candidate.critic_payload,
+            "rules_applied": candidate.rules_applied,
+            "examples_used": candidate.examples_used,
+            "critic_rules_used": candidate.critic_rules_used,
+            "semantic_checks": candidate.semantic_checks,
+            "backend_error": None,
             "model": self.profile.model,
             "fallback_model": self.profile.fallback_model,
-            "code": code,
+            "code": candidate.code,
             "session_id": session_id,
             "degraded_mode": degraded_mode,
             "clarification_suggested": bool(rule_based_question),
@@ -340,25 +278,135 @@ class GenerationEngine:
         session_state["latest_trace_id"] = trace_id
         session_state["trace_ids"].append(trace_id)
         outcome = self._build_generation_outcome(
-            strategy=strategy,
-            code=code,
-            validation_report=validation_report,
+            strategy=candidate.strategy,
+            code=candidate.code,
+            validation_report=candidate.validation_report,
         )
         return GenerationResult(
-            code=code,
+            code=candidate.code,
             trace_id=trace_id,
             session_id=session_id,
-            strategy=strategy,
+            strategy=candidate.strategy,
             verification_errors=verification_errors,
-            validation_report=validation_report.to_dict(),
-            repair_rounds=repair_rounds,
+            validation_report=candidate.validation_report.to_dict(),
+            repair_rounds=candidate.repair_rounds,
             degraded_mode=degraded_mode,
             status=status,
-            assumptions=assumptions,
+            assumptions=candidate.assumptions,
             session_summary=self.build_session_summary(session_state),
             clarification_suggested=bool(rule_based_question),
             assumption_risk=assumption_risk,
             outcome=outcome,
+        )
+
+    def _generate_candidate(
+        self,
+        *,
+        effective_prompt,
+        effective_context,
+        task_spec,
+        session_state,
+        rich_mode,
+        feedback,
+    ):
+        if task_spec.safety_fallback:
+            task_spec = self.task_resolver.resolve(task_spec)
+            code = self.formatter.format(SAFE_FALLBACK_CODE, task_spec.output_style)
+            validation_report = self.validation_pipeline.run(
+                code=code,
+                task_spec=task_spec,
+                profile=self.profile,
+                source_context=effective_context,
+                prompt=effective_prompt,
+                planner_semantic_checks=None,
+            )
+            assumptions = list(task_spec.assumptions)
+            assumptions.append("Unsafe or malformed task was denied by the safety guardrail.")
+            return GeneratedCandidate(
+                task_spec=task_spec,
+                code=code,
+                validation_report=validation_report,
+                strategy="safe_fallback",
+                assumptions=assumptions,
+            )
+
+        chain_result = self.model_chain.run(
+            prompt=effective_prompt,
+            context=effective_context,
+            task_spec=task_spec,
+            profile=self.profile,
+            max_rounds=max(1, int(getattr(self.profile, "model_chain_rounds", 1))),
+            session_state=session_state,
+            stop_on_clarification=rich_mode,
+        )
+        task_spec = getattr(chain_result, "task_spec", None) or self.task_resolver.resolve(
+            task_spec,
+            planner=getattr(chain_result, "planner", None),
+        )
+        planner_payload = chain_result.planner
+        if chain_result.status == "clarification_needed":
+            assumptions = list(task_spec.assumptions) + [
+                "Planner detected an ambiguity and requested one clarification before code generation.",
+            ]
+            assumptions.extend(planner_payload.get("assumptions", []))
+            return PlannerClarification(
+                task_spec=task_spec,
+                question=chain_result.question,
+                assumptions=tuple(assumptions),
+                planner_payload=planner_payload,
+                repair_trace=chain_result.history,
+                rules_applied=chain_result.rules_applied,
+                semantic_checks=chain_result.semantic_checks,
+            )
+
+        assumptions = list(task_spec.assumptions) + [
+            "The same-model planner/writer chain handled the request.",
+        ]
+        assumptions.extend(planner_payload.get("assumptions", []))
+        return GeneratedCandidate(
+            task_spec=task_spec,
+            code=chain_result.code,
+            validation_report=chain_result.validation_report,
+            strategy="feedback_revision" if feedback else "ollama_chain",
+            assumptions=assumptions,
+            repair_trace=chain_result.history,
+            repair_rounds=chain_result.rounds,
+            rules_applied=chain_result.rules_applied,
+            examples_used=chain_result.examples_used,
+            critic_rules_used=chain_result.critic_rules_used,
+            planner_payload=planner_payload,
+            critic_payload=chain_result.critic,
+            semantic_checks=chain_result.semantic_checks,
+        )
+
+    def _repair_candidate(self, candidate, *, effective_prompt, effective_context):
+        if not candidate.validation_report.has_errors or candidate.strategy == "safe_fallback":
+            return candidate, False
+
+        remaining_rounds = max(
+            int(self.profile.max_repair_rounds) - int(candidate.repair_rounds),
+            1,
+        )
+        repair_result = self.repair_loop.run(
+            code=candidate.code,
+            task_spec=candidate.task_spec,
+            validation_report=candidate.validation_report,
+            profile=self.profile,
+            max_rounds=remaining_rounds,
+            source_context=effective_context,
+            prompt=effective_prompt,
+            planner_semantic_checks=candidate.semantic_checks,
+        )
+        return (
+            replace(
+                candidate,
+                code=repair_result.code,
+                validation_report=repair_result.validation_report,
+                repair_trace=candidate.repair_trace
+                + [{"stage": "deterministic_repair", "history": repair_result.history}],
+                repair_rounds=candidate.repair_rounds + repair_result.rounds,
+            ),
+            True,
         )
 
     def _complete_clarification(
