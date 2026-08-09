@@ -12,7 +12,7 @@ include uv.lock
 
 recursive-include app/resources *.json *.jsonl *.sh *.yaml
 recursive-include app/ui/static *.css *.html *.js
-recursive-include docs *.jpg *.md *.png
+recursive-include docs *.jpg *.md
 recursive-include scripts *.py *.sh
 recursive-include tests *.py
 recursive-include third_party/lua *.tar.gz
