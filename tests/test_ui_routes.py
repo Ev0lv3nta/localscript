@@ -65,7 +65,8 @@ def test_ui_routes_serve_operator_console_html(tmp_path, monkeypatch):
 
     assert root.status_code == 200
     assert alias.status_code == 200
-    assert "Локальный агентный сервис генерации" in root.text
+    assert "Сгенерировать и проверить" in root.text
+    assert "Проверенный результат" in root.text
     assert "/static/app.js" in root.text
 
 
