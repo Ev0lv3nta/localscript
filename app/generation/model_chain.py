@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 
 from app.core.kb import build_rule_lines, select_critic_rules, select_examples
 from app.generation.context_reducer import ContextReducer
+from app.generation.task_resolver import TaskResolver
 from app.validation.base import ValidationReport
 from app.generation.prompts import (
     build_critic_prompt,
@@ -19,6 +20,7 @@ class ModelChainResult:
     rounds: int
     planner: dict
     critic: dict
+    task_spec: object
     rules_applied: list = field(default_factory=list)
     examples_used: list = field(default_factory=list)
     critic_rules_used: list = field(default_factory=list)
@@ -29,11 +31,12 @@ class ModelChainResult:
 
 
 class SameModelChain:
-    def __init__(self, backend, validation_pipeline, formatter):
+    def __init__(self, backend, validation_pipeline, formatter, task_resolver=None):
         self.backend = backend
         self.validation_pipeline = validation_pipeline
         self.formatter = formatter
         self.context_reducer = ContextReducer()
+        self.task_resolver = task_resolver or TaskResolver()
 
     def run(self, prompt, context, task_spec, profile, max_rounds=1, session_state=None, stop_on_clarification=False):
         rules = build_rule_lines(task_spec)
@@ -44,6 +47,8 @@ class SameModelChain:
             response_format="json",
         )
         planner = self._parse_planner(planner_text, task_spec, prompt=prompt)
+        task_spec = self.task_resolver.resolve(task_spec, planner=planner)
+        rules = build_rule_lines(task_spec)
         if stop_on_clarification and planner.get("clarification_needed"):
             return ModelChainResult(
                 code="",
@@ -51,6 +56,7 @@ class SameModelChain:
                 rounds=0,
                 planner=planner,
                 critic={},
+                task_spec=task_spec,
                 rules_applied=rules,
                 history=[
                     {
@@ -185,6 +191,7 @@ class SameModelChain:
             rounds=rounds,
             planner=planner,
             critic=critic_payload,
+            task_spec=task_spec,
             rules_applied=rules,
             examples_used=examples_used,
             critic_rules_used=critic_rules_used,

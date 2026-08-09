@@ -1,9 +1,18 @@
+from enum import Enum
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class TaskResolutionSource(str, Enum):
+    EXTRACTOR = "extractor"
+    PLANNER = "planner"
+    GENERIC = "generic"
 
 
 class TaskSpec(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     normalized_prompt: str
     family: Optional[str] = None
     output_style: str = "lua_block"
@@ -19,3 +28,9 @@ class TaskSpec(BaseModel):
     assumptions: List[str] = Field(default_factory=list)
     ambiguity_notes: List[str] = Field(default_factory=list)
     safety_fallback: bool = False
+
+
+class ResolvedTaskSpec(TaskSpec):
+    family: str
+    resolution_source: TaskResolutionSource
+    planner_family: Optional[str] = None
