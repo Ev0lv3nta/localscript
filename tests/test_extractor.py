@@ -30,6 +30,27 @@ def test_extractor_detects_init_variables_root():
     assert spec.generation_hints["iso_path"] == "wf.initVariables.recallTime"
 
 
+def test_extractor_uses_explicit_nonlegacy_iso_path():
+    extractor = TaskExtractor()
+
+    spec = extractor.extract(
+        prompt=(
+            "Преобразуй ISO 8601 из wf.initVariables.nextRecallAt "
+            "в Unix timestamp без os.*."
+        ),
+        context={
+            "wf": {
+                "initVariables": {
+                    "nextRecallAt": "2024-01-02T03:04:05+00:00",
+                }
+            }
+        },
+    )
+
+    assert spec.family == "iso8601_to_epoch"
+    assert spec.generation_hints["iso_path"] == "wf.initVariables.nextRecallAt"
+
+
 def test_extractor_preserves_context_specific_paths():
     extractor = TaskExtractor()
 

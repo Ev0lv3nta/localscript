@@ -12,13 +12,20 @@ def test_success_path_has_explicit_ordered_stages():
     execution.transition(GenerationStage.CANDIDATE_REPAIRED)
     execution.transition(GenerationStage.OUTCOME_FINALIZED)
 
-    assert execution.snapshot() == [
-        {"stage": "session_ready"},
-        {"stage": "task_resolved"},
-        {"stage": "candidate_generated"},
-        {"stage": "candidate_repaired"},
-        {"stage": "outcome_finalized"},
+    events = execution.snapshot()
+
+    assert [event["stage"] for event in events] == [
+        "session_ready",
+        "task_resolved",
+        "candidate_generated",
+        "candidate_repaired",
+        "outcome_finalized",
     ]
+    assert all(event["elapsed_ms"] >= 0 for event in events)
+    assert all(event["stage_duration_ms"] >= 0 for event in events)
+    assert [event["elapsed_ms"] for event in events] == sorted(
+        event["elapsed_ms"] for event in events
+    )
 
 
 def test_clarification_path_cannot_generate_a_candidate_after_decision():
