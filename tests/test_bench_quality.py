@@ -6,6 +6,7 @@ def test_quality_benchmark_reports_backend_type_and_aggregates(monkeypatch):
     def fake_dataset_report(dataset_path, profile=None, backend=None):
         name = str(dataset_path).split("/")[-1].replace(".jsonl", "")
         totals = {
+            "v1": 12,
             "public_gold": 8,
             "stress_eval": 64,
             "showcase_eval": 16,
@@ -47,6 +48,7 @@ def test_quality_benchmark_reports_backend_type_and_aggregates(monkeypatch):
     report = run_quality_benchmark(backend=DeterministicTestBackend(), mode="dev")
 
     assert report["backend_type"] == "fake_backend"
+    assert report["public_v1"]["passed"] == 12
     assert report["public_gold"]["passed"] == 8
     assert report["stress_eval"]["passed"] == 64
     assert report["showcase_eval"]["passed"] == 16

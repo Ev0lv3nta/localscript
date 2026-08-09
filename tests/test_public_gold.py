@@ -4,7 +4,7 @@ from app.generation.extractor import TaskExtractor
 
 
 def test_public_gold_dataset_declares_live_semantic_expectations():
-    with materialized_resource("datasets/public_gold.jsonl") as dataset_path:
+    with materialized_resource("evals/regression/public_gold.jsonl") as dataset_path:
         cases = load_cases(dataset_path)
 
     assert len(cases) == 8
@@ -21,7 +21,7 @@ def test_public_gold_dataset_declares_live_semantic_expectations():
 def test_public_gold_synthetic_cases_match_declared_families():
     extractor = TaskExtractor()
 
-    with materialized_resource("datasets/public_gold.jsonl") as dataset_path:
+    with materialized_resource("evals/regression/public_gold.jsonl") as dataset_path:
         cases = load_cases(dataset_path)
     for case in cases:
         task_spec = extractor.extract(case["prompt"], case.get("context"))

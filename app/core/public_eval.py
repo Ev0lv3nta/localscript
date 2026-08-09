@@ -38,6 +38,8 @@ def _is_live_semantic_case(case):
         "multilingual",
         "adversarial",
         "large_context",
+        "public_benchmark",
+        "holdout",
     }
 
 
