@@ -66,6 +66,26 @@ jobs:
       - name: Проверить lock и лицензии
         run: make policy-check
 
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Получить исходники
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Настроить Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Настроить uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Проверить runtime-зависимости на известные уязвимости
+        run: make dependency-audit AUDIT_REQUIREMENTS="${RUNNER_TEMP}/localscript-audit.txt"
+
   static-analysis:
     name: Static analysis
     runs-on: ubuntu-24.04
@@ -141,6 +161,16 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Собрать образ и выполнить smoke
         run: make container-check
+      - name: Проверить образ на исправимые high/critical уязвимости
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: localscript:ci
+          version: v0.73.0
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
 
   secrets:
     name: Secrets
@@ -169,7 +199,7 @@ jobs:
   required:
     name: CI / required
     if: ${{ always() }}
-    needs: [unit, policy, static-analysis, eval-integrity, package, container, secrets]
+    needs: [unit, policy, dependency-audit, static-analysis, eval-integrity, package, container, secrets]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
