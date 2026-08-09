@@ -3,6 +3,7 @@ import json
 import yaml
 
 from app.core.resources import get_resource, read_resource_text
+from app.evaluation.manifest import dataset_specs
 
 
 def _normalize_prompt(value):
@@ -11,10 +12,8 @@ def _normalize_prompt(value):
 
 def _load_eval_prompts():
     prompts = {}
-    datasets = sorted(get_resource("datasets").iterdir(), key=lambda item: item.name)
-    for dataset_path in datasets:
-        if not dataset_path.name.endswith(".jsonl"):
-            continue
+    for spec in dataset_specs():
+        dataset_path = get_resource(spec.path)
         lines = dataset_path.read_text(encoding="utf-8").splitlines()
         for line_number, raw_line in enumerate(lines, start=1):
             if not raw_line.strip():

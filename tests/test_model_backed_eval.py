@@ -5,7 +5,7 @@ from app.generation.extractor import TaskExtractor
 from tests.support_backends import DeterministicTestBackend
 
 
-DATASET_PATH = "datasets/model_backed_eval.jsonl"
+DATASET_PATH = "evals/regression/model_backed_eval.jsonl"
 
 def test_model_backed_eval_dataset_stays_off_shortcut_path():
     extractor = TaskExtractor()

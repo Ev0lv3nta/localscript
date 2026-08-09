@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "datasets": [
+    {
+      "name": "public_v1",
+      "path": "evals/public/v1.jsonl",
+      "corpus": "public_benchmark",
+      "runner": "standard",
+      "gate": "required",
+      "claim_scope": "public_quality"
+    },
+    {
+      "name": "public_gold",
+      "path": "evals/regression/public_gold.jsonl",
+      "corpus": "regression",
+      "runner": "standard",
+      "gate": "required",
+      "claim_scope": "regression_only"
+    },
+    {
+      "name": "stress_eval",
+      "path": "evals/regression/stress_eval.jsonl",
+      "corpus": "regression",
+      "runner": "standard",
+      "gate": "diagnostic",
+      "claim_scope": "regression_only"
+    },
+    {
+      "name": "showcase_eval",
+      "path": "evals/regression/showcase_eval.jsonl",
+      "corpus": "regression",
+      "runner": "standard",
+      "gate": "diagnostic",
+      "claim_scope": "regression_only"
+    },
+    {
+      "name": "model_backed_eval",
+      "path": "evals/regression/model_backed_eval.jsonl",
+      "corpus": "regression",
+      "runner": "standard",
+      "gate": "required",
+      "claim_scope": "regression_only"
+    },
+    {
+      "name": "composition_eval",
+      "path": "evals/regression/composition_eval.jsonl",
+      "corpus": "regression",
+      "runner": "standard",
+      "gate": "required",
+      "claim_scope": "regression_only"
+    },
+    {
+      "name": "regression_eval",
+      "path": "evals/regression/regression_eval.jsonl",
+      "corpus": "regression",
+      "runner": "standard",
+      "gate": "required",
+      "claim_scope": "regression_only"
+    },
+    {
+      "name": "multilingual_eval",
+      "path": "evals/regression/multilingual_eval.jsonl",
+      "corpus": "regression",
+      "runner": "standard",
+      "gate": "required",
+      "claim_scope": "regression_only"
+    },
+    {
+      "name": "ambiguity_eval",
+      "path": "evals/regression/ambiguity_eval.jsonl",
+      "corpus": "regression",
+      "runner": "rich",
+      "gate": "required",
+      "claim_scope": "regression_only"
+    },
+    {
+      "name": "clarification_eval",
+      "path": "evals/regression/clarification_eval.jsonl",
+      "corpus": "regression",
+      "runner": "rich",
+      "gate": "required",
+      "claim_scope": "regression_only"
+    },
+    {
+      "name": "adversarial_eval",
+      "path": "evals/regression/adversarial_eval.jsonl",
+      "corpus": "regression",
+      "runner": "standard",
+      "gate": "required",
+      "claim_scope": "security_regression"
+    },
+    {
+      "name": "large_context_eval",
+      "path": "evals/regression/large_context_eval.jsonl",
+      "corpus": "regression",
+      "runner": "standard",
+      "gate": "required",
+      "claim_scope": "regression_only"
+    }
+  ],
+  "private_holdouts": [
+    {
+      "name": "holdout_v1",
+      "external": true,
+      "case_count": 8,
+      "sha256": "690ce204ea542ca1e91e9049f4d3a9ba6d404de497d39121f6d42a0f92c69419",
+      "gate": "release_only",
+      "claim_scope": "private_holdout"
+    }
+  ]
+}
