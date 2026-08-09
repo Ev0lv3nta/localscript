@@ -1,3 +1,4 @@
+from app.families import is_known_family
 from app.generation.taskspec import (
     ResolvedTaskSpec,
     TaskResolutionSource,
@@ -15,12 +16,15 @@ class TaskResolver:
             return candidate
         planner = planner if isinstance(planner, dict) else {}
         planner_family = self._non_empty_string(planner.get("family"))
+        registered_planner_family = (
+            planner_family if is_known_family(planner_family) else None
+        )
 
-        if candidate.family:
+        if candidate.family and is_known_family(candidate.family):
             family = candidate.family
             source = TaskResolutionSource.EXTRACTOR
-        elif planner_family:
-            family = planner_family
+        elif registered_planner_family:
+            family = registered_planner_family
             source = TaskResolutionSource.PLANNER
         else:
             family = "generic_lua"
