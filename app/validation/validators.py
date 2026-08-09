@@ -358,6 +358,14 @@ class SemanticScenarioValidator(BaseValidator):
             return report
 
         if not compare_expected_and_actual(expected, execution.value):
+            shape_code = self._return_shape_mismatch_code(expected, execution.value)
+            if shape_code is not None:
+                report.add(
+                    self.name,
+                    "error",
+                    shape_code,
+                    "Generated Lua returned a value with a different shape than the semantic oracle.",
+                )
             report.add(
                 self.name,
                 "error",
@@ -365,6 +373,16 @@ class SemanticScenarioValidator(BaseValidator):
                 "Generated Lua result does not match the semantic oracle.",
             )
         return report
+
+    @staticmethod
+    def _return_shape_mismatch_code(expected, actual):
+        if isinstance(expected, list) and not isinstance(actual, list):
+            return "semantic_return_shape_array_mismatch"
+        if isinstance(expected, dict) and not isinstance(actual, dict):
+            return "semantic_return_shape_object_mismatch"
+        if not isinstance(expected, (list, dict)) and isinstance(actual, (list, dict)):
+            return "semantic_return_shape_scalar_mismatch"
+        return None
 
 
 class GenericSemanticValidator(BaseValidator):
@@ -374,6 +392,14 @@ class GenericSemanticValidator(BaseValidator):
         report = ValidationReport()
         semantic_checks = context.planner_semantic_checks or []
         if context.source_context is None or not semantic_checks:
+            return report
+        definition = get_family_definition(context.task_spec.family)
+        if (
+            getattr(context.task_spec, "resolution_source", None)
+            is TaskResolutionSource.EXTRACTOR
+            and definition is not None
+            and definition.expected_result_builder is not None
+        ):
             return report
 
         execution = execute_output(

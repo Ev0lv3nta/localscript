@@ -68,3 +68,20 @@ def test_unknown_planner_family_fails_closed_to_generic():
     assert resolved.planner_family == "invented_family"
     assert is_known_family(resolved.family) is True
     assert is_known_family(resolved.planner_family) is False
+
+
+def test_regex_and_email_families_accept_method_match_syntax():
+    regex = get_family_definition("regex_extract")
+    email = get_family_definition("email_validation")
+
+    assert regex.validate_structure('return value:match("ID:(%d+)")', "lua_block", {}) == ()
+    assert email.validate_structure(
+        'return email:match("^[^@]+@[^@]+$") ~= nil',
+        "lua_block",
+        {},
+    ) == ()
+    assert email.validate_structure(
+        'return string.match(email, "^[^@]+@[^@]+$")',
+        "lua_block",
+        {},
+    )[0].code == "email_validation_boolean_missing"

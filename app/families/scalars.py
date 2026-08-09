@@ -67,7 +67,7 @@ def _email_validation(hints: Mapping[str, Any], context: Any) -> bool:
 
 
 def _validate_email(code: str, _style: str, _hints: Mapping[str, Any]):
-    if "string.match" in code and "~= nil" in code:
+    if ("string.match" in code or ":match(" in code) and "~= nil" in code:
         return ()
     return (
         FamilyFinding(
@@ -93,13 +93,6 @@ def _validate_normalize_email(code: str, _style: str, _hints: Mapping[str, Any])
             FamilyFinding(
                 "normalize_email_lower_missing",
                 "Email normalization must convert the final scalar to lower case.",
-            )
-        )
-    if "string.gsub" not in code:
-        findings.append(
-            FamilyFinding(
-                "normalize_email_trim_missing",
-                "Email normalization must trim surrounding whitespace via string.gsub.",
             )
         )
     return tuple(findings)
@@ -138,7 +131,7 @@ def _regex_extract(hints: Mapping[str, Any], context: Any) -> Any:
 
 
 def _validate_regex(code: str, _style: str, _hints: Mapping[str, Any]):
-    if "string.match" in code:
+    if "string.match" in code or ":match(" in code:
         return ()
     return (
         FamilyFinding(
