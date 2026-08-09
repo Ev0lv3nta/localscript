@@ -270,7 +270,7 @@ clarify_first, clarify_first_headers = post_json(
         "context": clarify_context,
     },
 )
-if clarify_first.get("status") != "clarification_needed":
+if clarify_first.get("status") != "clarification_required":
     raise SystemExit("clarification_status_failed::{0}".format(clarify_first))
 if "wf.vars or wf.initVariables" not in (clarify_first.get("question") or ""):
     raise SystemExit("clarification_question_failed::{0}".format(clarify_first))
