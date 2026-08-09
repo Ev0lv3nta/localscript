@@ -14,9 +14,12 @@ from app.domain.outcomes import (
 )
 from app.generation.extractor import TaskExtractor
 from app.generation.backend_errors import BackendError, BackendUnavailable
+from app.generation.clarification import ClarificationPolicy
 from app.generation.formatter import OutputFormatter
 from app.generation.model_chain import SameModelChain
 from app.generation.context_reducer import ContextReducer
+from app.generation.task_resolver import TaskResolver
+from app.generation.stages import GenerationExecution, GenerationStage
 from app.repair.loop import RepairLoop
 from app.validation.validators import ValidationPipeline
 
@@ -65,10 +68,13 @@ class GenerationEngine:
         self.formatter = formatter or OutputFormatter()
         self.validation_pipeline = ValidationPipeline()
         self.context_reducer = ContextReducer()
+        self.task_resolver = TaskResolver()
+        self.clarification_policy = ClarificationPolicy()
         self.model_chain = SameModelChain(
             backend=self.backend,
             validation_pipeline=self.validation_pipeline,
             formatter=self.formatter,
+            task_resolver=self.task_resolver,
         )
         self.repair_loop = RepairLoop(
             validation_pipeline=self.validation_pipeline,
@@ -133,14 +139,20 @@ class GenerationEngine:
             clarification_answer=clarification_answer,
             session_state=session_state,
         )
+        execution = GenerationExecution()
+        execution.transition(GenerationStage.SESSION_READY)
         if rich_mode and session_state.get("open_clarification_question") and not clarification_answer:
+            execution.transition(GenerationStage.CLARIFICATION_REQUIRED)
+            execution.transition(GenerationStage.OUTCOME_FINALIZED)
             return self._build_clarification_result(session_state)
 
         effective_prompt = session_state["original_task"]
         effective_context = session_state.get("context")
         task_spec = self.extractor.extract(prompt=effective_prompt, context=effective_context)
         if session_state.get("clarified_root"):
-            task_spec.target_root = session_state["clarified_root"]
+            task_spec = task_spec.model_copy(
+                update={"target_root": session_state["clarified_root"]}
+            )
         session_state["normalized_task"] = task_spec.normalized_prompt
         session_state["extracted_slots"] = task_spec.model_dump()
         backend_error = None
@@ -152,71 +164,42 @@ class GenerationEngine:
         repair_trace = []
         repair_rounds = 0
         semantic_checks = []
-        clarification_policy = self._rule_based_clarification(task_spec, session_state)
-        assumption_risk = self._assumption_risk(task_spec, clarification_policy)
+        clarification_decision = self.clarification_policy.evaluate(
+            task_spec,
+            session_state,
+        )
+        assumption_risk = self.clarification_policy.assumption_risk(
+            task_spec,
+            clarification_decision,
+        )
 
-        rule_based_question = clarification_policy.get("question", "")
+        rule_based_question = clarification_decision.question
         if rich_mode and rule_based_question:
+            task_spec = self.task_resolver.resolve(task_spec)
+            session_state["extracted_slots"] = task_spec.model_dump(mode="json")
+            execution.transition(GenerationStage.TASK_RESOLVED)
             assumptions = list(task_spec.assumptions) + [
                 "Rule-based ambiguity policy requested a clarification before generation.",
             ]
-            assumptions.extend(clarification_policy.get("assumptions", []))
-            session_state["status"] = "clarification_needed"
-            session_state["open_clarification_question"] = rule_based_question
-            session_state["assumptions"] = assumptions
-            trace_payload = {
-                "prompt": prompt,
-                "effective_prompt": effective_prompt,
-                "context": effective_context,
-                "feedback": feedback,
-                "clarification_answer": clarification_answer,
-                "status": "clarification_needed",
-                "strategy": "clarification",
-                "task_spec": task_spec.model_dump(),
-                "assumptions": assumptions,
-                "verification_errors": [],
-                "validation_report": {"has_errors": False, "has_warnings": False, "messages": []},
-                "repair_rounds": 0,
-                "repair_trace": [],
-                "planner": {},
-                "critic": {},
-                "rules_applied": [],
-                "examples_used": [],
-                "critic_rules_used": [],
-                "backend_error": None,
-                "model": self.profile.model,
-                "fallback_model": self.profile.fallback_model,
-                "code": "",
-                "question": rule_based_question,
-                "semantic_checks": [],
-                "session_id": session_id,
-                "degraded_mode": False,
-                "clarification_suggested": True,
-                "assumption_risk": assumption_risk,
-            }
-            trace_id = self.trace_store.write(trace_payload)
-            session_state["latest_trace_id"] = trace_id
-            session_state["trace_ids"].append(trace_id)
-            session_state["last_strategy"] = "clarification"
-            return GenerationResult(
-                code="",
-                trace_id=trace_id,
-                session_id=session_id,
-                strategy="clarification",
-                verification_errors=[],
-                validation_report={"has_errors": False, "has_warnings": False, "messages": []},
-                repair_rounds=0,
-                degraded_mode=False,
-                status="clarification_needed",
+            assumptions.extend(clarification_decision.assumptions)
+            return self._complete_clarification(
+                prompt=prompt,
+                effective_prompt=effective_prompt,
+                effective_context=effective_context,
+                feedback=feedback,
+                clarification_answer=clarification_answer,
+                task_spec=task_spec,
+                session_state=session_state,
+                execution=execution,
                 question=rule_based_question,
                 assumptions=assumptions,
-                session_summary=self.build_session_summary(session_state),
-                clarification_suggested=True,
                 assumption_risk=assumption_risk,
-                outcome=self._build_clarification_outcome(rule_based_question),
             )
 
         if task_spec.safety_fallback:
+            task_spec = self.task_resolver.resolve(task_spec)
+            session_state["extracted_slots"] = task_spec.model_dump(mode="json")
+            execution.transition(GenerationStage.TASK_RESOLVED)
             raw_code = SAFE_FALLBACK_CODE
             strategy = "safe_fallback"
             assumptions = list(task_spec.assumptions)
@@ -241,6 +224,12 @@ class GenerationEngine:
                     session_state=session_state,
                     stop_on_clarification=rich_mode,
                 )
+                task_spec = getattr(chain_result, "task_spec", None) or self.task_resolver.resolve(
+                    task_spec,
+                    planner=getattr(chain_result, "planner", None),
+                )
+                session_state["extracted_slots"] = task_spec.model_dump(mode="json")
+                execution.transition(GenerationStage.TASK_RESOLVED)
                 if chain_result.status == "clarification_needed":
                     assumptions = list(task_spec.assumptions) + [
                         "Planner detected an ambiguity and requested one clarification before code generation.",
@@ -248,60 +237,22 @@ class GenerationEngine:
                     assumptions.extend(chain_result.planner.get("assumptions", []))
                     planner_payload = chain_result.planner
                     semantic_checks = chain_result.semantic_checks
-                    session_state["status"] = "clarification_needed"
-                    session_state["planner_state"] = planner_payload
-                    session_state["open_clarification_question"] = chain_result.question
-                    session_state["assumptions"] = assumptions
-                    trace_payload = {
-                        "prompt": prompt,
-                        "effective_prompt": effective_prompt,
-                        "context": effective_context,
-                        "feedback": feedback,
-                        "clarification_answer": clarification_answer,
-                        "status": "clarification_needed",
-                        "strategy": "clarification",
-                        "task_spec": task_spec.model_dump(),
-                        "assumptions": assumptions,
-                        "verification_errors": [],
-                        "validation_report": {"has_errors": False, "has_warnings": False, "messages": []},
-                        "repair_rounds": 0,
-                        "repair_trace": chain_result.history,
-                        "planner": planner_payload,
-                        "critic": {},
-                        "rules_applied": chain_result.rules_applied,
-                        "examples_used": [],
-                        "critic_rules_used": [],
-                        "backend_error": None,
-                        "model": self.profile.model,
-                        "fallback_model": self.profile.fallback_model,
-                        "code": "",
-                        "question": chain_result.question,
-                        "semantic_checks": semantic_checks,
-                        "session_id": session_id,
-                        "degraded_mode": False,
-                        "clarification_suggested": True,
-                        "assumption_risk": assumption_risk,
-                    }
-                    trace_id = self.trace_store.write(trace_payload)
-                    session_state["latest_trace_id"] = trace_id
-                    session_state["trace_ids"].append(trace_id)
-                    session_state["last_strategy"] = "clarification"
-                    return GenerationResult(
-                        code="",
-                        trace_id=trace_id,
-                        session_id=session_id,
-                        strategy="clarification",
-                        verification_errors=[],
-                        validation_report={"has_errors": False, "has_warnings": False, "messages": []},
-                        repair_rounds=0,
-                        degraded_mode=False,
-                        status="clarification_needed",
+                    return self._complete_clarification(
+                        prompt=prompt,
+                        effective_prompt=effective_prompt,
+                        effective_context=effective_context,
+                        feedback=feedback,
+                        clarification_answer=clarification_answer,
+                        task_spec=task_spec,
+                        session_state=session_state,
+                        execution=execution,
                         question=chain_result.question,
                         assumptions=assumptions,
-                        session_summary=self.build_session_summary(session_state),
-                        clarification_suggested=True,
                         assumption_risk=assumption_risk,
-                        outcome=self._build_clarification_outcome(chain_result.question),
+                        planner_payload=planner_payload,
+                        repair_trace=chain_result.history,
+                        rules_applied=chain_result.rules_applied,
+                        semantic_checks=semantic_checks,
                     )
                 strategy = "feedback_revision" if feedback else "ollama_chain"
                 assumptions = list(task_spec.assumptions) + [
@@ -321,6 +272,7 @@ class GenerationEngine:
             except BackendError:
                 raise
 
+        execution.transition(GenerationStage.CANDIDATE_GENERATED)
         if validation_report.has_errors and strategy != "safe_fallback":
             remaining_rounds = max(int(self.profile.max_repair_rounds) - int(repair_rounds), 1)
             repair_result = self.repair_loop.run(
@@ -339,6 +291,7 @@ class GenerationEngine:
                 {"stage": "deterministic_repair", "history": repair_result.history}
             ]
             repair_rounds = repair_rounds + repair_result.rounds
+            execution.transition(GenerationStage.CANDIDATE_REPAIRED)
         verification_errors = []
         for error_code in validation_report.error_codes() + verify_code(code):
             if error_code not in verification_errors:
@@ -352,6 +305,7 @@ class GenerationEngine:
         session_state["assumptions"] = assumptions
         session_state["last_strategy"] = strategy
         session_state["open_clarification_question"] = ""
+        execution.transition(GenerationStage.OUTCOME_FINALIZED)
         trace_payload = {
             "prompt": prompt,
             "effective_prompt": effective_prompt,
@@ -380,6 +334,7 @@ class GenerationEngine:
             "degraded_mode": degraded_mode,
             "clarification_suggested": bool(rule_based_question),
             "assumption_risk": assumption_risk,
+            "stage_events": execution.snapshot(),
         }
         trace_id = self.trace_store.write(trace_payload)
         session_state["latest_trace_id"] = trace_id
@@ -404,6 +359,97 @@ class GenerationEngine:
             clarification_suggested=bool(rule_based_question),
             assumption_risk=assumption_risk,
             outcome=outcome,
+        )
+
+    def _complete_clarification(
+        self,
+        *,
+        prompt,
+        effective_prompt,
+        effective_context,
+        feedback,
+        clarification_answer,
+        task_spec,
+        session_state,
+        execution,
+        question,
+        assumptions,
+        assumption_risk,
+        planner_payload=None,
+        repair_trace=None,
+        rules_applied=None,
+        semantic_checks=None,
+    ):
+        planner_payload = planner_payload or {}
+        repair_trace = repair_trace or []
+        rules_applied = rules_applied or []
+        semantic_checks = semantic_checks or []
+        session_id = session_state["session_id"]
+        validation_report = {
+            "has_errors": False,
+            "has_warnings": False,
+            "messages": [],
+        }
+
+        execution.transition(GenerationStage.CLARIFICATION_REQUIRED)
+        session_state["status"] = "clarification_needed"
+        session_state["planner_state"] = planner_payload
+        session_state["open_clarification_question"] = question
+        session_state["assumptions"] = assumptions
+        execution.transition(GenerationStage.OUTCOME_FINALIZED)
+
+        trace_id = self.trace_store.write(
+            {
+                "prompt": prompt,
+                "effective_prompt": effective_prompt,
+                "context": effective_context,
+                "feedback": feedback,
+                "clarification_answer": clarification_answer,
+                "status": "clarification_needed",
+                "strategy": "clarification",
+                "task_spec": task_spec.model_dump(mode="json"),
+                "assumptions": assumptions,
+                "verification_errors": [],
+                "validation_report": validation_report,
+                "repair_rounds": 0,
+                "repair_trace": repair_trace,
+                "planner": planner_payload,
+                "critic": {},
+                "rules_applied": rules_applied,
+                "examples_used": [],
+                "critic_rules_used": [],
+                "backend_error": None,
+                "model": self.profile.model,
+                "fallback_model": self.profile.fallback_model,
+                "code": "",
+                "question": question,
+                "semantic_checks": semantic_checks,
+                "session_id": session_id,
+                "degraded_mode": False,
+                "clarification_suggested": True,
+                "assumption_risk": assumption_risk,
+                "stage_events": execution.snapshot(),
+            }
+        )
+        session_state["latest_trace_id"] = trace_id
+        session_state["trace_ids"].append(trace_id)
+        session_state["last_strategy"] = "clarification"
+        return GenerationResult(
+            code="",
+            trace_id=trace_id,
+            session_id=session_id,
+            strategy="clarification",
+            verification_errors=[],
+            validation_report=validation_report,
+            repair_rounds=0,
+            degraded_mode=False,
+            status="clarification_needed",
+            question=question,
+            assumptions=assumptions,
+            session_summary=self.build_session_summary(session_state),
+            clarification_suggested=True,
+            assumption_risk=assumption_risk,
+            outcome=self._build_clarification_outcome(question),
         )
 
     def _prepare_session_state(
@@ -487,7 +533,10 @@ class GenerationEngine:
     def analyze(self, prompt, context=None):
         task_spec = self.extractor.extract(prompt=prompt, context=context)
         reduced_context = self.context_reducer.reduce(context, task_spec)
-        clarification_question = self._rule_based_clarification(task_spec, {}).get("question") or None
+        clarification_question = self.clarification_policy.evaluate(
+            task_spec,
+            {},
+        ).question or None
         return {
             "normalized_prompt": task_spec.normalized_prompt,
             "suggested_strategy": (
@@ -588,57 +637,3 @@ class GenerationEngine:
             "feedback_history": session_state.get("feedback_history", []),
             "assumptions": session_state.get("assumptions", []),
         }
-
-    @staticmethod
-    def _rule_based_clarification(task_spec, session_state):
-        if session_state.get("clarified_root"):
-            return {"question": "", "assumptions": [], "kind": None}
-        if session_state.get("clarification_history"):
-            return {"question": "", "assumptions": [], "kind": None}
-        prompt = task_spec.normalized_prompt
-        if task_spec.target_root == "unknown_mixed":
-            if "email" in prompt:
-                return {
-                    "question": "Use wf.vars or wf.initVariables for email root?",
-                    "assumptions": ["Root ambiguity detected between wf.vars and wf.initVariables."],
-                    "kind": "root_ambiguity",
-                }
-            return {
-                "question": "Use wf.vars or wf.initVariables for this task?",
-                "assumptions": ["Root ambiguity detected between wf.vars and wf.initVariables."],
-                "kind": "root_ambiguity",
-            }
-
-        if "json envelope" in prompt or "json_envelope" in prompt:
-            if "ключ" in prompt or "key" in prompt:
-                return {
-                    "question": "Which JSON envelope key should contain the generated result?",
-                    "assumptions": ["Output-key ambiguity detected for JSON envelope output."],
-                    "kind": "output_key_ambiguity",
-                }
-
-        if ("очист" in prompt or "mutate" in prompt or "обнов" in prompt) and ("верни" in prompt or "return" in prompt):
-            return {
-                "question": "Should the code mutate the source data in place or return a new cleaned value?",
-                "assumptions": ["Mutate-vs-return ambiguity detected."],
-                "kind": "mutate_return_ambiguity",
-            }
-
-        if task_spec.ambiguity_score >= 0.65 and task_spec.composition_score <= 0.4:
-            return {
-                "question": "Should the result be a single value, an object, or an array?",
-                "assumptions": ["Return-shape ambiguity detected."],
-                "kind": "return_shape_ambiguity",
-            }
-
-        return {"question": "", "assumptions": [], "kind": None}
-
-    @staticmethod
-    def _assumption_risk(task_spec, clarification_policy):
-        if clarification_policy.get("question"):
-            return "high"
-        if task_spec.ambiguity_score >= 0.5 or len(task_spec.ambiguity_notes) >= 2:
-            return "high"
-        if task_spec.ambiguity_score >= 0.25 or task_spec.ambiguity_notes:
-            return "medium"
-        return "low"
