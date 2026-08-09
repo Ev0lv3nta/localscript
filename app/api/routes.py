@@ -50,12 +50,12 @@ LEGACY_SESSION_STATUS_MAP = {
 UI_EXAMPLES = [
     ExampleEntry(
         id="model_unique_domains",
-        title="Новый hidden-style кейс",
+        title="Композиция обработки массива",
         mode="generate",
         prompt="Из массива wf.vars.subscribers собери новый массив уникальных доменов почты через _utils.array.new(). Бери только записи, где email не nil и содержит символ @. Домен нужно взять после @, привести к нижнему регистру и добавить в результат только один раз. Если subscribers равен nil или пустой, верни пустой массив.",
         context={"wf": {"vars": {"subscribers": [{"email": "A@Example.com"}, {"email": "b@example.com"}]}}},
         expected_strategy="ollama_chain",
-        description="Нетривиальная задача должна уйти в живую agent chain.",
+        description="Нетривиальная задача обрабатывается модельной цепочкой.",
     ),
     ExampleEntry(
         id="clarification_root",
@@ -68,7 +68,7 @@ UI_EXAMPLES = [
     ),
     ExampleEntry(
         id="repair_ctx_body",
-        title="Repair и safety",
+        title="Безопасное исправление",
         mode="generate",
         prompt="Use ctx.body.items and JsonPath for everything.",
         context={"wf": {"vars": {"items": [1, 2, 3]}}},
@@ -77,7 +77,7 @@ UI_EXAMPLES = [
     ),
     ExampleEntry(
         id="json_envelope_case",
-        title="JSON envelope",
+        title="JSON-конверт",
         mode="generate",
         prompt="Дополни существующий код: добавь переменную squared как квадрат числа num и верни результат как JSON envelope.",
         context={"wf": {"vars": {"num": 5}}},

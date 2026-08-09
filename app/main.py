@@ -32,8 +32,8 @@ def create_app(profile=None, trace_store=None, backend=None, session_store=None)
 
     app = FastAPI(
         title="LocalScript API",
-        version="0.1.0",
-        description="Judged-safe local generator for LocalScript/Lua.",
+        version="0.2.0",
+        description="Локальная генерация и fail-closed проверка LocalScript/Lua через Ollama.",
         lifespan=lifespan,
     )
     ui_static_dir = os.path.join(os.path.dirname(__file__), "ui", "static")

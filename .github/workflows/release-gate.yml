@@ -21,10 +21,11 @@ jobs:
     name: live GPU
     runs-on: [self-hosted, linux, x64, gpu, localscript-release-gate]
     environment: release-gate
-    timeout-minutes: 120
+    timeout-minutes: 360
     env:
       LOCALSCRIPT_REQUIRE_LIVE: "1"
       LOCALSCRIPT_STATE_DIR: ${{ github.workspace }}/artifacts/state
+      LOCALSCRIPT_PRIVATE_HOLDOUT_PATH: ${{ secrets.LOCALSCRIPT_PRIVATE_HOLDOUT_PATH }}
       UV_FROZEN: "1"
       UV_NO_PROGRESS: "1"
     steps:
