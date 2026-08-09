@@ -84,18 +84,27 @@ def _deduplicate(items):
     return list(dict.fromkeys(item for item in items if item))
 
 
-def _stage_durations(trace_payload):
-    durations = {}
+def _milestone_intervals(trace_payload):
+    intervals = {}
     for event in (trace_payload or {}).get("stage_events", []):
         stage = event.get("stage") if isinstance(event, dict) else None
-        duration = event.get("stage_duration_ms") if isinstance(event, dict) else None
-        if stage and isinstance(duration, (int, float)):
-            durations[stage] = round(float(duration), 3)
-    return durations
+        interval = (
+            event.get("interval_since_previous_ms")
+            if isinstance(event, dict)
+            else None
+        )
+        if stage and isinstance(interval, (int, float)):
+            intervals[stage] = round(float(interval), 3)
+    return intervals
 
 
 def _case_observation(case, result, errors, duration_ms, backend_calls, trace_payload):
     passed = not errors
+    model_call_durations = [
+        round(float(call["duration_ms"]), 3)
+        for call in backend_calls
+        if isinstance(call.get("duration_ms"), (int, float))
+    ]
     return {
         "id": case["id"],
         "family": case.get("family"),
@@ -106,8 +115,10 @@ def _case_observation(case, result, errors, duration_ms, backend_calls, trace_pa
         "repair_rounds": result.repair_rounds,
         "degraded_mode": result.degraded_mode,
         "duration_ms": round(duration_ms, 3),
-        "backend_calls": backend_calls,
-        "stage_durations_ms": _stage_durations(trace_payload),
+        "backend_calls": len(backend_calls),
+        "model_call_durations_ms": model_call_durations,
+        "model_duration_ms": round(sum(model_call_durations), 3),
+        "milestone_intervals_ms": _milestone_intervals(trace_payload),
         "errors": _deduplicate(errors),
     }
 
@@ -133,10 +144,12 @@ def _aggregate_metrics(case_results):
     )
     durations = [item["duration_ms"] for item in case_results]
     warm_durations = durations[1:]
-    stage_values = {}
+    milestone_values = {}
+    model_call_durations = []
     for item in case_results:
-        for stage, duration in item["stage_durations_ms"].items():
-            stage_values.setdefault(stage, []).append(duration)
+        model_call_durations.extend(item["model_call_durations_ms"])
+        for stage, duration in item["milestone_intervals_ms"].items():
+            milestone_values.setdefault(stage, []).append(duration)
     rate = lambda numerator: round(float(numerator) / float(total), 4) if total else 0.0
     return {
         "syntax_pass_rate": rate(total - syntax_failures),
@@ -162,6 +175,14 @@ def _aggregate_metrics(case_results):
             if total
             else 0.0
         ),
+        "model_call_latency_ms": {
+            "p50": _percentile(model_call_durations, 0.50),
+            "p95": _percentile(model_call_durations, 0.95),
+        },
+        "model_duration_ms_total": round(
+            sum(item["model_duration_ms"] for item in case_results),
+            3,
+        ),
         "outcome_counts": dict(Counter(item["status"] for item in case_results)),
         "strategy_counts": dict(Counter(item["strategy"] for item in case_results)),
         "latency_ms": {
@@ -171,12 +192,12 @@ def _aggregate_metrics(case_results):
             "overall_p50": _percentile(durations, 0.50),
             "overall_p95": _percentile(durations, 0.95),
         },
-        "stage_latency_ms": {
+        "milestone_interval_latency_ms": {
             stage: {
                 "p50": _percentile(values, 0.50),
                 "p95": _percentile(values, 0.95),
             }
-            for stage, values in sorted(stage_values.items())
+            for stage, values in sorted(milestone_values.items())
         },
     }
 
@@ -297,7 +318,7 @@ def run_dataset_benchmark(dataset_path, profile=None, backend=None):
                     result=result,
                     errors=errors,
                     duration_ms=duration_ms,
-                    backend_calls=len(instrumented_backend.calls) - call_count_before,
+                    backend_calls=instrumented_backend.calls[call_count_before:],
                     trace_payload=trace_store.read(result.trace_id),
                 )
             )
@@ -366,7 +387,7 @@ def run_rich_dataset_benchmark(dataset_path, profile=None, backend=None):
                 result=final_result,
                 errors=errors,
                 duration_ms=(perf_counter() - started) * 1000.0,
-                backend_calls=len(instrumented_backend.calls) - call_count_before,
+                backend_calls=instrumented_backend.calls[call_count_before:],
                 trace_payload=trace_store.read(final_result.trace_id),
             )
             observation["initial_status"] = result.status

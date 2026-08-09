@@ -61,7 +61,10 @@ class GenerationExecution:
             {
                 "stage": next_stage.value,
                 "elapsed_ms": elapsed_ms,
-                "stage_duration_ms": round(elapsed_ms - previous_elapsed_ms, 3),
+                "interval_since_previous_ms": round(
+                    elapsed_ms - previous_elapsed_ms,
+                    3,
+                ),
             }
         )
 

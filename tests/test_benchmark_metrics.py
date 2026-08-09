@@ -18,9 +18,10 @@ def test_dataset_benchmark_emits_case_and_aggregate_metrics():
     assert report["metrics"]["verified_completion_rate"] == 1.0
     assert report["metrics"]["invalid_success_rate"] == 0.0
     assert report["metrics"]["backend_calls_total"] > 0
+    assert report["metrics"]["model_call_latency_ms"]["p50"] >= 0
     assert report["metrics"]["latency_ms"]["overall_p95"] >= 0
     assert all(
-        item["stage_durations_ms"]
+        item["milestone_intervals_ms"]
         for item in report["case_results"]
     )
 
@@ -35,7 +36,9 @@ def test_aggregate_metrics_exposes_invalid_success_and_repair_rescue():
             "degraded_mode": False,
             "duration_ms": 100.0,
             "backend_calls": 3,
-            "stage_durations_ms": {"candidate_generated": 80.0},
+            "model_call_durations_ms": [20.0, 30.0, 40.0],
+            "model_duration_ms": 90.0,
+            "milestone_intervals_ms": {"candidate_generated": 80.0},
             "errors": [],
         },
         {
@@ -46,7 +49,9 @@ def test_aggregate_metrics_exposes_invalid_success_and_repair_rescue():
             "degraded_mode": False,
             "duration_ms": 200.0,
             "backend_calls": 2,
-            "stage_durations_ms": {"candidate_generated": 170.0},
+            "model_call_durations_ms": [70.0, 80.0],
+            "model_duration_ms": 150.0,
+            "milestone_intervals_ms": {"candidate_generated": 170.0},
             "errors": ["semantic_mismatch"],
         },
     ]
@@ -58,6 +63,8 @@ def test_aggregate_metrics_exposes_invalid_success_and_repair_rescue():
     assert metrics["invalid_success_rate"] == 0.5
     assert metrics["invalid_success_count"] == 1
     assert metrics["repair_rescue_rate"] == 1.0
+    assert metrics["model_call_latency_ms"]["p50"] == 40.0
+    assert metrics["model_duration_ms_total"] == 240.0
     assert metrics["latency_ms"]["cold_first"] == 100.0
     assert metrics["latency_ms"]["warm_p95"] == 200.0
 
