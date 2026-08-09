@@ -44,6 +44,7 @@ DEFAULT_TIMEOUTS = {
     "latency": 30 * 60,
     "private_holdout": 30 * 60,
     "repeat_stability": 60 * 60,
+    "ablation": 90 * 60,
 }
 
 
@@ -405,6 +406,20 @@ def main(argv=None):
     )
     repeat_stability_report = json_payload(repeat_stability)
 
+    ablation = run_command(
+        "ablation",
+        [
+            str(python_bin),
+            str(ROOT / "scripts" / "bench_ablation.py"),
+            "--dataset",
+            "evals/public/v1.jsonl",
+            "--require-full-pass",
+        ],
+        ROOT,
+        extra_env={"LOCALSCRIPT_PRIMARY_MODEL": selected_model},
+    )
+    ablation_report = json_payload(ablation)
+
     smoke = run_command(
         "smoke",
         [str(ROOT / "scripts" / "judge_smoke.sh")],
@@ -444,6 +459,18 @@ def main(argv=None):
         or repeat_stability_report.get("ok") is not True
     ):
         failures.append("repeat_stability_failed")
+    full_ablation_metrics = (
+        ablation_report.get("profiles", {})
+        .get("full_pipeline", {})
+        .get("metrics", {})
+    )
+    if (
+        ablation["returncode"] != 0
+        or full_ablation_metrics.get("verified_cases")
+        != ablation_report.get("case_count")
+        or full_ablation_metrics.get("invalid_success_count") != 0
+    ):
+        failures.append("ablation_failed")
     if not doctor_lock or doctor_lock.get("locked") is not True:
         failures.append("doctor_runtime_snapshot_invalid")
 
@@ -540,6 +567,7 @@ def main(argv=None):
             "latency": latency,
             "private_holdout": private_holdout,
             "repeat_stability": repeat_stability,
+            "ablation": ablation,
         },
         "quality_report": quality_report,
         "doctor_report": doctor_report,
@@ -547,6 +575,7 @@ def main(argv=None):
         "latency_report": latency_report,
         "private_holdout_report": private_holdout_report,
         "repeat_stability_report": repeat_stability_report,
+        "ablation_report": ablation_report,
         "vram_report": vram_report,
     }
 

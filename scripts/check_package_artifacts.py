@@ -48,6 +48,7 @@ SDIST_REQUIRED_SUFFIXES = WHEEL_REQUIRED | {
     "pyproject.toml",
     "uv.lock",
     "scripts/bootstrap_lua54.sh",
+    "scripts/bench_ablation.py",
     "scripts/bench_repeated.py",
     "scripts/release_gate.py",
     "tests/conftest.py",
