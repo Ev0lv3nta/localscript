@@ -1,6 +1,7 @@
 import json
 from dataclasses import dataclass, field
 
+from app.families import get_family_definition
 from app.core.kb import build_rule_lines, select_critic_rules, select_examples
 from app.generation.context_reducer import ContextReducer
 from app.generation.task_resolver import TaskResolver
@@ -301,24 +302,8 @@ class SameModelChain:
 
     @staticmethod
     def _preferred_return_shape(family):
-        fixed_shapes = {
-            "last_array_item": "scalar",
-            "counter_increment": "scalar",
-            "datum_time_to_iso8601": "scalar",
-            "email_validation": "scalar",
-            "normalize_email_string": "scalar",
-            "regex_extract": "scalar",
-            "rest_cleanup": "array",
-            "ensure_items_array": "array",
-            "filter_discount_markdown": "array",
-            "conditional_array_projection": "array",
-            "table_transform": "array",
-            "field_mapping": "object",
-            "augment_existing_code": "json_envelope",
-            "iso8601_to_epoch": "scalar",
-            "safety_guard": "scalar",
-        }
-        return fixed_shapes.get(family)
+        definition = get_family_definition(family)
+        return definition.preferred_return_shape if definition else None
 
     @classmethod
     def _default_return_shape(cls, task_spec, prompt, family=None):

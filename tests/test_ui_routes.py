@@ -47,7 +47,8 @@ class ClarificationBackend:
         return self.complete(prompt)
 
 
-def _make_client(tmp_path):
+def _make_client(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALSCRIPT_UI_ENABLED", "1")
     app = create_app(
         profile=get_runtime_profile(),
         trace_store=TraceStore(root=tmp_path / "traces"),
@@ -56,8 +57,8 @@ def _make_client(tmp_path):
     return TestClient(app)
 
 
-def test_ui_routes_serve_operator_console_html(tmp_path):
-    client = _make_client(tmp_path)
+def test_ui_routes_serve_operator_console_html(tmp_path, monkeypatch):
+    client = _make_client(tmp_path, monkeypatch)
 
     root = client.get("/")
     alias = client.get("/ui")
@@ -68,8 +69,8 @@ def test_ui_routes_serve_operator_console_html(tmp_path):
     assert "/static/app.js" in root.text
 
 
-def test_ui_support_endpoints_expose_profile_and_examples(tmp_path):
-    client = _make_client(tmp_path)
+def test_ui_support_endpoints_expose_profile_and_examples(tmp_path, monkeypatch):
+    client = _make_client(tmp_path, monkeypatch)
 
     profile = client.get("/api/profile")
     examples = client.get("/api/examples")
@@ -82,8 +83,8 @@ def test_ui_support_endpoints_expose_profile_and_examples(tmp_path):
     assert all("template" not in (item["title"].lower() + (item.get("description") or "").lower()) for item in examples.json()["examples"])
 
 
-def test_ui_flow_smoke_covers_analyze_clarify_trace_and_validate(tmp_path):
-    client = _make_client(tmp_path)
+def test_ui_flow_smoke_covers_analyze_clarify_trace_and_validate(tmp_path, monkeypatch):
+    client = _make_client(tmp_path, monkeypatch)
     context = {
         "wf": {
             "vars": {"email": "A@EXAMPLE.COM"},
