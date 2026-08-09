@@ -72,6 +72,6 @@ def test_engine_uses_same_model_chain_and_redacts_private_trace_artifacts(tmp_pa
         "outcome_finalized",
     ]
     assert all(
-        event["stage_duration_ms"] >= 0
+        event["interval_since_previous_ms"] >= 0
         for event in trace_payload["stage_events"]
     )

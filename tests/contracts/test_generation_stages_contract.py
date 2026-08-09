@@ -22,7 +22,7 @@ def test_success_path_has_explicit_ordered_stages():
         "outcome_finalized",
     ]
     assert all(event["elapsed_ms"] >= 0 for event in events)
-    assert all(event["stage_duration_ms"] >= 0 for event in events)
+    assert all(event["interval_since_previous_ms"] >= 0 for event in events)
     assert [event["elapsed_ms"] for event in events] == sorted(
         event["elapsed_ms"] for event in events
     )

@@ -13,8 +13,9 @@
 ## Решение
 
 Каждый benchmark формирует evidence schema v2. В неё входят SHA-256 набора,
-результат каждого кейса, статус и стратегия, число обращений к модели, repair
-rounds, длительности стадий и агрегаты syntax/semantic/verified completion.
+результат каждого кейса, статус и стратегия, число и реальная длительность
+обращений к модели, интервалы между pipeline milestones, repair rounds и
+агрегаты syntax/semantic/verified completion.
 Отдельно считаются invalid success и доля repair rescue. Latency разделена на
 первый холодный запуск и p50/p95 прогретых запусков.
 
