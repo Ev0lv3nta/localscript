@@ -13,7 +13,24 @@ from app.validation.runtime import find_lua_binary, find_luac_binary
 from app.validation.runtime_executor import DANGEROUS_LUA_PATTERNS, execute_output
 
 
-SHADOW_PROTECTED_GLOBALS = ("table", "string", "math", "utf8", "_utils", "wf")
+SHADOW_PROTECTED_GLOBALS = (
+    "table",
+    "string",
+    "math",
+    "utf8",
+    "package",
+    "_utils",
+    "wf",
+)
+
+
+def _declares_local_identifier(code, identifier):
+    escaped = re.escape(identifier)
+    declarations = (
+        r"\blocal\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*,\s*)*{0}\b".format(escaped),
+        r"\bfor\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*,\s*)*{0}\s*(?:,|\bin\b)".format(escaped),
+    )
+    return any(re.search(pattern, code or "") for pattern in declarations)
 
 
 def _strip_lua_wrapper(code):
@@ -203,7 +220,7 @@ class ShadowedStdlibValidator(BaseValidator):
     def validate(self, code, context):
         report = ValidationReport()
         for identifier in SHADOW_PROTECTED_GLOBALS:
-            if re.search(r"\blocal\s+{0}\b".format(re.escape(identifier)), code or ""):
+            if _declares_local_identifier(code, identifier):
                 report.add(
                     self.name,
                     "error",
