@@ -350,7 +350,7 @@ def main(argv=None):
         "runtime_snapshot_path": str(runtime_lock_path),
         "selected_model": selected_model,
         "parameters": {
-            "profile": profile.dict(),
+            "profile": profile.model_dump(),
             "timeouts_seconds": {
                 name: timeout_for(name) for name in DEFAULT_TIMEOUTS
             },

@@ -1,9 +1,16 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import get_runtime_profile
 from app.core.traces import TraceStore
+from app.generation.backend_errors import (
+    BackendModel,
+    BackendProtocol,
+    BackendTimeout,
+    BackendUnavailable,
+)
 from app.main import create_app
 from tests.support_backends import DeterministicTestBackend, FailIfCalledBackend
 
@@ -165,8 +172,11 @@ def test_generate_endpoint_repairs_unsupported_root_backend_output(tmp_path):
 
 
 class FailingBackend:
+    def __init__(self, error=None):
+        self.error = error or BackendUnavailable(reason="backend_down")
+
     def generate(self, prompt, context=None):
-        raise RuntimeError("backend_down")
+        raise self.error
 
 
 def test_generate_endpoint_returns_503_for_backend_failure(tmp_path):
@@ -185,3 +195,57 @@ def test_generate_endpoint_returns_503_for_backend_failure(tmp_path):
 
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "backend_unavailable"
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_code"),
+    [
+        (BackendTimeout(reason="private-timeout-detail"), 504, "backend_timeout"),
+        (BackendProtocol(reason="private-protocol-detail"), 502, "backend_protocol_error"),
+        (BackendModel(reason="private-model-detail"), 502, "backend_model_error"),
+    ],
+)
+def test_generate_endpoint_maps_typed_backend_failures(
+    tmp_path,
+    error,
+    expected_status,
+    expected_code,
+):
+    app = create_app(
+        profile=get_runtime_profile(),
+        trace_store=TraceStore(root=tmp_path / "traces"),
+        backend=FailingBackend(error),
+    )
+
+    response = TestClient(app).post(
+        "/generate",
+        json={"prompt": "Return first item", "context": {"wf": {"vars": {"items": [1]}}}},
+    )
+
+    assert response.status_code == expected_status
+    assert response.json()["detail"] == {
+        "code": expected_code,
+        "message": error.public_message,
+    }
+    assert error.reason not in response.text
+
+
+def test_app_lifespan_closes_backend(tmp_path):
+    class ClosableBackend(ReadyBackend):
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    backend = ClosableBackend()
+    app = create_app(
+        profile=get_runtime_profile(),
+        trace_store=TraceStore(root=tmp_path / "traces"),
+        backend=backend,
+    )
+
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+        assert backend.closed is False
+
+    assert backend.closed is True
