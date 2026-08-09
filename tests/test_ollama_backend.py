@@ -361,9 +361,9 @@ def test_competition_backend_rejects_public_and_private_hosts_without_opt_in(
     monkeypatch,
 ):
     for host in ("http://8.8.8.8:11434", "http://10.0.0.2:11434", "http://ollama:11434"):
-        monkeypatch.setenv("LOCALSCRIPT_OLLAMA_HOST", host)
+        profile = make_profile(ollama_host=host)
         with pytest.raises(BackendUnavailable) as exc_info:
-            OllamaBackend(make_profile())
+            OllamaBackend(profile)
         assert str(exc_info.value) == "ollama_host_not_local"
 
 
@@ -373,8 +373,7 @@ def test_remote_opt_in_allows_private_host_and_explicit_container_alias(monkeypa
     monkeypatch.setenv("LOCALSCRIPT_ALLOW_REMOTE_OLLAMA", "1")
 
     for host in ("http://10.0.0.2:11434", "http://ollama:11434"):
-        monkeypatch.setenv("LOCALSCRIPT_OLLAMA_HOST", host)
-        backend = OllamaBackend(make_profile())
+        backend = OllamaBackend(make_profile(ollama_host=host))
         backend.close()
 
 
@@ -407,12 +406,12 @@ def test_loopback_backend_ignores_broken_proxy_environment(monkeypatch):
     thread.start()
     monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
-    monkeypatch.setenv(
-        "LOCALSCRIPT_OLLAMA_HOST", "http://127.0.0.1:{0}".format(server.server_port)
+    profile = make_profile(
+        ollama_host="http://127.0.0.1:{0}".format(server.server_port)
     )
 
     try:
-        with OllamaBackend(make_profile()) as backend:
+        with OllamaBackend(profile) as backend:
             assert backend.complete("prompt") == "return 1"
     finally:
         server.shutdown()

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.core.state import resolve_state_path
 from app.core.storage import (
+    REDACTED,
     TRACE_PRIVATE_KEYS,
     atomic_write_json,
     delete_file,
@@ -86,6 +87,8 @@ class TraceStore:
                 date_dir, "{0}.json".format(trace_id), "invalid_trace_id"
             )
             payload = redact_nested(deepcopy(trace), TRACE_PRIVATE_KEYS)
+            if "code" in payload:
+                payload["code"] = REDACTED
             payload["trace_id"] = trace_id
             payload["session_id"] = session_id
             payload["created_at"] = created_at

@@ -56,7 +56,7 @@ def test_remote_mode_protects_non_health_routes(monkeypatch, tmp_path):
 
 def test_request_body_limit_rejects_content_length_before_route(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALSCRIPT_MAX_REQUEST_BODY_BYTES", "32")
-    profile = get_runtime_profile().copy(update={"max_request_body_bytes": 32})
+    profile = get_runtime_profile().model_copy(update={"max_request_body_bytes": 32})
     app = create_app(profile=profile, backend=DeterministicTestBackend())
     client = TestClient(app)
 

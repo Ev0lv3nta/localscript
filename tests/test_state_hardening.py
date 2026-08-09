@@ -134,7 +134,8 @@ def test_trace_redaction_public_projection_and_uuid4_ids(tmp_path):
     persisted = traces.read(trace_id)
     assert persisted["prompt"] == REDACTED
     assert persisted["context"] == REDACTED
-    assert persisted["planner"]["authorization"] == REDACTED
+    assert persisted["planner"] == REDACTED
+    assert persisted["code"] == REDACTED
     public = traces.sanitize_trace(persisted)
     assert public["code"] == ""
     assert public["planner"] == {}

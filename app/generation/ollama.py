@@ -26,7 +26,7 @@ from app.generation.model_resolver import (
 class OllamaBackend:
     def __init__(self, profile):
         self.profile = profile
-        self.host = os.getenv("LOCALSCRIPT_OLLAMA_HOST", profile.ollama_host).rstrip("/")
+        self.host = profile.ollama_host.rstrip("/")
         self.base_url = self.host
         self._validate_host_policy()
         self._parallel = _safe_parallel(profile.parallel)

@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -20,10 +21,20 @@ def create_app(profile=None, trace_store=None, backend=None, session_store=None)
     sessions = session_store or SessionStore(root=store.root.parent / "sessions")
     model_backend = backend or OllamaBackend(runtime_profile)
 
+    @asynccontextmanager
+    async def lifespan(_app):
+        try:
+            yield
+        finally:
+            close = getattr(model_backend, "close", None)
+            if callable(close):
+                close()
+
     app = FastAPI(
         title="LocalScript API",
         version="0.1.0",
         description="Judged-safe local generator for LocalScript/Lua.",
+        lifespan=lifespan,
     )
     ui_static_dir = os.path.join(os.path.dirname(__file__), "ui", "static")
     ui_enabled = os.getenv("LOCALSCRIPT_UI_ENABLED", "0") != "0" and os.path.exists(ui_static_dir)

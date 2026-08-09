@@ -32,10 +32,19 @@ SECRET_KEYS = frozenset(
 )
 TRACE_PRIVATE_KEYS = SECRET_KEYS | frozenset(
     {
+        "candidate",
+        "clarification_answer",
         "context",
+        "critic",
         "effective_prompt",
         "feedback",
+        "history",
+        "planner",
         "prompt",
+        "raw",
+        "repair_trace",
+        "response",
+        "writer",
     }
 )
 

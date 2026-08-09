@@ -13,9 +13,12 @@ def _resolve_state_location(path):
     candidate = Path(path).expanduser()
     absolute = candidate if candidate.is_absolute() else Path.cwd() / candidate
     current = Path(absolute.anchor)
-    for part in absolute.parts[1:]:
+    for index, part in enumerate(absolute.parts[1:]):
         current = current / part
-        if current.is_symlink():
+        # macOS exposes system locations such as /var and /tmp through a
+        # top-level compatibility symlink. Canonicalize that trusted prefix,
+        # but still reject links inside the caller-selected state path.
+        if index > 0 and current.is_symlink():
             raise UnsafeStatePathError(current)
     return absolute.resolve()
 
