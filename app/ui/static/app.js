@@ -6,7 +6,25 @@ const state = {
   latestValidation: {},
   latestTrace: {},
   timeline: [],
+  busy: false,
 };
+
+const statusLabels = {
+  completed: "Готово и проверено",
+  clarification_required: "Нужно уточнение",
+  validation_failed: "Проверка не пройдена",
+  backend_unavailable: "Модель недоступна",
+  policy_rejected: "Запрос отклонён",
+  failed: "Ошибка",
+};
+
+const strategyLabels = {
+  ollama_chain: "модель и валидаторы",
+  canonical: "каноническое правило",
+  clarification: "уточнение",
+};
+
+const riskLabels = { low: "низкий", medium: "средний", high: "высокий" };
 
 const elements = {
   exampleSelect: document.getElementById("exampleSelect"),
@@ -86,8 +104,32 @@ function setBadge(element, text, kind = "neutral") {
 }
 
 function refreshMetaBadges() {
-  elements.sessionBadge.textContent = state.sessionId || "none";
-  elements.traceBadge.textContent = state.traceId || "none";
+  elements.sessionBadge.textContent = state.sessionId || "—";
+  elements.traceBadge.textContent = state.traceId || "—";
+}
+
+function setBusy(busy) {
+  state.busy = busy;
+  for (const id of ["generateBtn", "continueBtn", "feedbackBtn", "validateBtn"]) {
+    document.getElementById(id).disabled = busy;
+  }
+  document.querySelector("#generateBtn span").textContent = busy
+    ? "Обработка…"
+    : "Сгенерировать и проверить";
+}
+
+async function runAction(action) {
+  if (state.busy) {
+    return;
+  }
+  setBusy(true);
+  try {
+    await action();
+  } catch (error) {
+    showError(error);
+  } finally {
+    setBusy(false);
+  }
 }
 
 function renderDiagnostics() {
@@ -175,16 +217,23 @@ function renderResult(body, responseHeaders) {
 
   const statusKind =
     body.status === "completed" ? "ok" : body.status === "clarification_required" ? "warn" : "error";
-  setBadge(elements.statusBadge, `status: ${body.status}`, statusKind);
-  setBadge(elements.strategyBadge, `strategy: ${body.strategy}`, body.strategy === "ollama_chain" ? "ok" : "warn");
+  setBadge(elements.statusBadge, statusLabels[body.status] || body.status, statusKind);
+  const strategy = strategyLabels[body.strategy] || body.strategy || "—";
+  setBadge(elements.strategyBadge, `Способ: ${strategy}`, body.strategy === "ollama_chain" ? "ok" : "neutral");
 
   const risk = responseHeaders.get("x-assumption-risk") || "low";
   const riskKind = risk === "high" ? "warn" : "neutral";
-  setBadge(elements.riskBadge, `risk: ${risk}`, riskKind);
+  setBadge(elements.riskBadge, `Риск допущений: ${riskLabels[risk] || risk}`, riskKind);
 
-  if (body.validation) {
+  if (body.status === "clarification_required") {
+    elements.validationSummary.textContent = "Ответьте на уточнение — код пока не публикуется.";
+    elements.validationSummary.className = "result-note warn";
+  } else if (body.validation) {
     if (body.validation.ok) {
-      elements.validationSummary.textContent = `Проверка пройдена. repair_rounds=${body.validation.repair_rounds}`;
+      const rounds = body.validation.repair_rounds || 0;
+      elements.validationSummary.textContent = rounds
+        ? `Проверка пройдена после исправлений: ${rounds}.`
+        : "Проверка пройдена без исправлений.";
       elements.validationSummary.className = "result-note ok";
     } else {
       elements.validationSummary.textContent = `Проверка нашла проблемы: ${(body.validation.errors || []).join(", ") || "см. диагностику"}`;
@@ -198,7 +247,7 @@ async function loadStatus() {
     apiFetch("/health"),
     apiFetch("/api/profile"),
   ]);
-  elements.statusHealth.textContent = health.status;
+  elements.statusHealth.textContent = health.status === "ok" ? "работает" : health.status;
   elements.statusProfile.textContent = profile.profile;
   elements.statusModel.textContent = profile.model;
 }
@@ -328,7 +377,7 @@ async function copyCurl() {
   };
   const curl = `curl -s http://127.0.0.1:8080/generate -H 'Content-Type: application/json' -d '${JSON.stringify(payload)}'`;
   await navigator.clipboard.writeText(curl);
-  pushTimeline("cURL скопирован", "Скопирован канонический judged cURL для /generate.", "clipboard");
+  pushTimeline("cURL скопирован", "Команда для совместимого endpoint /generate готова.", "буфер обмена");
 }
 
 function resetSession() {
@@ -342,9 +391,9 @@ function resetSession() {
   elements.feedbackInput.value = "";
   elements.codeOutput.value = "";
   renderClarification("");
-  setBadge(elements.statusBadge, "status: idle", "neutral");
-  setBadge(elements.strategyBadge, "strategy: none", "neutral");
-  setBadge(elements.riskBadge, "risk: low", "neutral");
+  setBadge(elements.statusBadge, "Ожидание", "neutral");
+  setBadge(elements.strategyBadge, "Способ: —", "neutral");
+  setBadge(elements.riskBadge, "Риск допущений: низкий", "neutral");
   elements.validationSummary.textContent = "Сессия сброшена.";
   elements.validationSummary.className = "result-note";
   refreshMetaBadges();
@@ -358,17 +407,23 @@ function bindEvents() {
     const parsed = parseContext();
     elements.contextInput.value = parsed ? pretty(parsed) : "";
   });
-  document.getElementById("generateBtn").addEventListener("click", () => generate().catch(showError));
-  document.getElementById("continueBtn").addEventListener("click", () => continueSession().catch(showError));
-  document.getElementById("feedbackBtn").addEventListener("click", () => sendFeedback().catch(showError));
-  document.getElementById("validateBtn").addEventListener("click", () => validateCode().catch(showError));
+  document.getElementById("generateBtn").addEventListener("click", () => runAction(generate));
+  document.getElementById("continueBtn").addEventListener("click", () => runAction(continueSession));
+  document.getElementById("feedbackBtn").addEventListener("click", () => runAction(sendFeedback));
+  document.getElementById("validateBtn").addEventListener("click", () => runAction(validateCode));
   document.getElementById("copyCodeBtn").addEventListener("click", () => copyCode().catch(showError));
   document.getElementById("copyCurlBtn").addEventListener("click", () => copyCurl().catch(showError));
   document.getElementById("resetBtn").addEventListener("click", resetSession);
+  document.addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      event.preventDefault();
+      runAction(generate);
+    }
+  });
 }
 
 function showError(error) {
-  setBadge(elements.statusBadge, "status: failed", "error");
+  setBadge(elements.statusBadge, "Ошибка", "error");
   elements.validationSummary.textContent = error.message || String(error);
   elements.validationSummary.className = "result-note error";
   pushTimeline("Ошибка", error.message || String(error), "request");
@@ -376,9 +431,9 @@ function showError(error) {
 
 async function boot() {
   bindEvents();
-  setBadge(elements.statusBadge, "status: idle", "neutral");
-  setBadge(elements.strategyBadge, "strategy: none", "neutral");
-  setBadge(elements.riskBadge, "risk: low", "neutral");
+  setBadge(elements.statusBadge, "Ожидание", "neutral");
+  setBadge(elements.strategyBadge, "Способ: —", "neutral");
+  setBadge(elements.riskBadge, "Риск допущений: низкий", "neutral");
   refreshMetaBadges();
   renderDiagnostics();
   renderTimeline();
