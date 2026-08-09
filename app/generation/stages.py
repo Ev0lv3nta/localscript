@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
+from time import perf_counter
 from typing import Optional
 
 
@@ -40,6 +41,7 @@ _ALLOWED_TRANSITIONS = {
 class GenerationExecution:
     stage: Optional[GenerationStage] = None
     events: list = field(default_factory=list)
+    started_at: float = field(default_factory=perf_counter, repr=False)
 
     def transition(self, next_stage: GenerationStage):
         if not isinstance(next_stage, GenerationStage):
@@ -53,7 +55,15 @@ class GenerationExecution:
                 )
             )
         self.stage = next_stage
-        self.events.append({"stage": next_stage.value})
+        elapsed_ms = round((perf_counter() - self.started_at) * 1000.0, 3)
+        previous_elapsed_ms = self.events[-1]["elapsed_ms"] if self.events else 0.0
+        self.events.append(
+            {
+                "stage": next_stage.value,
+                "elapsed_ms": elapsed_ms,
+                "stage_duration_ms": round(elapsed_ms - previous_elapsed_ms, 3),
+            }
+        )
 
     def snapshot(self):
         return [dict(event) for event in self.events]
