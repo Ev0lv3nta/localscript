@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from app.core.config import get_runtime_profile
+from app.core.storage import REDACTED
 from app.core.traces import TraceStore
 from app.generation.engine import GenerationEngine
 
@@ -37,7 +38,7 @@ class ScriptedChainBackend:
         return "return $.wf.vars.value"
 
 
-def test_engine_uses_same_model_chain_and_records_trace_artifacts(tmp_path):
+def test_engine_uses_same_model_chain_and_redacts_private_trace_artifacts(tmp_path):
     trace_store = TraceStore(root=tmp_path / "traces")
     engine = GenerationEngine(
         profile=get_runtime_profile(),
@@ -57,7 +58,8 @@ def test_engine_uses_same_model_chain_and_records_trace_artifacts(tmp_path):
 
     trace_file = next(Path(trace_store.root).glob("**/*.json"))
     trace_payload = json.loads(trace_file.read_text(encoding="utf-8"))
-    assert trace_payload["planner"]["family"] == "generic_lua"
-    assert trace_payload["critic"]["repairable"] is True
+    assert trace_payload["planner"] == REDACTED
+    assert trace_payload["critic"] == REDACTED
     assert trace_payload["rules_applied"]
-    assert "stage" in trace_payload["repair_trace"][0]
+    assert trace_payload["repair_trace"] == REDACTED
+    assert trace_payload["code"] == REDACTED

@@ -21,10 +21,16 @@ def test_supported_python_and_dependencies_are_explicit():
     assert project["requires-python"] == ">=3.11,<3.13"
     assert pyproject["build-system"]["requires"] == ["setuptools==80.9.0", "wheel==0.45.1"]
     assert "typer==0.27.0" in project["dependencies"]
+    assert "fastapi==0.140.0" in project["dependencies"]
+    assert "pydantic==2.13.4" in project["dependencies"]
+    assert "pydantic-settings==2.14.2" in project["dependencies"]
     assert not any(dependency.lower().startswith("click") for dependency in project["dependencies"])
     assert lock["requires-python"] == ">=3.11, <3.13"
     assert locked_versions["typer"] == "0.27.0"
     assert locked_versions["click"] == "8.4.2"
+    assert locked_versions["fastapi"] == "0.140.0"
+    assert locked_versions["pydantic"] == "2.13.4"
+    assert locked_versions["pydantic-settings"] == "2.14.2"
 
 
 def test_runtime_profile_has_a_distinct_fallback(monkeypatch):

@@ -27,7 +27,13 @@ from app.api.schemas import (
 )
 from app.core.storage import InvalidIdentifierError
 from app.domain.outcomes import DiagnosticSeverity, GenerationStatus, ValidationStatus
-from app.generation.engine import BackendUnavailableError
+from app.generation.backend_errors import (
+    BackendError,
+    BackendModel,
+    BackendProtocol,
+    BackendTimeout,
+    BackendUnavailable,
+)
 from app.core.verifier import verify_code
 from app.generation.taskspec import TaskSpec
 from app.validation.validators import _find_lua_binary, _find_luac_binary
@@ -211,6 +217,21 @@ def _handle_identifier_error(exc):
     raise HTTPException(status_code=400, detail={"code": exc.code, "message": exc.message})
 
 
+def _handle_backend_error(exc):
+    if isinstance(exc, BackendTimeout):
+        status_code = status.HTTP_504_GATEWAY_TIMEOUT
+    elif isinstance(exc, BackendUnavailable):
+        status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    elif isinstance(exc, (BackendProtocol, BackendModel)):
+        status_code = status.HTTP_502_BAD_GATEWAY
+    else:
+        status_code = status.HTTP_502_BAD_GATEWAY
+    raise HTTPException(
+        status_code=status_code,
+        detail={"code": exc.code, "message": exc.public_message},
+    )
+
+
 def _detect_output_style(code, explicit_style):
     if explicit_style in {"lua_block", "json_envelope"}:
         return explicit_style
@@ -241,9 +262,19 @@ def health(request: Request):
 def ready(request: Request, response: Response):
     profile = request.app.state.profile
     backend = request.app.state.engine.backend
-    tags = backend.list_tags() if backend.ping() else []
+    try:
+        if hasattr(backend, "list_tag_details"):
+            tag_details = backend.list_tag_details()
+            tags = [item["name"] for item in tag_details]
+            backend_reachable = True
+        else:
+            backend_reachable = backend.ping()
+            tags = backend.list_tags() if backend_reachable else []
+    except BackendError:
+        tags = []
+        backend_reachable = False
     checks = {
-        "backend_reachable": backend.ping(),
+        "backend_reachable": backend_reachable,
         "primary_model_present": profile.model in tags,
         "fallback_model_present": profile.fallback_model in tags,
         "lua_runtime_present": bool(_find_lua_binary()),
@@ -268,16 +299,13 @@ def generate(payload: GenerateRequest, request: Request, response: Response):
         )
     except InvalidIdentifierError as exc:
         _handle_identifier_error(exc)
-    except BackendUnavailableError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "backend_unavailable", "message": str(exc)},
-        )
+    except BackendError as exc:
+        _handle_backend_error(exc)
     outcome = _require_generation_outcome(result)
     _raise_for_backend_outcome(outcome, result)
     if outcome.status is not GenerationStatus.COMPLETED:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=_outcome_error_detail(outcome),
             headers=_generation_headers(result),
         )
@@ -301,11 +329,8 @@ def generate_rich(payload: GenerateRichRequest, request: Request, response: Resp
         )
     except InvalidIdentifierError as exc:
         _handle_identifier_error(exc)
-    except BackendUnavailableError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "backend_unavailable", "message": str(exc)},
-        )
+    except BackendError as exc:
+        _handle_backend_error(exc)
     outcome = _require_generation_outcome(result)
     _raise_for_backend_outcome(outcome, result)
     _apply_generation_headers(response, result)

@@ -142,7 +142,7 @@ Context JSON:
 {context_json}
 """.format(
         rules_block=rules_block,
-        extractor_hints=_dump_json(task_spec.dict()),
+        extractor_hints=_dump_json(task_spec.model_dump()),
         session_state=_session_block(session_state),
         user_prompt=prompt or "",
         context_json=_dump_json(context),
@@ -231,7 +231,7 @@ Context JSON:
 {context_json}
 """.format(
         planner_json=_dump_json(planner),
-        extractor_hints=_dump_json(task_spec.dict()),
+        extractor_hints=_dump_json(task_spec.model_dump()),
         rules_block=rules_block,
         examples_text=examples_text,
         family_guidance=_family_writer_guidance(planner),
@@ -353,7 +353,7 @@ Current code:
 {code}
 """.format(
         planner_json=_dump_json(planner),
-        extractor_hints=_dump_json(task_spec.dict()),
+        extractor_hints=_dump_json(task_spec.model_dump()),
         critic_json=_dump_json(critic),
         validation_errors=_dump_json({"errors": validation_errors}),
         rules_block=rules_block,

@@ -13,6 +13,7 @@ from app.domain.outcomes import (
     ValidationStatus,
 )
 from app.generation.extractor import TaskExtractor
+from app.generation.backend_errors import BackendError, BackendUnavailable
 from app.generation.formatter import OutputFormatter
 from app.generation.model_chain import SameModelChain
 from app.generation.context_reducer import ContextReducer
@@ -23,8 +24,8 @@ from app.validation.validators import ValidationPipeline
 SAFE_FALLBACK_CODE = "-- judged-safe fallback\nreturn nil"
 
 
-class BackendUnavailableError(RuntimeError):
-    pass
+# Backward-compatible import name for callers of the pre-0.2 engine.
+BackendUnavailableError = BackendUnavailable
 
 
 @dataclass
@@ -103,12 +104,34 @@ class GenerationEngine:
 
     def _run_generation(self, prompt, context, session_id, feedback, clarification_answer, rich_mode):
         session_id = session_id or uuid.uuid4().hex
+        with self.session_store.transaction(session_id) as session_state:
+            return self._run_generation_locked(
+                prompt=prompt,
+                context=context,
+                session_id=session_id,
+                feedback=feedback,
+                clarification_answer=clarification_answer,
+                rich_mode=rich_mode,
+                session_state=session_state,
+            )
+
+    def _run_generation_locked(
+        self,
+        prompt,
+        context,
+        session_id,
+        feedback,
+        clarification_answer,
+        rich_mode,
+        session_state,
+    ):
         session_state = self._prepare_session_state(
             session_id=session_id,
             prompt=prompt,
             context=context,
             feedback=feedback,
             clarification_answer=clarification_answer,
+            session_state=session_state,
         )
         if rich_mode and session_state.get("open_clarification_question") and not clarification_answer:
             return self._build_clarification_result(session_state)
@@ -119,7 +142,7 @@ class GenerationEngine:
         if session_state.get("clarified_root"):
             task_spec.target_root = session_state["clarified_root"]
         session_state["normalized_task"] = task_spec.normalized_prompt
-        session_state["extracted_slots"] = task_spec.dict()
+        session_state["extracted_slots"] = task_spec.model_dump()
         backend_error = None
         rules_applied = []
         examples_used = []
@@ -149,7 +172,7 @@ class GenerationEngine:
                 "clarification_answer": clarification_answer,
                 "status": "clarification_needed",
                 "strategy": "clarification",
-                "task_spec": task_spec.dict(),
+                "task_spec": task_spec.model_dump(),
                 "assumptions": assumptions,
                 "verification_errors": [],
                 "validation_report": {"has_errors": False, "has_warnings": False, "messages": []},
@@ -175,7 +198,6 @@ class GenerationEngine:
             session_state["latest_trace_id"] = trace_id
             session_state["trace_ids"].append(trace_id)
             session_state["last_strategy"] = "clarification"
-            self.session_store.write(session_id, session_state)
             return GenerationResult(
                 code="",
                 trace_id=trace_id,
@@ -238,7 +260,7 @@ class GenerationEngine:
                         "clarification_answer": clarification_answer,
                         "status": "clarification_needed",
                         "strategy": "clarification",
-                        "task_spec": task_spec.dict(),
+                        "task_spec": task_spec.model_dump(),
                         "assumptions": assumptions,
                         "verification_errors": [],
                         "validation_report": {"has_errors": False, "has_warnings": False, "messages": []},
@@ -264,7 +286,6 @@ class GenerationEngine:
                     session_state["latest_trace_id"] = trace_id
                     session_state["trace_ids"].append(trace_id)
                     session_state["last_strategy"] = "clarification"
-                    self.session_store.write(session_id, session_state)
                     return GenerationResult(
                         code="",
                         trace_id=trace_id,
@@ -297,9 +318,8 @@ class GenerationEngine:
                 planner_payload = chain_result.planner
                 critic_payload = chain_result.critic
                 semantic_checks = chain_result.semantic_checks
-            except Exception as exc:
-                backend_error = str(exc)
-                raise BackendUnavailableError(backend_error) from exc
+            except BackendError:
+                raise
 
         if validation_report.has_errors and strategy != "safe_fallback":
             remaining_rounds = max(int(self.profile.max_repair_rounds) - int(repair_rounds), 1)
@@ -340,7 +360,7 @@ class GenerationEngine:
             "clarification_answer": clarification_answer,
             "status": status,
             "strategy": strategy,
-            "task_spec": task_spec.dict(),
+            "task_spec": task_spec.model_dump(),
             "assumptions": assumptions,
             "verification_errors": verification_errors,
             "validation_report": validation_report.to_dict(),
@@ -364,7 +384,6 @@ class GenerationEngine:
         trace_id = self.trace_store.write(trace_payload)
         session_state["latest_trace_id"] = trace_id
         session_state["trace_ids"].append(trace_id)
-        self.session_store.write(session_id, session_state)
         outcome = self._build_generation_outcome(
             strategy=strategy,
             code=code,
@@ -387,27 +406,40 @@ class GenerationEngine:
             outcome=outcome,
         )
 
-    def _prepare_session_state(self, session_id, prompt, context, feedback, clarification_answer):
-        session_state = self.session_store.read(session_id) or {
-            "session_id": session_id,
-            "status": "pending",
-            "original_task": prompt or "",
-            "latest_prompt": prompt or "",
-            "context": context,
-            "normalized_task": "",
-            "context_summary": {},
-            "extracted_slots": {},
-            "planner_state": {},
-            "open_clarification_question": "",
-            "clarification_history": [],
-            "feedback_history": [],
-            "previous_candidate_code": "",
-            "previous_validation_report": {},
-            "latest_trace_id": None,
-            "trace_ids": [],
-            "last_strategy": None,
-            "assumptions": [],
-        }
+    def _prepare_session_state(
+        self,
+        session_id,
+        prompt,
+        context,
+        feedback,
+        clarification_answer,
+        session_state=None,
+    ):
+        if session_state is None:
+            session_state = self.session_store.read(session_id) or {}
+        if not session_state:
+            session_state.update(
+                {
+                    "session_id": session_id,
+                    "status": "pending",
+                    "original_task": prompt or "",
+                    "latest_prompt": prompt or "",
+                    "context": context,
+                    "normalized_task": "",
+                    "context_summary": {},
+                    "extracted_slots": {},
+                    "planner_state": {},
+                    "open_clarification_question": "",
+                    "clarification_history": [],
+                    "feedback_history": [],
+                    "previous_candidate_code": "",
+                    "previous_validation_report": {},
+                    "latest_trace_id": None,
+                    "trace_ids": [],
+                    "last_strategy": None,
+                    "assumptions": [],
+                }
+            )
         if prompt:
             if not session_state.get("original_task"):
                 session_state["original_task"] = prompt
@@ -464,7 +496,7 @@ class GenerationEngine:
                 else ("safe_fallback" if task_spec.safety_fallback else "ollama_chain")
             ),
             "clarification_question": clarification_question,
-            "task_spec": task_spec.dict(),
+            "task_spec": task_spec.model_dump(),
             "reduced_context": reduced_context,
             "available_paths": task_spec.context_paths,
             "assumptions": task_spec.assumptions,
