@@ -1,4 +1,6 @@
 from pathlib import Path
+import threading
+import time
 
 import pytest
 
@@ -23,6 +25,43 @@ def test_engine_raises_when_backend_unreachable(tmp_path, monkeypatch):
         engine.generate(prompt="Сделай что-нибудь нестандартное без готового шаблона")
     trace_files = list(Path(trace_store.root).glob("**/*.json"))
     assert len(trace_files) == 0
+
+
+def test_engine_serializes_updates_for_the_same_session(tmp_path, monkeypatch):
+    engine = GenerationEngine(
+        profile=get_runtime_profile(),
+        trace_store=TraceStore(root=tmp_path / "traces"),
+        backend=FailIfCalledBackend(),
+    )
+
+    def increment_session(**kwargs):
+        session_state = kwargs["session_state"]
+        current = session_state.get("count", 0)
+        time.sleep(0.01)
+        session_state["count"] = current + 1
+
+    monkeypatch.setattr(engine, "_run_generation_locked", increment_session)
+    threads = [
+        threading.Thread(
+            target=engine._run_generation,
+            kwargs={
+                "prompt": "prompt",
+                "context": None,
+                "session_id": "shared-session",
+                "feedback": None,
+                "clarification_answer": None,
+                "rich_mode": False,
+            },
+        )
+        for _ in range(8)
+    ]
+
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert engine.session_store.read("shared-session")["count"] == 8
 
 
 def test_engine_routes_broken_envelope_prompt_to_safety_guard(tmp_path):

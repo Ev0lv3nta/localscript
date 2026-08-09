@@ -28,10 +28,11 @@ require_python() {
 fetch_tags() {
   "${PYTHON_BIN}" - <<PY
 import json
-from urllib.request import urlopen
+from urllib.request import ProxyHandler, build_opener
 
 host = "${OLLAMA_HOST}".rstrip("/")
-with urlopen(host + "/api/tags", timeout=10) as response:
+opener = build_opener(ProxyHandler({}))
+with opener.open(host + "/api/tags", timeout=10) as response:
     payload = json.loads(response.read().decode("utf-8"))
 for item in payload.get("models", []):
     name = item.get("name")
@@ -43,13 +44,13 @@ PY
 wait_for_ollama() {
   local elapsed=0
   while [ "${elapsed}" -lt "${STARTUP_TIMEOUT_SECONDS}" ]; do
-    if curl -fsS "${OLLAMA_HOST}/api/tags" >/dev/null 2>&1; then
+    if curl --noproxy '*' -fsS "${OLLAMA_HOST}/api/tags" >/dev/null 2>&1; then
       return 0
     fi
     sleep "${POLL_INTERVAL_SECONDS}"
     elapsed=$((elapsed + POLL_INTERVAL_SECONDS))
   done
-  fail "Ollama did not become reachable at ${OLLAMA_HOST} within ${STARTUP_TIMEOUT_SECONDS}s"
+  fail "Ollama did not become reachable at the configured endpoint within ${STARTUP_TIMEOUT_SECONDS}s"
 }
 
 require_model() {
@@ -78,7 +79,6 @@ import sys
 print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
 PY
 )"
-printf 'localscript docker_entrypoint: ollama=%s\n' "${OLLAMA_HOST}"
 printf 'localscript docker_entrypoint: service=http://127.0.0.1:%s\n' "${PORT}"
 
 exec uvicorn app.main:app --host 0.0.0.0 --port "${PORT}"

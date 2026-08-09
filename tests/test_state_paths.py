@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from app.core.runtime_lock import get_runtime_lock_path
 from app.core.sessions import SessionStore
 from app.core.state import get_state_root
@@ -74,3 +76,18 @@ def test_specific_overrides_precede_constructor_and_state_roots(monkeypatch, tmp
     assert TraceStore(root=tmp_path / "custom-traces").root == trace_dir.resolve()
     assert SessionStore(root=tmp_path / "custom-sessions").root == session_dir.resolve()
     assert get_runtime_lock_path() == lock_path.resolve()
+
+
+def test_top_level_system_symlink_is_canonicalized(monkeypatch):
+    system_link = next(
+        (path for path in (Path("/var"), Path("/tmp")) if path.is_symlink()),
+        None,
+    )
+    if system_link is None:
+        pytest.skip("platform has no top-level compatibility symlink")
+
+    _clear_state_environment(monkeypatch)
+    configured = system_link / "localscript-state"
+    monkeypatch.setenv("LOCALSCRIPT_STATE_DIR", str(configured))
+
+    assert get_state_root() == configured.resolve()

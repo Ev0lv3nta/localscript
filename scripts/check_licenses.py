@@ -26,6 +26,7 @@ ALLOWED_SPDX = {
 # Любая новая транзитивная зависимость должна получить явное решение здесь.
 LOCKED_LICENSES = {
     "annotated-doc": "MIT",
+    "annotated-types": "MIT",
     "anyio": "MIT",
     "certifi": "MPL-2.0",
     "click": "BSD-3-Clause",
@@ -42,6 +43,8 @@ LOCKED_LICENSES = {
     "packaging": "Apache-2.0 OR BSD-2-Clause",
     "pluggy": "MIT",
     "pydantic": "MIT",
+    "pydantic-core": "MIT",
+    "pydantic-settings": "MIT",
     "pygments": "BSD-2-Clause",
     "pytest": "MIT",
     "python-dotenv": "BSD-3-Clause",
@@ -52,6 +55,7 @@ LOCKED_LICENSES = {
     "starlette": "BSD-3-Clause",
     "typer": "MIT",
     "typing-extensions": "PSF-2.0",
+    "typing-inspection": "MIT",
     "uvicorn": "BSD-3-Clause",
     "uvloop": "MIT",
     "watchfiles": "MIT",

@@ -1,6 +1,9 @@
 import json
 
 
+from app.generation.backend_errors import BackendUnavailable
+
+
 class FailIfCalledBackend:
     def generate(self, prompt, context=None):
         raise AssertionError("backend should not be called for this test")
@@ -11,10 +14,10 @@ class FailIfCalledBackend:
 
 class UnavailableBackend:
     def generate(self, prompt, context=None):
-        raise RuntimeError("ollama_unreachable")
+        raise BackendUnavailable(reason="test_backend_unavailable")
 
     def complete(self, prompt, response_format=None, model=None):
-        raise RuntimeError("ollama_unreachable")
+        raise BackendUnavailable(reason="test_backend_unavailable")
 
 
 class DeterministicTestBackend:

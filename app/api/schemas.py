@@ -1,19 +1,34 @@
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
 from app.domain.outcomes import GenerationStatus, ValidationStatus
 
+MAX_SCHEMA_PROMPT_CHARS = 131072
+MAX_SCHEMA_CODE_CHARS = 131072
+MAX_SCHEMA_FEEDBACK_CHARS = 32768
+MAX_SCHEMA_CLARIFICATION_ANSWER_CHARS = 32768
+MAX_SCHEMA_SESSION_ID_CHARS = 64
+
+PromptText = Annotated[str, Field(max_length=MAX_SCHEMA_PROMPT_CHARS)]
+CodeText = Annotated[str, Field(max_length=MAX_SCHEMA_CODE_CHARS)]
+FeedbackText = Annotated[str, Field(max_length=MAX_SCHEMA_FEEDBACK_CHARS)]
+ClarificationAnswerText = Annotated[
+    str,
+    Field(max_length=MAX_SCHEMA_CLARIFICATION_ANSWER_CHARS),
+]
+SessionIdText = Annotated[str, Field(max_length=MAX_SCHEMA_SESSION_ID_CHARS)]
+
 
 class GenerateRequest(BaseModel):
-    prompt: str
+    prompt: PromptText
     context: Optional[Any] = None
-    session_id: Optional[str] = None
-    feedback: Optional[str] = None
+    session_id: Optional[SessionIdText] = None
+    feedback: Optional[FeedbackText] = None
 
 
 class GenerateResponse(BaseModel):
-    code: str
+    code: CodeText
 
 
 class ValidationSummary(BaseModel):
@@ -38,11 +53,11 @@ class SessionStateSummary(BaseModel):
 
 
 class GenerateRichRequest(BaseModel):
-    prompt: Optional[str] = None
+    prompt: Optional[PromptText] = None
     context: Optional[Any] = None
-    session_id: Optional[str] = None
-    feedback: Optional[str] = None
-    clarification_answer: Optional[str] = None
+    session_id: Optional[SessionIdText] = None
+    feedback: Optional[FeedbackText] = None
+    clarification_answer: Optional[ClarificationAnswerText] = None
 
 
 class GenerateRichResponse(BaseModel):
@@ -58,7 +73,7 @@ class GenerateRichResponse(BaseModel):
 
 
 class AnalyzeRequest(BaseModel):
-    prompt: str
+    prompt: PromptText
     context: Optional[Any] = None
 
 
@@ -133,7 +148,7 @@ class ExamplesResponse(BaseModel):
 
 
 class ValidateRequest(BaseModel):
-    code: str
+    code: CodeText
     context: Optional[Any] = None
     output_style: Optional[str] = None
 
