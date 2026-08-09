@@ -16,14 +16,20 @@ def _quality_report(diagnostic_ok=False):
     report = {
         "backend_type": "live_ollama",
         "eval_manifest": [
-            {"name": entry["name"], "role": entry["role"]}
+            {
+                "name": entry["name"],
+                "path": entry["path"],
+                "corpus": entry["corpus"],
+                "gate": entry["gate"],
+                "claim_scope": entry["claim_scope"],
+            }
             for entry in QUALITY_EVAL_MANIFEST
         ],
         "ok": True,
     }
     for entry in QUALITY_EVAL_MANIFEST:
         report[entry["name"]] = {
-            "ok": True if entry["role"] == "mandatory" else diagnostic_ok
+            "ok": True if entry["gate"] == "required" else diagnostic_ok
         }
     return report
 
@@ -71,7 +77,7 @@ def test_quality_manifest_gates_every_mandatory_set_but_not_diagnostics():
     assert "large_context_eval" in [
         entry["name"]
         for entry in QUALITY_EVAL_MANIFEST
-        if entry["role"] == "mandatory"
+        if entry["gate"] == "required"
     ]
 
     report["large_context_eval"]["ok"] = False

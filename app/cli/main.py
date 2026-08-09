@@ -180,11 +180,11 @@ def verify(
 
 
 @cli.command()
-def benchmark(dataset=typer.Option("datasets/public_gold.jsonl", help="JSONL dataset path.")):
+def benchmark(dataset=typer.Option("evals/public/v1.jsonl", help="JSONL dataset path.")):
     dataset_path = Path(dataset)
     packaged_dataset = dataset.replace("\\", "/")
     if not dataset_path.is_file() and not (
-        packaged_dataset.startswith("datasets/") and resource_exists(packaged_dataset)
+        packaged_dataset.startswith("evals/") and resource_exists(packaged_dataset)
     ):
         typer.echo(
             json.dumps(

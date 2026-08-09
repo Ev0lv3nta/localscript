@@ -57,11 +57,18 @@ def test_doctor_flag_parses_as_boolean(monkeypatch):
     monkeypatch.setattr(
         "app.cli.main.run_quality_benchmark",
         lambda profile=None, backend=None, mode="competition": {
-            "backend_type": "live_ollama",
-            "eval_manifest": [
-                {"name": entry["name"], "role": entry["role"]}
-                for entry in QUALITY_EVAL_MANIFEST
-            ],
+                "backend_type": "live_ollama",
+                "eval_manifest": [
+                    {
+                        "name": entry["name"],
+                        "path": entry["path"],
+                        "corpus": entry["corpus"],
+                        "gate": entry["gate"],
+                        "claim_scope": entry["claim_scope"],
+                    }
+                    for entry in QUALITY_EVAL_MANIFEST
+                ],
+                "public_v1": {"ok": True},
             "public_gold": {"ok": True},
             "stress_eval": {"ok": True},
             "showcase_eval": {"ok": True},
@@ -123,11 +130,18 @@ def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tm
         benchmark_models.append(profile.model)
         assert backend.profile.model == profile.model
         return {
-            "backend_type": "live_ollama",
-            "eval_manifest": [
-                {"name": entry["name"], "role": entry["role"]}
-                for entry in QUALITY_EVAL_MANIFEST
-            ],
+                "backend_type": "live_ollama",
+                "eval_manifest": [
+                    {
+                        "name": entry["name"],
+                        "path": entry["path"],
+                        "corpus": entry["corpus"],
+                        "gate": entry["gate"],
+                        "claim_scope": entry["claim_scope"],
+                    }
+                    for entry in QUALITY_EVAL_MANIFEST
+                ],
+                "public_v1": {"ok": True},
             "public_gold": {"ok": True},
             "stress_eval": {"ok": True},
             "showcase_eval": {"ok": True},

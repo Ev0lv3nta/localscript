@@ -85,11 +85,11 @@ def test_packaged_dataset_is_available_without_checkout_dataset_tree(monkeypatch
     monkeypatch.setenv("LOCALSCRIPT_TRACE_DIR", str(tmp_path / "traces"))
 
     report = run_dataset_benchmark(
-        "datasets/public_gold.jsonl",
+        "evals/regression/public_gold.jsonl",
         backend=DeterministicTestBackend(),
     )
 
-    assert report["dataset"] == "datasets/public_gold.jsonl"
+    assert report["dataset"] == "evals/regression/public_gold.jsonl"
     assert report["total"] == 8
 
 
@@ -97,7 +97,7 @@ def test_explicit_user_dataset_path_still_works(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALSCRIPT_TRACE_DIR", str(tmp_path / "traces"))
     dataset_path = tmp_path / "custom.jsonl"
     dataset_path.write_text(
-        read_resource_text("datasets/public_gold.jsonl"),
+        read_resource_text("evals/regression/public_gold.jsonl"),
         encoding="utf-8",
     )
 

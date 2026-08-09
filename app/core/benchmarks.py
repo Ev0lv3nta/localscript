@@ -7,37 +7,32 @@ from app.core.public_eval import evaluate_case, load_cases
 from app.core.resources import materialized_resource, resource_exists
 from app.core.state import get_state_root
 from app.core.traces import TraceStore
+from app.evaluation.manifest import dataset_specs
 from app.generation.engine import GenerationEngine
 from app.generation.ollama import OllamaBackend
 
 
-QUALITY_EVAL_MANIFEST = (
-    {"name": "public_gold", "runner": "standard", "role": "mandatory"},
-    {"name": "stress_eval", "runner": "standard", "role": "diagnostic"},
-    {"name": "showcase_eval", "runner": "standard", "role": "diagnostic"},
-    {"name": "model_backed_eval", "runner": "standard", "role": "mandatory"},
-    {"name": "composition_eval", "runner": "standard", "role": "mandatory"},
-    {"name": "regression_eval", "runner": "standard", "role": "mandatory"},
-    {"name": "multilingual_eval", "runner": "standard", "role": "mandatory"},
-    {"name": "ambiguity_eval", "runner": "rich", "role": "mandatory"},
-    {"name": "clarification_eval", "runner": "rich", "role": "mandatory"},
-    {"name": "adversarial_eval", "runner": "standard", "role": "mandatory"},
-    {"name": "large_context_eval", "runner": "standard", "role": "mandatory"},
-)
+QUALITY_EVAL_MANIFEST = tuple(spec.evidence_dict() for spec in dataset_specs())
 
 
 def quality_gate_failures(report):
     manifest = report.get("eval_manifest")
     failures = []
     expected_manifest = [
-        {"name": entry["name"], "role": entry["role"]}
+        {
+            "name": entry["name"],
+            "path": entry["path"],
+            "corpus": entry["corpus"],
+            "gate": entry["gate"],
+            "claim_scope": entry["claim_scope"],
+        }
         for entry in QUALITY_EVAL_MANIFEST
     ]
     if manifest != expected_manifest:
         failures.append("quality_manifest_mismatch")
 
     for entry in expected_manifest:
-        if entry.get("role") != "mandatory":
+        if entry.get("gate") != "required":
             continue
         name = entry["name"]
         result = report.get(name)
@@ -63,7 +58,7 @@ def _packaged_dataset_name(dataset_path):
             return None
     else:
         raw_path = str(dataset_path).replace("\\", "/")
-    if raw_path.startswith("datasets/"):
+    if raw_path.startswith("evals/"):
         return raw_path
     return None
 
@@ -223,23 +218,29 @@ def run_quality_benchmark(profile=None, backend=None, mode="competition"):
         "host": metadata.get("host"),
         "ran_at": metadata["ran_at"],
         "eval_manifest": [
-            {"name": entry["name"], "role": entry["role"]}
+            {
+                "name": entry["name"],
+                "path": entry["path"],
+                "corpus": entry["corpus"],
+                "gate": entry["gate"],
+                "claim_scope": entry["claim_scope"],
+            }
             for entry in QUALITY_EVAL_MANIFEST
         ],
         "mandatory_eval_sets": [
             entry["name"]
             for entry in QUALITY_EVAL_MANIFEST
-            if entry["role"] == "mandatory"
+            if entry["gate"] == "required"
         ],
         "diagnostic_eval_sets": [
             entry["name"]
             for entry in QUALITY_EVAL_MANIFEST
-            if entry["role"] == "diagnostic"
+            if entry["gate"] == "diagnostic"
         ],
     }
     for entry in QUALITY_EVAL_MANIFEST:
         name = entry["name"]
-        dataset_path = "datasets/{0}.jsonl".format(name)
+        dataset_path = entry["path"]
         if not resource_exists(dataset_path):
             continue
         runner = (
@@ -266,9 +267,9 @@ def run_quality_benchmark(profile=None, backend=None, mode="competition"):
         report["ok"] = not report["gate_failures"]
     else:
         report["ok"] = all(
-            result.get("ok") is True
-            for name, result in report.items()
-            if name.endswith("_eval") or name == "public_gold"
+            isinstance(report.get(entry["name"]), dict)
+            and report[entry["name"]].get("ok") is True
+            for entry in QUALITY_EVAL_MANIFEST
         )
         report["gate_failures"] = []
     adversarial_report = report.get("adversarial_eval")
