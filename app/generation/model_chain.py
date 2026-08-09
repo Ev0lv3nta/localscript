@@ -39,7 +39,17 @@ class SameModelChain:
         self.context_reducer = ContextReducer()
         self.task_resolver = task_resolver or TaskResolver()
 
-    def run(self, prompt, context, task_spec, profile, max_rounds=1, session_state=None, stop_on_clarification=False):
+    def run(
+        self,
+        prompt,
+        context,
+        task_spec,
+        profile,
+        max_rounds=1,
+        session_state=None,
+        stop_on_clarification=False,
+        validate_candidate=True,
+    ):
         rules = build_rule_lines(task_spec)
         reduced_context = self.context_reducer.reduce(context, task_spec)
 
@@ -88,14 +98,16 @@ class SameModelChain:
             response_format=None,
         )
         code = self.formatter.format(self._clean_candidate(writer_text), task_spec.output_style)
-        validation_report = self.validation_pipeline.run(
-            code=code,
-            task_spec=task_spec,
-            profile=profile,
-            source_context=context,
-            prompt=prompt,
-            planner_semantic_checks=planner_checks,
-        )
+        validation_report = ValidationReport()
+        if validate_candidate:
+            validation_report = self.validation_pipeline.run(
+                code=code,
+                task_spec=task_spec,
+                profile=profile,
+                source_context=context,
+                prompt=prompt,
+                planner_semantic_checks=planner_checks,
+            )
 
         history = [
             {

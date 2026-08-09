@@ -211,11 +211,28 @@ def test_release_gate_writes_sha_bound_artifact_and_runs_quality_once(
                 )
             return _command_report(name, doctor_report)
         if name in {
+            "ablation",
             "smoke",
             "latency",
             "private_holdout",
             "repeat_stability",
         }:
+            if name == "ablation":
+                return _command_report(
+                    name,
+                    {
+                        "ok": True,
+                        "case_count": 12,
+                        "profiles": {
+                            "full_pipeline": {
+                                "metrics": {
+                                    "verified_cases": 12,
+                                    "invalid_success_count": 0,
+                                }
+                            }
+                        },
+                    },
+                )
             return _command_report(name, {"ok": True})
         return _command_report(name)
 
@@ -263,6 +280,7 @@ def test_release_gate_writes_sha_bound_artifact_and_runs_quality_once(
         "doctor",
         "private_holdout",
         "repeat_stability",
+        "ablation",
         "smoke",
         "latency",
     ]
@@ -293,11 +311,28 @@ def test_release_gate_failure_writes_unlocked_runtime_snapshot(
                 json.dump({"profile": "competition", "locked": False}, stream)
             return _command_report(name, doctor_report, returncode=1)
         if name in {
+            "ablation",
             "smoke",
             "latency",
             "private_holdout",
             "repeat_stability",
         }:
+            if name == "ablation":
+                return _command_report(
+                    name,
+                    {
+                        "ok": True,
+                        "case_count": 12,
+                        "profiles": {
+                            "full_pipeline": {
+                                "metrics": {
+                                    "verified_cases": 12,
+                                    "invalid_success_count": 0,
+                                }
+                            }
+                        },
+                    },
+                )
             return _command_report(name, {"ok": True})
         return _command_report(name)
 
