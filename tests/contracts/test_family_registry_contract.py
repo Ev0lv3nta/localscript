@@ -12,7 +12,6 @@ from app.families import (
 from app.generation.task_resolver import TaskResolver
 from app.generation.taskspec import TaskResolutionSource, TaskSpec
 
-
 EXPECTED_FAMILIES = {
     "augment_existing_code",
     "conditional_array_projection",

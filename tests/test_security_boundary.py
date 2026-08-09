@@ -4,11 +4,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.config import get_runtime_profile
 from app.api.middleware import RequestBodyLimitMiddleware
+from app.core.config import get_runtime_profile
 from app.main import create_app
 from tests.support_backends import DeterministicTestBackend
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 

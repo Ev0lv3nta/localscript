@@ -7,7 +7,6 @@ from app.core.sessions import SessionStore
 from app.core.state import get_state_root
 from app.core.traces import TraceStore
 
-
 STATE_ENV_NAMES = (
     "LOCALSCRIPT_STATE_DIR",
     "XDG_STATE_HOME",

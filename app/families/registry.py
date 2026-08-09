@@ -5,7 +5,6 @@ from app.families.collections import COLLECTION_FAMILIES
 from app.families.records import RECORD_FAMILIES
 from app.families.scalars import SCALAR_FAMILIES
 
-
 _NON_SEMANTIC_FAMILIES = (
     FamilyDefinition("generic_lua"),
     FamilyDefinition("safety_guard", preferred_return_shape="scalar"),
