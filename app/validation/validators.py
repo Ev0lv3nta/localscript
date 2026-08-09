@@ -9,6 +9,7 @@ from app.validation.oracles import UNSUPPORTED, build_expected_result, compare_e
 from app.validation.base import BaseValidator, ValidationReport, ValidatorContext
 from app.validation.runtime import find_lua_binary, find_luac_binary
 from app.validation.runtime_executor import DANGEROUS_LUA_PATTERNS, execute_output
+from app.generation.taskspec import TaskResolutionSource
 
 
 SHADOW_PROTECTED_GLOBALS = ("table", "string", "math", "utf8", "_utils", "wf")
@@ -430,6 +431,11 @@ class SemanticScenarioValidator(BaseValidator):
     def validate(self, code, context):
         report = ValidationReport()
         if context.source_context is None:
+            return report
+        if (
+            getattr(context.task_spec, "resolution_source", None)
+            is TaskResolutionSource.PLANNER
+        ):
             return report
         if getattr(context.task_spec, "ambiguity_notes", None) and context.task_spec.family is None:
             return report

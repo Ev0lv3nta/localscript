@@ -21,6 +21,8 @@ Orchestration фиксирует переходы `session_ready → task_resolv
 
 Результат model-chain преобразуется во внутренний тип `GeneratedCandidate` либо `PlannerClarification`. Генерация, deterministic repair и финализация session/trace разделены на самостоятельные операции; orchestration связывает их, но не хранит россыпь промежуточных переменных.
 
+Family, предложенная planner, может выбирать prompt guidance и общие structural validators, но не активирует deterministic family oracle: для такого oracle нужны проверенные `generation_hints`, которые формирует extractor. Planner-derived задача проверяется generic semantic checks. Источник resolution хранится в spec, поэтому это одна явная политика доверия, а не повторная классификация.
+
 ## Последствия
 
 Неподдерживаемое состояние завершается ошибкой рядом с источником, а trace содержит упорядоченный список этапов без prompt, context или model response. Внешний HTTP/CLI-контракт не меняется. Family registry и разделение validators смогут опираться на один resolved contract, не создавая второй classifier.

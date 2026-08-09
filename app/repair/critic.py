@@ -121,6 +121,14 @@ class ValidationCritic:
                 )
             )
 
+        if "lua_runtime_error" in error_codes and ":contains(" in (code or ""):
+            actions.append(
+                RepairAction(
+                    name="rewrite_array_contains",
+                    reason="Replace unsupported array:contains(value) with a portable Lua membership scan.",
+                )
+            )
+
         if task_spec.family == "iso8601_to_epoch" and (
             "dangerous_stdlib_os_forbidden" in error_codes
             or "lua_syntax_error" in error_codes
