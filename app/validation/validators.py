@@ -5,11 +5,12 @@ import subprocess
 import tempfile
 from copy import deepcopy
 
+from app.families import get_family_definition
+from app.generation.taskspec import TaskResolutionSource
 from app.validation.oracles import UNSUPPORTED, build_expected_result, compare_expected_and_actual
 from app.validation.base import BaseValidator, ValidationReport, ValidatorContext
 from app.validation.runtime import find_lua_binary, find_luac_binary
 from app.validation.runtime_executor import DANGEROUS_LUA_PATTERNS, execute_output
-from app.generation.taskspec import TaskResolutionSource
 
 
 SHADOW_PROTECTED_GLOBALS = ("table", "string", "math", "utf8", "_utils", "wf")
@@ -303,125 +304,15 @@ class ScenarioValidator(BaseValidator):
         report = ValidationReport()
         if context.task_spec.output_style != "json_envelope" and "return" not in code:
             report.add(self.name, "error", "return_missing", "Lua output must contain a return statement.")
-
-        if context.task_spec.family == "filter_discount_markdown" and "_utils.array.new()" not in code:
-            report.add(
-                self.name,
-                "error",
-                "array_constructor_missing",
-                "Filtering case must initialize result via _utils.array.new().",
-            )
-
-        if context.task_spec.family == "augment_existing_code" and context.task_spec.output_style != "json_envelope":
-            report.add(
-                self.name,
-                "error",
-                "expected_json_envelope",
-                "Augment-existing-code task must return a JSON envelope.",
-            )
-
-        if context.task_spec.family == "regex_extract" and "string.match" not in code:
-            report.add(
-                self.name,
-                "error",
-                "regex_extract_missing_string_match",
-                "Regex extraction tasks must use string.match.",
-            )
-
-        if context.task_spec.family == "email_validation":
-            if "string.match" not in code or "~= nil" not in code:
-                report.add(
-                    self.name,
-                    "error",
-                    "email_validation_boolean_missing",
-                    "Email validation must return an explicit boolean via string.match(... ) ~= nil.",
-                )
-
-        if context.task_spec.family == "normalize_email_string":
-            if "string.lower" not in code and ":lower()" not in code:
-                report.add(
-                    self.name,
-                    "error",
-                    "normalize_email_lower_missing",
-                    "Email normalization must convert the final scalar to lower case.",
-                )
-            if "string.gsub" not in code:
-                report.add(
-                    self.name,
-                    "error",
-                    "normalize_email_trim_missing",
-                    "Email normalization must trim surrounding whitespace via string.gsub.",
-                )
-
-        if context.task_spec.family == "table_transform" and "_utils.array.new()" not in code:
-            report.add(
-                self.name,
-                "error",
-                "table_transform_missing_array_constructor",
-                "Table transform tasks must build arrays via _utils.array.new().",
-            )
-
-        if context.task_spec.family == "conditional_array_projection" and "_utils.array.new()" not in code:
-            report.add(
-                self.name,
-                "error",
-                "conditional_projection_missing_array_constructor",
-                "Conditional array projection must build arrays via _utils.array.new().",
-            )
-
-        if context.task_spec.family == "rest_cleanup":
-            hints = context.task_spec.generation_hints or {}
-            keep_keys = {str(key) for key in hints.get("keep_keys", []) if key}
-            for key in hints.get("available_keys", []):
-                key = str(key)
-                if key in keep_keys:
-                    continue
-                if (
-                    '"{0}"'.format(key) in code
-                    or "'{0}'".format(key) in code
-                    or ".{0}".format(key) in code
-                ):
-                    report.add(
-                        self.name,
-                        "error",
-                        "rest_cleanup_excluded_key_reference::{0}".format(key),
-                        "REST cleanup must not reference excluded key `{0}` directly; preserve only requested keys generically.".format(key),
-                    )
-
-        if context.task_spec.family == "augment_existing_code":
-            if "wf.vars" in code or "wf.initVariables" in code:
-                report.add(
-                    self.name,
-                    "error",
-                    "augment_existing_code_forbidden_workflow_state",
-                    "Augment-existing-code must use the extracted literal and must not read workflow state.",
-                )
-            try:
-                payload = json.loads(code)
-            except json.JSONDecodeError:
-                report.add(
-                    self.name,
-                    "error",
-                    "augment_existing_code_invalid_json",
-                    "Augment-existing-code tasks must return a valid JSON envelope.",
-                )
-            else:
-                for key in ["num", "squared"]:
-                    if key not in payload:
-                        report.add(
-                            self.name,
-                            "error",
-                            "augment_existing_code_missing_key::{0}".format(key),
-                            "Augment-existing-code tasks must preserve `{0}` in the JSON envelope.".format(key),
-                        )
-                for key in payload.keys():
-                    if key not in {"num", "squared"}:
-                        report.add(
-                            self.name,
-                            "error",
-                            "augment_existing_code_unexpected_key::{0}".format(key),
-                            "Augment-existing-code tasks must not add unexpected envelope key `{0}`.".format(key),
-                        )
+        definition = get_family_definition(context.task_spec.family)
+        if definition is None:
+            return report
+        for finding in definition.validate_structure(
+            code,
+            context.task_spec.output_style,
+            context.task_spec.generation_hints or {},
+        ):
+            report.add(self.name, "error", finding.code, finding.message)
         return report
 
 
@@ -467,6 +358,14 @@ class SemanticScenarioValidator(BaseValidator):
             return report
 
         if not compare_expected_and_actual(expected, execution.value):
+            shape_code = self._return_shape_mismatch_code(expected, execution.value)
+            if shape_code is not None:
+                report.add(
+                    self.name,
+                    "error",
+                    shape_code,
+                    "Generated Lua returned a value with a different shape than the semantic oracle.",
+                )
             report.add(
                 self.name,
                 "error",
@@ -474,6 +373,16 @@ class SemanticScenarioValidator(BaseValidator):
                 "Generated Lua result does not match the semantic oracle.",
             )
         return report
+
+    @staticmethod
+    def _return_shape_mismatch_code(expected, actual):
+        if isinstance(expected, list) and not isinstance(actual, list):
+            return "semantic_return_shape_array_mismatch"
+        if isinstance(expected, dict) and not isinstance(actual, dict):
+            return "semantic_return_shape_object_mismatch"
+        if not isinstance(expected, (list, dict)) and isinstance(actual, (list, dict)):
+            return "semantic_return_shape_scalar_mismatch"
+        return None
 
 
 class GenericSemanticValidator(BaseValidator):
@@ -483,6 +392,14 @@ class GenericSemanticValidator(BaseValidator):
         report = ValidationReport()
         semantic_checks = context.planner_semantic_checks or []
         if context.source_context is None or not semantic_checks:
+            return report
+        definition = get_family_definition(context.task_spec.family)
+        if (
+            getattr(context.task_spec, "resolution_source", None)
+            is TaskResolutionSource.EXTRACTOR
+            and definition is not None
+            and definition.expected_result_builder is not None
+        ):
             return report
 
         execution = execute_output(
