@@ -123,11 +123,13 @@ def sha256_path(path):
 def dataset_evidence():
     evidence = {}
     for entry in QUALITY_EVAL_MANIFEST:
-        resource_name = "datasets/{0}.jsonl".format(entry["name"])
+        resource_name = entry["path"]
         with materialized_resource(resource_name) as dataset_path:
             evidence[entry["name"]] = {
                 "resource": resource_name,
-                "role": entry["role"],
+                "corpus": entry["corpus"],
+                "gate": entry["gate"],
+                "claim_scope": entry["claim_scope"],
                 "sha256": sha256_path(dataset_path),
             }
     return evidence
@@ -357,12 +359,12 @@ def main(argv=None):
             "mandatory_eval_sets": [
                 entry["name"]
                 for entry in QUALITY_EVAL_MANIFEST
-                if entry["role"] == "mandatory"
+                if entry["gate"] == "required"
             ],
             "diagnostic_eval_sets": [
                 entry["name"]
                 for entry in QUALITY_EVAL_MANIFEST
-                if entry["role"] == "diagnostic"
+                if entry["gate"] == "diagnostic"
             ],
         },
         "runtime": {

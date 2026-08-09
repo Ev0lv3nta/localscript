@@ -1,6 +1,6 @@
 UV ?= uv
 
-.PHONY: install lua-bootstrap lock-check license-check policy-check test test-unit \
+.PHONY: install lua-bootstrap lock-check license-check eval-integrity policy-check test test-unit \
 	build package-check build-check container-check check smoke run
 
 install:
@@ -14,6 +14,9 @@ lock-check:
 
 license-check:
 	.venv/bin/python scripts/check_licenses.py --lock uv.lock --notices THIRD_PARTY_NOTICES.md
+
+eval-integrity:
+	.venv/bin/python scripts/check_eval_integrity.py
 
 policy-check: lock-check license-check
 
@@ -34,7 +37,7 @@ container-check:
 	docker build --tag localscript:ci .
 	./scripts/check_container.sh localscript:ci
 
-check: install policy-check test-unit build-check
+check: install policy-check eval-integrity test-unit build-check
 
 smoke:
 	./scripts/judge_smoke.sh

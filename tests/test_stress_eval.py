@@ -5,7 +5,7 @@ from app.core.resources import materialized_resource
 
 
 def _load_stress_cases():
-    with materialized_resource("datasets/stress_eval.jsonl") as dataset_path:
+    with materialized_resource("evals/regression/stress_eval.jsonl") as dataset_path:
         return load_cases(dataset_path)
 
 

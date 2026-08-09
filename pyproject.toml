@@ -38,7 +38,7 @@ namespaces = true
 
 [tool.setuptools.package-data]
 "app.resources.config.profiles" = ["*.yaml"]
-"app.resources.datasets" = ["*.jsonl"]
+"app.resources" = ["evals/*.json", "evals/**/*.jsonl"]
 "app.resources.kb" = ["*.yaml"]
 "app.resources.scripts" = ["*.sh"]
 "app.ui.static" = ["*.html", "*.css", "*.js"]

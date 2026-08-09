@@ -3,7 +3,7 @@ from app.core.resources import materialized_resource
 
 
 def test_showcase_eval_dataset_declares_live_semantic_expectations():
-    with materialized_resource("datasets/showcase_eval.jsonl") as dataset_path:
+    with materialized_resource("evals/regression/showcase_eval.jsonl") as dataset_path:
         cases = load_cases(dataset_path)
 
     assert len(cases) == 16
