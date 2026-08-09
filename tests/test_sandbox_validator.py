@@ -51,6 +51,23 @@ def test_dangerous_stdlib_validator_rejects_debug_namespace():
     assert "dangerous_stdlib_debug_forbidden" in report.error_codes()
 
 
+def test_loop_variable_shadowing_package_is_reported_for_safe_renaming():
+    report = ValidationPipeline().run(
+        code=(
+            "local result = _utils.array.new()\n"
+            "for _, package in ipairs(wf.vars.packages or {}) do\n"
+            "  table.insert(result, package.id)\n"
+            "end\n"
+            "return result"
+        ),
+        task_spec=_task_spec(),
+        profile=get_runtime_profile(),
+    )
+
+    assert "shadowed_stdlib_local::package" in report.error_codes()
+    assert "dangerous_stdlib_package_forbidden" in report.error_codes()
+
+
 def test_runtime_executor_denies_unsafe_namespace_even_without_pipeline():
     execution = execute_output(
         "return os.execute('echo hi')",

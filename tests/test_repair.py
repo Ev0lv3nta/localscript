@@ -126,6 +126,30 @@ class WrappedScalarBackend:
         return self.complete(prompt)
 
 
+class PackageLoopVariableBackend:
+    def complete(self, prompt, response_format=None, model=None):
+        if "You are the planner for a LocalScript/Lua generation pipeline." in prompt:
+            return (
+                '{"family":"table_transform","root":"wf.vars","source_paths":["wf.vars.packages"],'
+                '"return_shape":"array","constraints":[],"assumptions":[],'
+                '"clarification_needed":false,"clarification_question":"",'
+                '"semantic_checks":[{"kind":"array_equals","value":["P-1","P-2"]}]}'
+            )
+        if "You are the critic for a LocalScript/Lua generation pipeline." in prompt:
+            return '{"repairable":false,"issues":[],"minimal_actions":[]}'
+        return (
+            "local result = _utils.array.new()\n"
+            "local packages = wf.vars.packages or {}\n"
+            "for _, package in ipairs(packages) do\n"
+            "  table.insert(result, package.id)\n"
+            "end\n"
+            "return result"
+        )
+
+    def generate(self, prompt, context=None):
+        return self.complete(prompt)
+
+
 class RecallTimeOsBackend:
     def complete(self, prompt, response_format=None, model=None):
         if "You are the planner for a LocalScript/Lua generation pipeline." in prompt:
@@ -497,6 +521,33 @@ def test_engine_repairs_wrapped_scalar_return_shape(tmp_path):
 
     assert "return _utils.array.new" not in result.code
     assert result.code.endswith("return userEmail")
+    assert result.verification_errors == []
+    assert result.repair_rounds >= 1
+
+
+def test_engine_renames_local_package_without_weakening_namespace_guard(tmp_path):
+    engine = GenerationEngine(
+        profile=get_runtime_profile(),
+        trace_store=TraceStore(root=tmp_path / "traces"),
+        backend=PackageLoopVariableBackend(),
+    )
+
+    result = engine.generate(
+        prompt="Из wf.vars.packages верни массив id.",
+        context={
+            "wf": {
+                "vars": {
+                    "packages": [
+                        {"id": "P-1"},
+                        {"id": "P-2"},
+                    ]
+                }
+            }
+        },
+    )
+
+    assert "for _, package_item in" in result.code
+    assert "package." not in result.code
     assert result.verification_errors == []
     assert result.repair_rounds >= 1
 
