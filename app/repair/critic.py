@@ -31,7 +31,9 @@ class ValidationCritic:
     def build_plan(self, task_spec, validation_report, code=""):
         error_codes = validation_report.error_codes()
         actions = []
-        has_prefix = lambda prefix: any(error.startswith(prefix) for error in error_codes)
+        def has_prefix(prefix):
+            return any(error.startswith(prefix) for error in error_codes)
+
 
         if "markdown_fence_forbidden" in error_codes:
             actions.append(

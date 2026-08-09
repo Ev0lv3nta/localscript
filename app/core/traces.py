@@ -21,7 +21,6 @@ from app.core.storage import (
     validate_identifier,
 )
 
-
 DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 

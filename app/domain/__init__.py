@@ -7,7 +7,6 @@ from app.domain.outcomes import (
     ValidationStatus,
 )
 
-
 __all__ = [
     "Diagnostic",
     "DiagnosticSeverity",

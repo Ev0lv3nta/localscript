@@ -1,4 +1,4 @@
-from app.families.base import FamilyDefinition, FamilyFinding, FamilyModule, UNSUPPORTED
+from app.families.base import UNSUPPORTED, FamilyDefinition, FamilyFinding, FamilyModule
 from app.families.registry import (
     all_family_definitions,
     get_family_definition,

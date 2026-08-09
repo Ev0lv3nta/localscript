@@ -1,6 +1,6 @@
 UV ?= uv
 
-.PHONY: install lua-bootstrap lock-check license-check eval-integrity policy-check test test-unit \
+.PHONY: install lua-bootstrap lock-check license-check eval-integrity lint type-check quality-check policy-check test test-unit \
 	build package-check build-check container-check check smoke run
 
 install:
@@ -17,6 +17,14 @@ license-check:
 
 eval-integrity:
 	.venv/bin/python scripts/check_eval_integrity.py
+
+lint:
+	.venv/bin/ruff check .
+
+type-check:
+	.venv/bin/mypy
+
+quality-check: lint type-check
 
 policy-check: lock-check license-check
 
@@ -37,7 +45,7 @@ container-check:
 	docker build --tag localscript:ci .
 	./scripts/check_container.sh localscript:ci
 
-check: install policy-check eval-integrity test-unit build-check
+check: install quality-check policy-check eval-integrity test-unit build-check
 
 smoke:
 	./scripts/judge_smoke.sh

@@ -8,7 +8,6 @@ from app.core.config import get_runtime_profile
 from app.core.traces import TraceStore
 from app.main import create_app
 
-
 pytestmark = [pytest.mark.integration, pytest.mark.ollama, pytest.mark.gpu]
 
 

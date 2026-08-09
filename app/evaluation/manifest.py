@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 from app.core.resources import read_resource_text, resource_exists
 
-
 MANIFEST_RESOURCE = "evals/manifest.json"
 ALLOWED_CORPORA = frozenset({"public_benchmark", "regression"})
 ALLOWED_RUNNERS = frozenset({"standard", "rich"})

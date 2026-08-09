@@ -1,17 +1,17 @@
 import json
 from dataclasses import dataclass, field
 
-from app.families import get_family_definition
 from app.core.kb import build_rule_lines, select_critic_rules, select_examples
+from app.families import get_family_definition
 from app.generation.context_reducer import ContextReducer
-from app.generation.task_resolver import TaskResolver
-from app.validation.base import ValidationReport
 from app.generation.prompts import (
     build_critic_prompt,
     build_fixer_prompt,
     build_planner_prompt,
     build_writer_prompt,
 )
+from app.generation.task_resolver import TaskResolver
+from app.validation.base import ValidationReport
 
 
 @dataclass

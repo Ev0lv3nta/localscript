@@ -10,7 +10,6 @@ import zipfile
 from email.parser import Parser
 from pathlib import Path
 
-
 WHEEL_REQUIRED = {
     "app/resources/config/profiles/competition.yaml",
     "app/resources/kb/rules.yaml",

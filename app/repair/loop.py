@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from app.repair.canonical import CanonicalFamilyRepairer
 from app.repair.critic import ValidationCritic
 
-
 SHADOW_RENAME_RULES = {
     "table": {"replacement": "entry", "allowed_methods": ("insert", "concat", "sort", "remove", "unpack")},
     "string": {

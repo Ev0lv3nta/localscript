@@ -1,7 +1,6 @@
 import subprocess
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LUA = PROJECT_ROOT / ".tools/lua54/bin/lua"
 LUAC = PROJECT_ROOT / ".tools/lua54/bin/luac"
