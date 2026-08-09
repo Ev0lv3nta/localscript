@@ -1,7 +1,7 @@
-from contextlib import contextmanager
-from collections import Counter
-from datetime import datetime, timezone
 import hashlib
+from collections import Counter
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 
@@ -13,7 +13,6 @@ from app.core.traces import TraceStore
 from app.evaluation.manifest import dataset_specs
 from app.generation.engine import GenerationEngine
 from app.generation.ollama import OllamaBackend
-
 
 QUALITY_EVAL_MANIFEST = tuple(spec.evidence_dict() for spec in dataset_specs())
 
@@ -150,7 +149,9 @@ def _aggregate_metrics(case_results):
         model_call_durations.extend(item["model_call_durations_ms"])
         for stage, duration in item["milestone_intervals_ms"].items():
             milestone_values.setdefault(stage, []).append(duration)
-    rate = lambda numerator: round(float(numerator) / float(total), 4) if total else 0.0
+    def rate(numerator):
+        return round(float(numerator) / float(total), 4) if total else 0.0
+
     return {
         "syntax_pass_rate": rate(total - syntax_failures),
         "semantic_pass_rate": rate(total - semantic_failures),

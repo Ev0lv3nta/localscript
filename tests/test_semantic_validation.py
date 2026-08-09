@@ -1,10 +1,10 @@
-from app.core.public_eval import evaluate_case
 from app.core.config import get_runtime_profile
+from app.core.public_eval import evaluate_case
 from app.generation.extractor import TaskExtractor
 from app.generation.task_resolver import TaskResolver
 from app.generation.taskspec import TaskSpec
-from app.validation.runtime_executor import execute_output
 from app.validation.oracles import compare_expected_and_actual
+from app.validation.runtime_executor import execute_output
 from app.validation.validators import ValidationPipeline
 
 
@@ -58,11 +58,6 @@ def test_public_eval_catches_semantically_wrong_email_code():
 
 
 def test_semantic_executor_accepts_conditional_array_projection_code():
-    extractor = TaskExtractor()
-    task_spec = extractor.extract(
-        prompt="Из массива wf.vars.orders верни новый массив order_id только для заказов, где status равен paid и amount больше 1000.",
-        context={"wf": {"vars": {"orders": [{"order_id": "A", "status": "paid", "amount": 1500}, {"order_id": "B", "status": "draft", "amount": 900}]}}},
-    )
     code = (
         "local result = _utils.array.new()\n"
         "for _, item in ipairs(wf.vars.orders or {}) do\n"

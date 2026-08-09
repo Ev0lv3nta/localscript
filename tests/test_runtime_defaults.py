@@ -6,7 +6,6 @@ import yaml
 from app.core import config as config_module
 from app.core.resources import read_resource_text
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIMARY_MODEL = "qwen3:8b-q4_K_M"
 FALLBACK_MODEL = "qwen3:4b-instruct-2507-q4_K_M"

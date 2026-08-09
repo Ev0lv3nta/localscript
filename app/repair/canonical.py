@@ -1,7 +1,6 @@
 import json
 import re
 
-
 CANONICAL_REPAIR_ACTIONS = frozenset(
     {
         "rewrite_augment_existing_code_envelope",

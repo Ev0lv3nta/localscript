@@ -1,6 +1,6 @@
+import uuid
 from dataclasses import dataclass, field, replace
 from typing import List, Optional
-import uuid
 
 from app.core.sessions import SessionStore
 from app.core.verifier import verify_code
@@ -12,18 +12,17 @@ from app.domain.outcomes import (
     ValidationOutcome,
     ValidationStatus,
 )
-from app.generation.extractor import TaskExtractor
 from app.generation.backend_errors import BackendUnavailable
 from app.generation.candidates import GeneratedCandidate, PlannerClarification
 from app.generation.clarification import ClarificationPolicy
+from app.generation.context_reducer import ContextReducer
+from app.generation.extractor import TaskExtractor
 from app.generation.formatter import OutputFormatter
 from app.generation.model_chain import SameModelChain
-from app.generation.context_reducer import ContextReducer
-from app.generation.task_resolver import TaskResolver
 from app.generation.stages import GenerationExecution, GenerationStage
+from app.generation.task_resolver import TaskResolver
 from app.repair.loop import RepairLoop
 from app.validation.validators import ValidationPipeline
-
 
 SAFE_FALLBACK_CODE = "-- judged-safe fallback\nreturn nil"
 

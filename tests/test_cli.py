@@ -8,7 +8,6 @@ from app.core.benchmarks import QUALITY_EVAL_MANIFEST
 from app.generation.engine import GenerationResult
 from app.generation.ollama import OllamaBackend
 
-
 runner = CliRunner()
 
 

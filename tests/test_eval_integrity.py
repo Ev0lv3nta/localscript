@@ -1,9 +1,9 @@
+from app.core.public_eval import evaluate_case
 from app.evaluation.integrity import (
     _find_cross_corpus_overlaps,
     run_integrity_check,
 )
 from app.evaluation.manifest import dataset_specs, load_evaluation_manifest
-from app.core.public_eval import evaluate_case
 
 
 def test_eval_integrity_separates_public_and_regression_corpora():

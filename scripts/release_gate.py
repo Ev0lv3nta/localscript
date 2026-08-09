@@ -36,7 +36,6 @@ from app.core.runtime_lock import write_runtime_lock
 from app.evaluation.integrity import run_integrity_check
 from app.validation.validators import _find_lua_binary, _find_luac_binary
 
-
 DEFAULT_TIMEOUTS = {
     "pytest_live": 30 * 60,
     "doctor": 90 * 60,

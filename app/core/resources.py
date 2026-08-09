@@ -2,7 +2,6 @@ from contextlib import contextmanager
 from importlib import resources as importlib_resources
 from pathlib import PurePosixPath
 
-
 RESOURCE_PACKAGE = "app.resources"
 
 

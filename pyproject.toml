@@ -22,7 +22,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "mypy==2.3.0",
   "pytest==9.1.1",
+  "ruff==0.16.2",
 ]
 
 [project.scripts]
@@ -50,3 +52,26 @@ markers = [
   "ollama: tests that require a live Ollama backend",
   "gpu: tests that rely on the judged GPU runtime profile",
 ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = ["artifacts", "build", "dist", "third_party"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.11"
+files = [
+  "app/api/schemas.py",
+  "app/domain/outcomes.py",
+  "app/families/base.py",
+  "app/generation/taskspec.py",
+]
+plugins = ["pydantic.mypy"]
+show_error_codes = true
+warn_unused_configs = true

@@ -5,7 +5,6 @@ import os
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 PREFERRED_PYTHON = ROOT / ".venv" / "bin" / "python"
 PREFERRED_VENV = PREFERRED_PYTHON.parent.parent.resolve()

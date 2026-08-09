@@ -50,7 +50,6 @@ def evaluate_case(code, case):
 
     explicit_expected = case.get("expected_result")
     semantic_checks = case.get("semantic_checks") or []
-    case_type = _case_type(case)
     if _is_live_semantic_case(case):
         if explicit_expected is None and not semantic_checks:
             failures.append("dataset_missing_expected_result")

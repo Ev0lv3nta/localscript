@@ -11,7 +11,6 @@ from pathlib import Path
 
 from packaging.markers import Marker
 
-
 ALLOWED_SPDX = {
     "Apache-2.0 OR BSD-2-Clause",
     "Apache-2.0 OR MIT",
@@ -27,6 +26,7 @@ ALLOWED_SPDX = {
 LOCKED_LICENSES = {
     "annotated-doc": "MIT",
     "annotated-types": "MIT",
+    "ast-serialize": "MIT",
     "anyio": "MIT",
     "certifi": "MPL-2.0",
     "click": "BSD-3-Clause",
@@ -38,9 +38,13 @@ LOCKED_LICENSES = {
     "httpx": "BSD-3-Clause",
     "idna": "BSD-3-Clause",
     "iniconfig": "MIT",
+    "librt": "MIT",
     "markdown-it-py": "MIT",
     "mdurl": "MIT",
+    "mypy": "MIT",
+    "mypy-extensions": "MIT",
     "packaging": "Apache-2.0 OR BSD-2-Clause",
+    "pathspec": "MPL-2.0",
     "pluggy": "MIT",
     "pydantic": "MIT",
     "pydantic-core": "MIT",
@@ -50,6 +54,7 @@ LOCKED_LICENSES = {
     "python-dotenv": "BSD-3-Clause",
     "pyyaml": "MIT",
     "rich": "MIT",
+    "ruff": "MIT",
     "shellingham": "ISC",
     "sniffio": "Apache-2.0 OR MIT",
     "starlette": "BSD-3-Clause",
