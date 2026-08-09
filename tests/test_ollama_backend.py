@@ -247,16 +247,22 @@ def test_parallel_profile_caps_all_backend_io(monkeypatch):
     [
         (
             httpx.ConnectError(
-                "token=secret-password",
-                request=httpx.Request("GET", "http://user:secret@127.0.0.1/api/tags"),
+                "token=credential-secret-sentinel",
+                request=httpx.Request(
+                    "GET",
+                    "http://credential-user-sentinel:credential-secret-sentinel@127.0.0.1/api/tags",
+                ),
             ),
             BackendUnavailable,
             "transport_error",
         ),
         (
             httpx.ReadTimeout(
-                "token=secret-password",
-                request=httpx.Request("GET", "http://user:secret@127.0.0.1/api/tags"),
+                "token=credential-secret-sentinel",
+                request=httpx.Request(
+                    "GET",
+                    "http://credential-user-sentinel:credential-secret-sentinel@127.0.0.1/api/tags",
+                ),
             ),
             BackendTimeout,
             "request_timeout",
@@ -275,15 +281,15 @@ def test_transport_failures_are_typed_and_sanitized(
 
     assert exc_info.value.code.startswith("backend_")
     assert exc_info.value.reason == reason
-    assert "secret" not in str(exc_info.value)
-    assert "user" not in str(exc_info.value)
+    assert "credential-secret-sentinel" not in str(exc_info.value)
+    assert "credential-user-sentinel" not in str(exc_info.value)
     rendered = "".join(
         traceback.format_exception(
             type(exc_info.value), exc_info.value, exc_info.value.__traceback__
         )
     )
-    assert "secret" not in rendered
-    assert "user" not in rendered
+    assert "credential-secret-sentinel" not in rendered
+    assert "credential-user-sentinel" not in rendered
     backend.close()
 
 
