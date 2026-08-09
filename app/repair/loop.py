@@ -56,6 +56,8 @@ class MinimalRepairer:
                 repaired = self._normalize_scalar_return_shape(repaired)
             elif action.name == "rewrite_string_trim":
                 repaired = self._rewrite_string_trim(repaired)
+            elif action.name == "rewrite_array_contains":
+                repaired = self._rewrite_array_contains(repaired)
             elif action.name == "rewrite_datum_time_to_iso8601":
                 repaired = self._rewrite_datum_time_to_iso8601(task_spec)
             elif action.name == "rewrite_iso8601_to_epoch":
@@ -204,6 +206,20 @@ class MinimalRepairer:
             repaired,
         )
         return MinimalRepairer._normalize_scalar_return_shape(repaired)
+
+    @staticmethod
+    def _rewrite_array_contains(code):
+        return re.sub(
+            r"\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*contains\(([^()\n]+)\)",
+            lambda match: (
+                "(function() for _, candidate_value in ipairs({array_name} or {{}}) do "
+                "if candidate_value == {needle} then return true end end return false end)()"
+            ).format(
+                array_name=match.group(1),
+                needle=match.group(2).strip(),
+            ),
+            code,
+        )
 
     @staticmethod
     def _rewrite_iso8601_to_epoch(task_spec):

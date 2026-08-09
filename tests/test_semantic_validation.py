@@ -1,6 +1,8 @@
 from app.core.public_eval import evaluate_case
 from app.core.config import get_runtime_profile
 from app.generation.extractor import TaskExtractor
+from app.generation.task_resolver import TaskResolver
+from app.generation.taskspec import TaskSpec
 from app.validation.runtime_executor import execute_output
 from app.validation.validators import ValidationPipeline
 
@@ -135,3 +137,45 @@ def test_generic_semantic_validator_accepts_empty_array_behavior():
     )
 
     assert "generic_empty_array_behavior_mismatch" not in report.error_codes()
+
+
+def test_planner_family_without_extractor_hints_uses_generic_semantics():
+    context = {
+        "wf": {
+            "vars": {
+                "orders": [
+                    {"order_id": "A", "status": "paid", "amount": 1500},
+                    {"order_id": "B", "status": "draft", "amount": 900},
+                ]
+            }
+        }
+    }
+    candidate = TaskSpec(
+        normalized_prompt="верни order_id оплаченных заказов дороже 1000",
+        target_root="wf.vars",
+        context_paths=["wf.vars.orders"],
+    )
+    task_spec = TaskResolver().resolve(
+        candidate,
+        planner={"family": "conditional_array_projection", "root": "wf.vars"},
+    )
+    code = (
+        "local result = _utils.array.new()\n"
+        "for _, order in ipairs(wf.vars.orders or {}) do\n"
+        '  if order.status == "paid" and order.amount > 1000 then\n'
+        "    table.insert(result, order.order_id)\n"
+        "  end\n"
+        "end\n"
+        "return result"
+    )
+
+    report = ValidationPipeline().run(
+        code=code,
+        task_spec=task_spec,
+        profile=get_runtime_profile(),
+        source_context=context,
+        planner_semantic_checks=[{"kind": "array_equals", "value": ["A"]}],
+    )
+
+    assert "semantic_mismatch" not in report.error_codes()
+    assert report.error_codes() == []
