@@ -52,9 +52,7 @@ def utc_now():
 
 
 def timeout_for(name):
-    environment_name = "LOCALSCRIPT_RELEASE_{0}_TIMEOUT_SECONDS".format(
-        name.upper()
-    )
+    environment_name = "LOCALSCRIPT_RELEASE_{0}_TIMEOUT_SECONDS".format(name.upper())
     return int(os.getenv(environment_name, str(DEFAULT_TIMEOUTS[name])))
 
 
@@ -113,6 +111,50 @@ def json_payload(command_report):
             "reason": "invalid_json_output",
             "raw_stdout": command_report["stdout"],
         }
+
+
+def private_holdout_command_evidence(command_report):
+    """Keep execution metadata without publishing paths or raw benchmark output."""
+    allowed_fields = (
+        "name",
+        "timeout_seconds",
+        "started_at",
+        "finished_at",
+        "duration_seconds",
+        "returncode",
+        "timed_out",
+    )
+    return {field: command_report.get(field) for field in allowed_fields}
+
+
+def private_holdout_public_report(benchmark_report, integrity_report):
+    """Reduce private benchmark evidence to identity and aggregate results."""
+    identity = integrity_report.get("private_holdout") or {}
+    error_categories = set()
+    for observation in benchmark_report.get("case_results") or []:
+        if not isinstance(observation, dict):
+            continue
+        for error in observation.get("errors") or []:
+            if isinstance(error, str) and error:
+                error_categories.add(error.split("::", 1)[0])
+
+    return {
+        "name": identity.get("name"),
+        "sha256": identity.get("sha256"),
+        "case_count": identity.get("case_count"),
+        "backend_type": benchmark_report.get("backend_type"),
+        "passed": benchmark_report.get("passed"),
+        "failed": benchmark_report.get("failed"),
+        "ok": benchmark_report.get("ok") is True,
+        "metrics": (
+            benchmark_report.get("metrics")
+            if isinstance(benchmark_report.get("metrics"), dict)
+            else {}
+        ),
+        "error_categories": sorted(error_categories),
+        "started_at": benchmark_report.get("started_at"),
+        "finished_at": benchmark_report.get("finished_at"),
+    }
 
 
 def sha256_path(path):
@@ -177,8 +219,7 @@ def ollama_evidence(profile, selected_model):
             (
                 item
                 for item in tags
-                if item.get("name") == selected_model
-                or item.get("model") == selected_model
+                if item.get("name") == selected_model or item.get("model") == selected_model
             ),
             None,
         )
@@ -292,12 +333,8 @@ def main(argv=None):
     started_at = utc_now()
     python_bin = PREFERRED_PYTHON if PREFERRED_PYTHON.exists() else Path(sys.executable)
     profile = get_runtime_profile()
-    private_holdout_path = args.private_holdout or os.getenv(
-        "LOCALSCRIPT_PRIVATE_HOLDOUT_PATH"
-    )
-    integrity_report = run_integrity_check(
-        private_holdout_path=private_holdout_path
-    )
+    private_holdout_path = args.private_holdout or os.getenv("LOCALSCRIPT_PRIVATE_HOLDOUT_PATH")
+    integrity_report = run_integrity_check(private_holdout_path=private_holdout_path)
     source_evidence = git_evidence()
     preflight_failures = []
     if args.mode == "competition" and private_holdout_path is None:
@@ -374,6 +411,7 @@ def main(argv=None):
     selected_model = doctor_report.get("selected_model") or profile.model
     private_holdout = None
     private_holdout_report = None
+    private_holdout_public_evidence = None
     if private_holdout_path is not None:
         private_holdout = run_command(
             "private_holdout",
@@ -389,6 +427,10 @@ def main(argv=None):
             extra_env={"LOCALSCRIPT_PRIMARY_MODEL": selected_model},
         )
         private_holdout_report = json_payload(private_holdout)
+        private_holdout_public_evidence = private_holdout_public_report(
+            private_holdout_report,
+            integrity_report,
+        )
 
     repeat_stability = run_command(
         "repeat_stability",
@@ -449,24 +491,17 @@ def main(argv=None):
     if latency["returncode"] != 0 or latency_report.get("ok") is not True:
         failures.append("latency_failed")
     if private_holdout_path is not None and (
-        private_holdout["returncode"] != 0
-        or private_holdout_report.get("ok") is not True
+        private_holdout["returncode"] != 0 or private_holdout_report.get("ok") is not True
     ):
         failures.append("private_holdout_failed")
-    if (
-        repeat_stability["returncode"] != 0
-        or repeat_stability_report.get("ok") is not True
-    ):
+    if repeat_stability["returncode"] != 0 or repeat_stability_report.get("ok") is not True:
         failures.append("repeat_stability_failed")
     full_ablation_metrics = (
-        ablation_report.get("profiles", {})
-        .get("full_pipeline", {})
-        .get("metrics", {})
+        ablation_report.get("profiles", {}).get("full_pipeline", {}).get("metrics", {})
     )
     if (
         ablation["returncode"] != 0
-        or full_ablation_metrics.get("verified_cases")
-        != ablation_report.get("case_count")
+        or full_ablation_metrics.get("verified_cases") != ablation_report.get("case_count")
         or full_ablation_metrics.get("invalid_success_count") != 0
     ):
         failures.append("ablation_failed")
@@ -485,9 +520,7 @@ def main(argv=None):
         luac = {"available": False}
         ollama = {"reachable": False}
         gpu = {"available": False, "gpus": []}
-        failures.append(
-            "evidence_collection_failed::{0}::{1}".format(type(exc).__name__, exc)
-        )
+        failures.append("evidence_collection_failed::{0}::{1}".format(type(exc).__name__, exc))
     if not lua.get("available"):
         failures.append("lua_identity_missing")
     if not luac.get("available"):
@@ -527,18 +560,12 @@ def main(argv=None):
             "profile": profile.model_dump(),
             "public_benchmark_repeats": 3,
             "private_holdout_repeats": 1,
-            "timeouts_seconds": {
-                name: timeout_for(name) for name in DEFAULT_TIMEOUTS
-            },
+            "timeouts_seconds": {name: timeout_for(name) for name in DEFAULT_TIMEOUTS},
             "mandatory_eval_sets": [
-                entry["name"]
-                for entry in QUALITY_EVAL_MANIFEST
-                if entry["gate"] == "required"
+                entry["name"] for entry in QUALITY_EVAL_MANIFEST if entry["gate"] == "required"
             ],
             "diagnostic_eval_sets": [
-                entry["name"]
-                for entry in QUALITY_EVAL_MANIFEST
-                if entry["gate"] == "diagnostic"
+                entry["name"] for entry in QUALITY_EVAL_MANIFEST if entry["gate"] == "diagnostic"
             ],
         },
         "runtime": {
@@ -564,7 +591,11 @@ def main(argv=None):
             "doctor": doctor,
             "smoke": smoke,
             "latency": latency,
-            "private_holdout": private_holdout,
+            "private_holdout": (
+                private_holdout_command_evidence(private_holdout)
+                if private_holdout is not None
+                else None
+            ),
             "repeat_stability": repeat_stability,
             "ablation": ablation,
         },
@@ -572,7 +603,7 @@ def main(argv=None):
         "doctor_report": doctor_report,
         "smoke_report": smoke_report,
         "latency_report": latency_report,
-        "private_holdout_report": private_holdout_report,
+        "private_holdout_report": private_holdout_public_evidence,
         "repeat_stability_report": repeat_stability_report,
         "ablation_report": ablation_report,
         "vram_report": vram_report,
