@@ -59,3 +59,4 @@ LOCALSCRIPT_PRIVATE_HOLDOUT_PATH=/safe/external/holdout-v1.jsonl \
 ```
 
 Tag и GitHub Release создаются только если report содержит `ok: true`, пустой `failures`, точный SHA кандидата и `locked: true` runtime snapshot.
+Закрытый holdout запускается последним, только после успешных публичных live-проверок. Gate повторно сверяет SHA-256 и число фактически обработанных кейсов с manifest; публичный JSON не содержит сырые результаты или локальные пути.

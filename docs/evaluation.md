@@ -53,7 +53,7 @@ validation codes, стадии и время. Для закрытого holdout 
 - GPU и доступную память;
 - параметры runtime-профиля;
 - результаты integration tests, doctor, smoke, latency, public repeats, ablation и private holdout;
-- stdout/stderr, return code и длительность каждой команды;
+- return code, длительность и временные метки каждой команды без сырых stdout/stderr и локальных путей;
 - полный список hard-gate failures.
 
 Успешный runtime snapshot получает `locked: true` только после всех проверок. Evidence прикладывается к GitHub Release с именем, содержащим релиз и короткий SHA.

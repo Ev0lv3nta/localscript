@@ -4,13 +4,13 @@ from time import perf_counter
 from app.core.benchmarks import (
     InstrumentedBackend,
     _backend_type,
+    _load_cases_snapshot,
     _materialized_dataset,
     _percentile,
-    _sha256_path,
 )
 from app.core.config import get_runtime_profile
 from app.core.kb import build_rule_lines, select_examples
-from app.core.public_eval import evaluate_case, load_cases
+from app.core.public_eval import evaluate_case
 from app.core.state import get_state_root
 from app.core.traces import TraceStore
 from app.core.verifier import verify_code
@@ -335,8 +335,7 @@ def run_ablation_benchmark(dataset_path, profile=None, backend=None):
     runner = AblationRunner(runtime_profile, runtime_backend)
     started_at = datetime.now(timezone.utc).isoformat()
     with _materialized_dataset(dataset_path) as (resolved_path, display_path):
-        cases = load_cases(resolved_path)
-        dataset_sha256 = _sha256_path(resolved_path)
+        cases, dataset_sha256 = _load_cases_snapshot(resolved_path)
         case_matrix = [runner.run_case(case) for case in cases]
 
     profiles = {}
