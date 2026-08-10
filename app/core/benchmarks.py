@@ -6,7 +6,7 @@ from pathlib import Path
 from time import perf_counter
 
 from app.core.config import PROJECT_ROOT, get_runtime_profile
-from app.core.public_eval import evaluate_case, load_cases
+from app.core.public_eval import evaluate_case, load_cases_bytes
 from app.core.resources import materialized_resource, resource_exists
 from app.core.state import get_state_root
 from app.core.traces import TraceStore
@@ -58,12 +58,9 @@ class InstrumentedBackend:
             )
 
 
-def _sha256_path(dataset_path):
-    digest = hashlib.sha256()
-    with Path(dataset_path).open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _load_cases_snapshot(dataset_path):
+    payload = Path(dataset_path).read_bytes()
+    return load_cases_bytes(payload), hashlib.sha256(payload).hexdigest()
 
 
 def _percentile(values, percentile):
@@ -291,8 +288,7 @@ def run_dataset_benchmark(dataset_path, profile=None, backend=None):
     instrumented_backend = InstrumentedBackend(runtime_backend)
     started_at = datetime.now(timezone.utc).isoformat()
     with _materialized_dataset(dataset_path) as (resolved_dataset_path, display_path):
-        cases = load_cases(resolved_dataset_path)
-        dataset_sha256 = _sha256_path(resolved_dataset_path)
+        cases, dataset_sha256 = _load_cases_snapshot(resolved_dataset_path)
         trace_store = TraceStore(root=get_state_root() / "traces" / "benchmarks")
         engine = GenerationEngine(
             profile=runtime_profile,
@@ -349,8 +345,7 @@ def run_rich_dataset_benchmark(dataset_path, profile=None, backend=None):
     instrumented_backend = InstrumentedBackend(runtime_backend)
     started_at = datetime.now(timezone.utc).isoformat()
     with _materialized_dataset(dataset_path) as (resolved_dataset_path, display_path):
-        cases = load_cases(resolved_dataset_path)
-        dataset_sha256 = _sha256_path(resolved_dataset_path)
+        cases, dataset_sha256 = _load_cases_snapshot(resolved_dataset_path)
         trace_store = TraceStore(root=get_state_root() / "traces" / "benchmarks")
         engine = GenerationEngine(
             profile=runtime_profile,
