@@ -28,9 +28,7 @@ def _quality_report(diagnostic_ok=False):
         "ok": True,
     }
     for entry in QUALITY_EVAL_MANIFEST:
-        report[entry["name"]] = {
-            "ok": True if entry["gate"] == "required" else diagnostic_ok
-        }
+        report[entry["name"]] = {"ok": True if entry["gate"] == "required" else diagnostic_ok}
     return report
 
 
@@ -111,9 +109,7 @@ def test_quality_manifest_gates_every_mandatory_set_but_not_diagnostics():
 
     assert quality_gate_failures(report) == []
     assert "large_context_eval" in [
-        entry["name"]
-        for entry in QUALITY_EVAL_MANIFEST
-        if entry["gate"] == "required"
+        entry["name"] for entry in QUALITY_EVAL_MANIFEST if entry["gate"] == "required"
     ]
 
     report["large_context_eval"]["ok"] = False
@@ -173,9 +169,7 @@ def test_release_gate_rejects_missing_private_holdout_before_expensive_commands(
     )
 
     with pytest.raises(SystemExit):
-        release_gate.main(
-            ["--mode", "competition", "--output", str(output)]
-        )
+        release_gate.main(["--mode", "competition", "--output", str(output)])
 
     report = json.loads(output.read_text(encoding="utf-8"))
     runtime_lock = json.loads(lock_path.read_text(encoding="utf-8"))
@@ -184,9 +178,7 @@ def test_release_gate_rejects_missing_private_holdout_before_expensive_commands(
     assert runtime_lock["locked"] is False
 
 
-def test_release_gate_writes_sha_bound_artifact_and_runs_quality_once(
-    monkeypatch, tmp_path
-):
+def test_release_gate_writes_sha_bound_artifact_and_runs_quality_once(monkeypatch, tmp_path):
     quality_report = _quality_report(diagnostic_ok=False)
     doctor_report = {
         "ok": True,
@@ -231,6 +223,30 @@ def test_release_gate_writes_sha_bound_artifact_and_runs_quality_once(
                                 }
                             }
                         },
+                    },
+                )
+            if name == "private_holdout":
+                return _command_report(
+                    name,
+                    {
+                        "dataset": "/private/holdout-v1.jsonl",
+                        "dataset_sha256": "sha256:holdout",
+                        "backend_type": "live_ollama",
+                        "total": 8,
+                        "passed": 8,
+                        "failed": 0,
+                        "ok": True,
+                        "failures": [],
+                        "case_results": [
+                            {
+                                "id": "secret-case-id",
+                                "passed": True,
+                                "errors": [],
+                            }
+                        ],
+                        "metrics": {"invalid_success_count": 0},
+                        "started_at": "2026-07-27T00:00:00+00:00",
+                        "finished_at": "2026-07-27T00:00:01+00:00",
                     },
                 )
             return _command_report(name, {"ok": True})
@@ -286,11 +302,35 @@ def test_release_gate_writes_sha_bound_artifact_and_runs_quality_once(
     ]
     assert json.loads(output.read_text(encoding="utf-8"))["ok"] is True
     assert json.loads(lock_path.read_text(encoding="utf-8"))["locked"] is True
+    serialized_artifact = output.read_text(encoding="utf-8")
+    assert str(tmp_path / "holdout-v1.jsonl") not in serialized_artifact
+    assert "/private/holdout-v1.jsonl" not in serialized_artifact
+    assert "secret-case-id" not in serialized_artifact
+    assert report["commands"]["private_holdout"] == {
+        "name": "private_holdout",
+        "timeout_seconds": 10,
+        "started_at": "2026-07-27T00:00:00+00:00",
+        "finished_at": "2026-07-27T00:00:01+00:00",
+        "duration_seconds": 1.0,
+        "returncode": 0,
+        "timed_out": False,
+    }
+    assert report["private_holdout_report"] == {
+        "name": "holdout_v1",
+        "sha256": "sha256:holdout",
+        "case_count": 8,
+        "backend_type": "live_ollama",
+        "passed": 8,
+        "failed": 0,
+        "ok": True,
+        "metrics": {"invalid_success_count": 0},
+        "error_categories": [],
+        "started_at": "2026-07-27T00:00:00+00:00",
+        "finished_at": "2026-07-27T00:00:01+00:00",
+    }
 
 
-def test_release_gate_failure_writes_unlocked_runtime_snapshot(
-    monkeypatch, tmp_path
-):
+def test_release_gate_failure_writes_unlocked_runtime_snapshot(monkeypatch, tmp_path):
     quality_report = _quality_report()
     quality_report["large_context_eval"]["ok"] = False
     quality_report["ok"] = False
