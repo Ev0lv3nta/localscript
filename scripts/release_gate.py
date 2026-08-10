@@ -46,6 +46,29 @@ DEFAULT_TIMEOUTS = {
     "ablation": 90 * 60,
 }
 
+PRIVATE_HOLDOUT_SCALAR_METRICS = frozenset(
+    {
+        "syntax_pass_rate",
+        "semantic_pass_rate",
+        "verified_completion_rate",
+        "invalid_success_rate",
+        "invalid_success_count",
+        "repair_attempt_count",
+        "repair_rescue_count",
+        "repair_rescue_rate",
+        "degraded_count",
+        "backend_calls_total",
+        "backend_calls_mean",
+        "model_duration_ms_total",
+    }
+)
+PRIVATE_HOLDOUT_NESTED_METRICS = {
+    "model_call_latency_ms": frozenset({"p50", "p95"}),
+    "latency_ms": frozenset(
+        {"cold_first", "warm_p50", "warm_p95", "overall_p50", "overall_p95"}
+    ),
+}
+
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
@@ -103,18 +126,41 @@ def run_command(name, command, cwd, extra_env=None):
 
 def json_payload(command_report):
     try:
-        return json.loads(command_report["stdout"] or "{}")
+        payload = json.loads(command_report["stdout"] or "{}")
     except json.JSONDecodeError:
         return {
             "ok": False,
             "status": "error",
             "reason": "invalid_json_output",
-            "raw_stdout": command_report["stdout"],
         }
+    if not isinstance(payload, dict):
+        return {
+            "ok": False,
+            "status": "error",
+            "reason": "invalid_json_shape",
+        }
+    return payload
 
 
-def private_holdout_command_evidence(command_report):
-    """Keep execution metadata without publishing paths or raw benchmark output."""
+def _redact_local_paths(value):
+    if isinstance(value, str):
+        redacted = value
+        for path, replacement in (
+            (str(ROOT), "<project>"),
+            (str(Path.home()), "<home>"),
+        ):
+            if path:
+                redacted = redacted.replace(path, replacement)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_local_paths(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_local_paths(item) for key, item in value.items()}
+    return value
+
+
+def command_public_evidence(command_report):
+    """Keep execution metadata without publishing paths or raw command output."""
     allowed_fields = (
         "name",
         "timeout_seconds",
@@ -127,6 +173,216 @@ def private_holdout_command_evidence(command_report):
     return {field: command_report.get(field) for field in allowed_fields}
 
 
+def private_holdout_validation_failures(benchmark_report, integrity_report):
+    identity = integrity_report.get("private_holdout") or {}
+    failures = []
+    if identity.get("ok") is not True:
+        failures.append("private_holdout_integrity_not_verified")
+    if benchmark_report.get("dataset_sha256") != identity.get("sha256"):
+        failures.append("private_holdout_identity_mismatch")
+    expected_count = identity.get("case_count")
+    total = benchmark_report.get("total")
+    passed = benchmark_report.get("passed")
+    failed = benchmark_report.get("failed")
+    if total != expected_count:
+        failures.append("private_holdout_case_count_mismatch")
+    if benchmark_report.get("backend_type") != "live_ollama":
+        failures.append("private_holdout_backend_not_live_ollama")
+    valid_counts = all(type(value) is int for value in (total, passed, failed))
+    if (
+        not valid_counts
+        or passed + failed != total
+        or passed != expected_count
+        or failed != 0
+    ):
+        failures.append("private_holdout_result_counts_invalid")
+    metrics = benchmark_report.get("metrics")
+    invalid_success_count = (
+        metrics.get("invalid_success_count") if isinstance(metrics, dict) else None
+    )
+    if type(invalid_success_count) is not int or invalid_success_count != 0:
+        failures.append("private_holdout_invalid_success_detected")
+    report_schema_valid = (
+        benchmark_report.get("schema_version") == 2
+        and benchmark_report.get("ok") is True
+        and isinstance(benchmark_report.get("failures"), list)
+        and not benchmark_report.get("failures")
+        and isinstance(metrics, dict)
+        and type(metrics.get("verified_completion_rate")) in {int, float}
+        and metrics.get("verified_completion_rate") == 1.0
+        and type(metrics.get("invalid_success_rate")) in {int, float}
+        and metrics.get("invalid_success_rate") == 0.0
+    )
+    observations = benchmark_report.get("case_results")
+    if not isinstance(observations, list) or not valid_counts or len(observations) != total:
+        report_schema_valid = False
+    else:
+        case_ids = []
+        for observation in observations:
+            if not isinstance(observation, dict):
+                report_schema_valid = False
+                break
+            case_id = observation.get("id")
+            if (
+                not isinstance(case_id, str)
+                or not case_id
+                or observation.get("passed") is not True
+                or observation.get("errors") != []
+            ):
+                report_schema_valid = False
+                break
+            case_ids.append(case_id)
+        if len(case_ids) != len(set(case_ids)):
+            report_schema_valid = False
+    if not report_schema_valid:
+        failures.append("private_holdout_report_schema_invalid")
+    return failures
+
+
+def _private_holdout_metrics(metrics):
+    if not isinstance(metrics, dict):
+        return {}
+    public_metrics = {
+        key: value
+        for key, value in metrics.items()
+        if key in PRIVATE_HOLDOUT_SCALAR_METRICS
+        and (value is None or type(value) in {int, float})
+    }
+    for section, allowed_fields in PRIVATE_HOLDOUT_NESTED_METRICS.items():
+        values = metrics.get(section)
+        if not isinstance(values, dict):
+            continue
+        public_metrics[section] = {
+            key: value
+            for key, value in values.items()
+            if key in allowed_fields and (value is None or type(value) in {int, float})
+        }
+    return public_metrics
+
+
+def _private_holdout_error_category(error):
+    if not isinstance(error, str) or not error:
+        return None
+    category = error.split("::", 1)[0].lower()
+    buckets = (
+        ("syntax", ("syntax", "lua_load")),
+        ("semantic", ("semantic",)),
+        ("contract", ("contract", "shape", "structure", "format")),
+        ("oracle", ("oracle", "expected_result")),
+        ("strategy", ("strategy",)),
+        ("backend", ("backend", "model", "ollama", "timeout")),
+        ("policy", ("policy", "forbidden", "security")),
+    )
+    for bucket, markers in buckets:
+        if any(marker in category for marker in markers):
+            return bucket
+    return "other"
+
+
+def evaluation_integrity_public_report(integrity_report):
+    private_identity = integrity_report.get("private_holdout")
+    if isinstance(private_identity, dict):
+        private_identity = {
+            key: private_identity.get(key)
+            for key in ("name", "case_count", "sha256", "ok")
+        }
+        error_category = _private_holdout_error_category(
+            (integrity_report.get("private_holdout") or {}).get("error")
+        )
+        if error_category:
+            private_identity["error_category"] = error_category
+
+    error_categories = sorted(
+        {
+            category
+            for error in integrity_report.get("errors") or []
+            if (category := _private_holdout_error_category(error))
+        }
+    )
+    overlap_kinds = {}
+    for finding in integrity_report.get("overlaps") or []:
+        kind = finding.get("kind") if isinstance(finding, dict) else None
+        safe_kind = kind if kind in {"normalized_exact", "fuzzy"} else "other"
+        overlap_kinds[safe_kind] = overlap_kinds.get(safe_kind, 0) + 1
+
+    public_datasets = []
+    for dataset in integrity_report.get("datasets") or []:
+        if not isinstance(dataset, dict):
+            continue
+        logical_path = dataset.get("path")
+        if (
+            not isinstance(logical_path, str)
+            or Path(logical_path).is_absolute()
+            or ".." in Path(logical_path).parts
+        ):
+            logical_path = None
+        public_datasets.append(
+            {
+                "name": dataset.get("name") if isinstance(dataset.get("name"), str) else None,
+                "path": logical_path,
+                "corpus": (
+                    dataset.get("corpus")
+                    if dataset.get("corpus") in {"public_benchmark", "regression"}
+                    else None
+                ),
+                "runner": (
+                    dataset.get("runner")
+                    if dataset.get("runner") in {"standard", "rich"}
+                    else None
+                ),
+                "gate": (
+                    dataset.get("gate")
+                    if dataset.get("gate") in {"required", "diagnostic"}
+                    else None
+                ),
+                "claim_scope": (
+                    dataset.get("claim_scope")
+                    if isinstance(dataset.get("claim_scope"), str)
+                    else None
+                ),
+                "case_count": (
+                    dataset.get("case_count")
+                    if type(dataset.get("case_count")) is int
+                    else None
+                ),
+                "sha256": (
+                    dataset.get("sha256")
+                    if isinstance(dataset.get("sha256"), str)
+                    and len(dataset.get("sha256")) == 64
+                    else None
+                ),
+            }
+        )
+
+    return {
+        "schema_version": integrity_report.get("schema_version"),
+        "ok": integrity_report.get("ok") is True,
+        "error_categories": error_categories,
+        "datasets": public_datasets,
+        "private_holdout": private_identity,
+        "overlap_count": sum(overlap_kinds.values()),
+        "overlap_kinds": overlap_kinds,
+        "fuzzy_threshold": integrity_report.get("fuzzy_threshold"),
+    }
+
+
+def doctor_public_report(report):
+    return {
+        "profile": report.get("profile"),
+        "model": report.get("model"),
+        "fallback_model": report.get("fallback_model"),
+        "trace_dir_writable": report.get("trace_dir_writable") is True,
+        "ollama_reachable": report.get("ollama_reachable") is True,
+        "judge_mode": report.get("judge_mode") is True,
+        "selected_model": report.get("selected_model"),
+        "selection_reason": report.get("selection_reason"),
+        "available_tags": report.get("available_tags") or [],
+        "hard_gate_failures": report.get("hard_gate_failures") or [],
+        "ok": report.get("ok") is True,
+        "runtime_snapshot": "runtime_profile.lock.json",
+    }
+
+
 def private_holdout_public_report(benchmark_report, integrity_report):
     """Reduce private benchmark evidence to identity and aggregate results."""
     identity = integrity_report.get("private_holdout") or {}
@@ -135,25 +391,42 @@ def private_holdout_public_report(benchmark_report, integrity_report):
         if not isinstance(observation, dict):
             continue
         for error in observation.get("errors") or []:
-            if isinstance(error, str) and error:
-                error_categories.add(error.split("::", 1)[0])
+            category = _private_holdout_error_category(error)
+            if category:
+                error_categories.add(category)
+
+    validation_failures = private_holdout_validation_failures(
+        benchmark_report,
+        integrity_report,
+    )
 
     return {
         "name": identity.get("name"),
         "sha256": identity.get("sha256"),
         "case_count": identity.get("case_count"),
-        "backend_type": benchmark_report.get("backend_type"),
-        "passed": benchmark_report.get("passed"),
-        "failed": benchmark_report.get("failed"),
-        "ok": benchmark_report.get("ok") is True,
-        "metrics": (
-            benchmark_report.get("metrics")
-            if isinstance(benchmark_report.get("metrics"), dict)
-            else {}
+        "backend_type": (
+            "live_ollama"
+            if benchmark_report.get("backend_type") == "live_ollama"
+            else "unexpected"
         ),
+        "passed": (
+            benchmark_report.get("passed")
+            if type(benchmark_report.get("passed")) is int
+            else None
+        ),
+        "failed": (
+            benchmark_report.get("failed")
+            if type(benchmark_report.get("failed")) is int
+            else None
+        ),
+        "identity_verified": not {
+            "private_holdout_integrity_not_verified",
+            "private_holdout_identity_mismatch",
+            "private_holdout_case_count_mismatch",
+        }.intersection(validation_failures),
+        "ok": benchmark_report.get("ok") is True and not validation_failures,
+        "metrics": _private_holdout_metrics(benchmark_report.get("metrics")),
         "error_categories": sorted(error_categories),
-        "started_at": benchmark_report.get("started_at"),
-        "finished_at": benchmark_report.get("finished_at"),
     }
 
 
@@ -194,10 +467,10 @@ def command_identity(command):
         )
         version = (completed.stdout or completed.stderr).strip()
     except (OSError, subprocess.SubprocessError) as exc:
-        version = "unavailable: {0}".format(exc)
+        version = "unavailable: {0}".format(type(exc).__name__)
     return {
         "available": path.is_file(),
-        "path": str(path),
+        "executable": path.name,
         "version": version,
         "sha256": sha256_path(path) if path.is_file() else None,
     }
@@ -232,7 +505,7 @@ def ollama_evidence(profile, selected_model):
                 "details": model.get("details"),
             }
     except Exception as exc:
-        evidence["error"] = "{0}: {1}".format(type(exc).__name__, exc)
+        evidence["error"] = type(exc).__name__
     return evidence
 
 
@@ -301,7 +574,7 @@ def gpu_evidence():
         return {
             "available": False,
             "gpus": [],
-            "error": "{0}: {1}".format(type(error).__name__, error),
+            "error": type(error).__name__,
         }
 
 
@@ -331,11 +604,61 @@ def parse_args(argv):
 def main(argv=None):
     args = parse_args(sys.argv[1:] if argv is None else argv)
     started_at = utc_now()
+    write_runtime_lock(
+        {
+            "locked": False,
+            "profile": None,
+            "artifact_role": "release_gate_runtime_snapshot",
+            "generated_by": "scripts/release_gate.py --mode {0}".format(args.mode),
+            "release_gate_commit_sha": None,
+            "hard_gate_failures": ["release_gate_initializing"],
+        }
+    )
     python_bin = PREFERRED_PYTHON if PREFERRED_PYTHON.exists() else Path(sys.executable)
     profile = get_runtime_profile()
     private_holdout_path = args.private_holdout or os.getenv("LOCALSCRIPT_PRIVATE_HOLDOUT_PATH")
-    integrity_report = run_integrity_check(private_holdout_path=private_holdout_path)
     source_evidence = git_evidence()
+    runtime_lock_path = write_runtime_lock(
+        {
+            "locked": False,
+            "profile": profile.name,
+            "artifact_role": "release_gate_runtime_snapshot",
+            "generated_by": "scripts/release_gate.py --mode {0}".format(args.mode),
+            "release_gate_commit_sha": source_evidence.get("commit_sha"),
+            "hard_gate_failures": ["release_gate_in_progress"],
+        }
+    )
+    try:
+        integrity_report = run_integrity_check(private_holdout_path=private_holdout_path)
+    except Exception as exc:
+        failures = ["eval_integrity_error::{0}".format(type(exc).__name__)]
+        runtime_lock_path = write_runtime_lock(
+            {
+                "locked": False,
+                "profile": profile.name,
+                "artifact_role": "release_gate_runtime_snapshot",
+                "generated_by": "scripts/release_gate.py --mode {0}".format(args.mode),
+                "release_gate_commit_sha": source_evidence.get("commit_sha"),
+                "hard_gate_failures": failures,
+            }
+        )
+        report = {
+            "schema_version": 2,
+            "mode": args.mode,
+            "ok": False,
+            "failures": failures,
+            "started_at": started_at,
+            "finished_at": utc_now(),
+            "source": source_evidence,
+            "runtime_snapshot_path": runtime_lock_path.name,
+            "evaluation_integrity": None,
+            "preflight_only": True,
+        }
+        if args.output:
+            write_json(args.output, report)
+        print(json.dumps(report, ensure_ascii=False))
+        raise SystemExit(1)
+
     preflight_failures = []
     if args.mode == "competition" and private_holdout_path is None:
         preflight_failures.append("private_holdout_not_supplied")
@@ -364,8 +687,8 @@ def main(argv=None):
             "started_at": started_at,
             "finished_at": utc_now(),
             "source": source_evidence,
-            "runtime_snapshot_path": str(runtime_lock_path),
-            "evaluation_integrity": integrity_report,
+            "runtime_snapshot_path": runtime_lock_path.name,
+            "evaluation_integrity": evaluation_integrity_public_report(integrity_report),
             "preflight_only": True,
         }
         if args.output:
@@ -412,25 +735,7 @@ def main(argv=None):
     private_holdout = None
     private_holdout_report = None
     private_holdout_public_evidence = None
-    if private_holdout_path is not None:
-        private_holdout = run_command(
-            "private_holdout",
-            [
-                str(python_bin),
-                "-m",
-                "app.cli.main",
-                "benchmark",
-                "--dataset",
-                str(private_holdout_path),
-            ],
-            ROOT,
-            extra_env={"LOCALSCRIPT_PRIMARY_MODEL": selected_model},
-        )
-        private_holdout_report = json_payload(private_holdout)
-        private_holdout_public_evidence = private_holdout_public_report(
-            private_holdout_report,
-            integrity_report,
-        )
+    private_holdout_validation_errors = []
 
     repeat_stability = run_command(
         "repeat_stability",
@@ -475,6 +780,52 @@ def main(argv=None):
     )
     latency_report = json_payload(latency)
 
+    full_ablation_metrics = (
+        ablation_report.get("profiles", {}).get("full_pipeline", {}).get("metrics", {})
+    )
+    private_holdout_preconditions_ok = (
+        live_tests["returncode"] == 0
+        and doctor["returncode"] == 0
+        and doctor_report.get("ok") is True
+        and not quality_gate_failures(quality_report)
+        and quality_report.get("backend_type") == "live_ollama"
+        and (args.mode != "competition" or vram_report.get("status") == "ok")
+        and repeat_stability["returncode"] == 0
+        and repeat_stability_report.get("ok") is True
+        and ablation["returncode"] == 0
+        and full_ablation_metrics.get("verified_cases")
+        == ablation_report.get("case_count")
+        and full_ablation_metrics.get("invalid_success_count") == 0
+        and smoke["returncode"] == 0
+        and smoke_report.get("ok") is True
+        and latency["returncode"] == 0
+        and latency_report.get("ok") is True
+        and doctor_lock.get("locked") is True
+    )
+    if private_holdout_path is not None and private_holdout_preconditions_ok:
+        private_holdout = run_command(
+            "private_holdout",
+            [
+                str(python_bin),
+                "-m",
+                "app.cli.main",
+                "benchmark",
+                "--dataset",
+                str(private_holdout_path),
+            ],
+            ROOT,
+            extra_env={"LOCALSCRIPT_PRIMARY_MODEL": selected_model},
+        )
+        private_holdout_report = json_payload(private_holdout)
+        private_holdout_public_evidence = private_holdout_public_report(
+            private_holdout_report,
+            integrity_report,
+        )
+        private_holdout_validation_errors = private_holdout_validation_failures(
+            private_holdout_report,
+            integrity_report,
+        )
+
     commit_sha = source_evidence["commit_sha"]
     failures = []
     if live_tests["returncode"] != 0:
@@ -490,15 +841,17 @@ def main(argv=None):
         failures.append("smoke_failed")
     if latency["returncode"] != 0 or latency_report.get("ok") is not True:
         failures.append("latency_failed")
-    if private_holdout_path is not None and (
-        private_holdout["returncode"] != 0 or private_holdout_report.get("ok") is not True
-    ):
-        failures.append("private_holdout_failed")
+    if private_holdout_path is not None:
+        if private_holdout is None:
+            failures.append("private_holdout_not_run_due_to_public_failures")
+        elif (
+            private_holdout["returncode"] != 0
+            or private_holdout_report.get("ok") is not True
+        ):
+            failures.append("private_holdout_failed")
+    failures.extend(private_holdout_validation_errors)
     if repeat_stability["returncode"] != 0 or repeat_stability_report.get("ok") is not True:
         failures.append("repeat_stability_failed")
-    full_ablation_metrics = (
-        ablation_report.get("profiles", {}).get("full_pipeline", {}).get("metrics", {})
-    )
     if (
         ablation["returncode"] != 0
         or full_ablation_metrics.get("verified_cases") != ablation_report.get("case_count")
@@ -520,7 +873,7 @@ def main(argv=None):
         luac = {"available": False}
         ollama = {"reachable": False}
         gpu = {"available": False, "gpus": []}
-        failures.append("evidence_collection_failed::{0}::{1}".format(type(exc).__name__, exc))
+        failures.append("evidence_collection_failed::{0}".format(type(exc).__name__))
     if not lua.get("available"):
         failures.append("lua_identity_missing")
     if not luac.get("available"):
@@ -554,7 +907,7 @@ def main(argv=None):
         "finished_at": utc_now(),
         "commit_sha": commit_sha,
         "source": source_evidence,
-        "runtime_snapshot_path": str(runtime_lock_path),
+        "runtime_snapshot_path": runtime_lock_path.name,
         "selected_model": selected_model,
         "parameters": {
             "profile": profile.model_dump(),
@@ -572,7 +925,7 @@ def main(argv=None):
             "python": {
                 "version": platform.python_version(),
                 "implementation": platform.python_implementation(),
-                "executable": sys.executable,
+                "executable": Path(sys.executable).name,
             },
             "lua": lua,
             "luac": luac,
@@ -585,27 +938,27 @@ def main(argv=None):
             },
         },
         "datasets": datasets,
-        "evaluation_integrity": integrity_report,
+        "evaluation_integrity": evaluation_integrity_public_report(integrity_report),
         "commands": {
-            "pytest_live": live_tests,
-            "doctor": doctor,
-            "smoke": smoke,
-            "latency": latency,
+            "pytest_live": command_public_evidence(live_tests),
+            "doctor": command_public_evidence(doctor),
+            "smoke": command_public_evidence(smoke),
+            "latency": command_public_evidence(latency),
             "private_holdout": (
-                private_holdout_command_evidence(private_holdout)
+                command_public_evidence(private_holdout)
                 if private_holdout is not None
                 else None
             ),
-            "repeat_stability": repeat_stability,
-            "ablation": ablation,
+            "repeat_stability": command_public_evidence(repeat_stability),
+            "ablation": command_public_evidence(ablation),
         },
-        "quality_report": quality_report,
-        "doctor_report": doctor_report,
-        "smoke_report": smoke_report,
-        "latency_report": latency_report,
+        "quality_report": _redact_local_paths(quality_report),
+        "doctor_report": doctor_public_report(doctor_report),
+        "smoke_report": _redact_local_paths(smoke_report),
+        "latency_report": _redact_local_paths(latency_report),
         "private_holdout_report": private_holdout_public_evidence,
-        "repeat_stability_report": repeat_stability_report,
-        "ablation_report": ablation_report,
+        "repeat_stability_report": _redact_local_paths(repeat_stability_report),
+        "ablation_report": _redact_local_paths(ablation_report),
         "vram_report": vram_report,
     }
 

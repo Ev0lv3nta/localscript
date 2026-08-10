@@ -8,9 +8,13 @@ from app.validation.runtime_executor import execute_output
 
 def load_cases(path):
     dataset_path = Path(path)
+    return load_cases_bytes(dataset_path.read_bytes())
+
+
+def load_cases_bytes(payload):
     return [
         json.loads(line)
-        for line in dataset_path.read_text(encoding="utf-8").splitlines()
+        for line in payload.decode("utf-8").splitlines()
         if line.strip()
     ]
 
