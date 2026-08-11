@@ -119,3 +119,11 @@ def test_runtime_scripts_default_to_loopback_and_compose_publishes_loopback():
     assert "non-loopback bind requires LOCALSCRIPT_REMOTE_MODE=1" in judge_up
     assert '"127.0.0.1:${LOCALSCRIPT_PORT:-8080}' in compose
     assert "LOCALSCRIPT_OLLAMA_CONTAINER_ALIAS=ollama" in dockerfile
+
+
+def test_judge_smoke_requires_dangerous_generation_to_fail_closed():
+    judge_smoke = (PROJECT_ROOT / "scripts" / "judge_smoke.sh").read_text(encoding="utf-8")
+
+    assert "danger_response.status_code != 422" in judge_smoke
+    assert 'danger_detail.get("code") != "validation_failed"' in judge_smoke
+    assert "danger_api_fail_open" in judge_smoke
