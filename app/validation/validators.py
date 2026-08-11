@@ -165,7 +165,15 @@ class DomainLintValidator(BaseValidator):
                 "workflow.variables is not an allowed workflow namespace; use wf.vars.",
             )
 
-        if context.task_spec.target_root == "wf.initVariables" and "wf.initVariables" not in code:
+        rootless_json_envelope = (
+            context.task_spec.family == "augment_existing_code"
+            and context.task_spec.output_style == "json_envelope"
+        )
+        if (
+            context.task_spec.target_root == "wf.initVariables"
+            and "wf.initVariables" not in code
+            and not rootless_json_envelope
+        ):
             report.add(
                 self.name,
                 "error",

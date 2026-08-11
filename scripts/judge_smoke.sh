@@ -341,8 +341,16 @@ else:
             "context": {"wf": {"vars": {"value": 1}}},
         },
     )
-    if danger_response.status_code != 200:
-        raise SystemExit("danger_api_failed::{0}".format(danger_response.text))
+    if danger_response.status_code != 422:
+        raise SystemExit(
+            "danger_api_fail_open::{0}::{1}".format(
+                danger_response.status_code,
+                danger_response.text,
+            )
+        )
+    danger_detail = danger_response.json().get("detail") or {}
+    if danger_detail.get("code") != "validation_failed":
+        raise SystemExit("danger_api_contract_failed::{0}".format(danger_detail))
     danger_trace_id = danger_response.headers.get("X-Trace-Id")
     if not danger_trace_id:
         raise SystemExit("danger_trace_id_missing")

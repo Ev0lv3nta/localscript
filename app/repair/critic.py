@@ -188,6 +188,29 @@ class ValidationCritic:
                 )
             )
 
+        normalize_email_specific_errors = {
+            "generic_return_shape_scalar_mismatch",
+            "lua_runtime_error",
+            "normalize_email_trim_missing",
+            "semantic_return_shape_scalar_mismatch",
+        }
+        if (
+            task_spec.family == "normalize_email_string"
+            and (
+                "normalize_email_lower_missing" in error_codes
+                or (
+                    "semantic_mismatch" in error_codes
+                    and not normalize_email_specific_errors.intersection(error_codes)
+                )
+            )
+        ):
+            actions.append(
+                RepairAction(
+                    name="rewrite_normalize_email_string",
+                    reason="Rewrite scalar email normalization into a canonical trim-and-lower form over the selected workflow root.",
+                )
+            )
+
         if task_spec.family == "rest_cleanup" and has_prefix("rest_cleanup_excluded_key_reference::"):
             actions.append(
                 RepairAction(

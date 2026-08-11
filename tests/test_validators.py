@@ -17,6 +17,24 @@ def test_validation_pipeline_accepts_public_json_envelope():
     assert report.has_errors is False
 
 
+def test_augment_envelope_does_not_require_a_workflow_root_reference():
+    extractor = TaskExtractor()
+    task_spec = extractor.extract(
+        prompt="Добавь поле-переменную squared как квадрат числа 5 и верни JSON envelope.",
+        context=None,
+    ).model_copy(update={"target_root": "wf.initVariables"})
+    code = '{"num":"lua{return tonumber(\'5\')}lua","squared":"lua{local n = tonumber(\'5\')\\nreturn n * n}lua"}'
+
+    report = ValidationPipeline().run(
+        code=code,
+        task_spec=task_spec,
+        profile=get_runtime_profile(),
+    )
+
+    assert "init_variables_missing" not in report.error_codes()
+    assert report.has_errors is False
+
+
 def test_domain_lint_rejects_jsonpath():
     extractor = TaskExtractor()
     task_spec = extractor.extract(

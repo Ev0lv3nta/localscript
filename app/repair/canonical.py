@@ -8,6 +8,7 @@ CANONICAL_REPAIR_ACTIONS = frozenset(
         "rewrite_email_validation",
         "rewrite_ensure_items_array",
         "rewrite_iso8601_to_epoch",
+        "rewrite_normalize_email_string",
         "rewrite_rest_cleanup_keep_only",
     }
 )
@@ -158,4 +159,19 @@ class CanonicalFamilyRepairer:
             "  return false\n"
             "end\n"
             "return string.match(email, \"^[A-Za-z0-9._%+%-]+@[A-Za-z0-9.%-]+%.[A-Za-z]+$\") ~= nil"
+        ).format(email_path=email_path)
+
+    @staticmethod
+    def _rewrite_normalize_email_string(task_spec):
+        hints = task_spec.generation_hints or {}
+        target_root = task_spec.target_root or "wf.vars"
+        email_path = hints.get("email_path") or "{0}.email".format(target_root)
+        if target_root == "wf.initVariables" and email_path.startswith("wf.vars."):
+            email_path = email_path.replace("wf.vars.", "wf.initVariables.", 1)
+        elif target_root == "wf.vars" and email_path.startswith("wf.initVariables."):
+            email_path = email_path.replace("wf.initVariables.", "wf.vars.", 1)
+        return (
+            "local email = {email_path} or \"\"\n"
+            "email = string.gsub(email, \"^%s*(.-)%s*$\", \"%1\")\n"
+            "return string.lower(email)"
         ).format(email_path=email_path)

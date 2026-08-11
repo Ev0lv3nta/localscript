@@ -4,7 +4,7 @@ from app.core.config import get_runtime_profile
 from app.core.traces import TraceStore
 from app.generation.engine import GenerationEngine
 from app.main import create_app
-from tests.support_backends import UnavailableBackend
+from tests.support_backends import DeterministicTestBackend, UnavailableBackend
 
 
 def _make_engine(tmp_path):
@@ -152,3 +152,34 @@ def test_prepare_session_state_sets_init_root_from_clarification_answer(tmp_path
 
     assert continued["clarified_root"] == "wf.initVariables"
     assert continued["clarification_history"][-1]["answer"] == "Use wf.initVariables for this task."
+
+
+def test_clarified_root_retargets_semantic_oracle_hints(tmp_path):
+    engine = GenerationEngine(
+        profile=get_runtime_profile(),
+        trace_store=TraceStore(root=tmp_path / "traces"),
+        backend=DeterministicTestBackend(),
+    )
+    context = {
+        "wf": {
+            "vars": {"email": "A@EXAMPLE.COM"},
+            "initVariables": {"email": "B@EXAMPLE.COM"},
+        }
+    }
+
+    first = engine.generate_rich(
+        prompt="Нормализуй email и верни его в lower-case.",
+        context=context,
+    )
+    second = engine.generate_rich(
+        session_id=first.session_id,
+        clarification_answer="Use wf.initVariables for email root.",
+    )
+    session = engine.session_store.read(first.session_id)
+
+    assert second.status == "completed"
+    assert second.verification_errors == []
+    assert "wf.initVariables.email" in second.code
+    assert session["extracted_slots"]["generation_hints"]["email_path"] == (
+        "wf.initVariables.email"
+    )

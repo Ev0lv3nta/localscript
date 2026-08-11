@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -12,10 +10,8 @@ pytestmark = [pytest.mark.integration, pytest.mark.ollama, pytest.mark.gpu]
 
 
 def test_model_backed_eval_live_backend_passes(live_ollama_backend):
-    dataset_path = Path(__file__).resolve().parents[1] / "datasets" / "model_backed_eval.jsonl"
-
     report = run_dataset_benchmark(
-        dataset_path,
+        "evals/regression/model_backed_eval.jsonl",
         profile=get_runtime_profile(),
         backend=live_ollama_backend,
     )
