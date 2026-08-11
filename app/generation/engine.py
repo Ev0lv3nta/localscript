@@ -31,6 +31,26 @@ SAFE_FALLBACK_CODE = "-- judged-safe fallback\nreturn nil"
 BackendUnavailableError = BackendUnavailable
 
 
+def _retarget_generation_hints(generation_hints, target_root):
+    hints = dict(generation_hints or {})
+
+    def retarget(path):
+        if not isinstance(path, str):
+            return path
+        if target_root == "wf.initVariables" and path.startswith("wf.vars."):
+            return path.replace("wf.vars.", "wf.initVariables.", 1)
+        if target_root == "wf.vars" and path.startswith("wf.initVariables."):
+            return path.replace("wf.initVariables.", "wf.vars.", 1)
+        return path
+
+    for key, value in tuple(hints.items()):
+        if key.endswith("_path"):
+            hints[key] = retarget(value)
+        elif key.endswith("_paths") and isinstance(value, list):
+            hints[key] = [retarget(item) for item in value]
+    return hints
+
+
 @dataclass
 class GenerationResult:
     code: str = ""
@@ -150,8 +170,15 @@ class GenerationEngine:
         effective_context = session_state.get("context")
         task_spec = self.extractor.extract(prompt=effective_prompt, context=effective_context)
         if session_state.get("clarified_root"):
+            clarified_root = session_state["clarified_root"]
             task_spec = task_spec.model_copy(
-                update={"target_root": session_state["clarified_root"]}
+                update={
+                    "target_root": clarified_root,
+                    "generation_hints": _retarget_generation_hints(
+                        task_spec.generation_hints,
+                        clarified_root,
+                    ),
+                }
             )
         session_state["normalized_task"] = task_spec.normalized_prompt
         session_state["extracted_slots"] = task_spec.model_dump()
