@@ -47,7 +47,7 @@ TRACE_PRIVATE_KEYS = SECRET_KEYS | frozenset(
     }
 )
 
-_THREAD_LOCKS = {}
+_THREAD_LOCKS: dict[str, threading.RLock] = {}
 _THREAD_LOCKS_GUARD = threading.Lock()
 
 

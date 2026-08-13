@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from app.core.config import get_runtime_profile
 from app.core.traces import TraceStore
 from app.main import create_app
+from app.workflow.contracts import CheckStatus, ValidationCheck, ValidationResult
 from tests.support_backends import DeterministicTestBackend
 
 
@@ -12,6 +13,13 @@ def _make_client(tmp_path):
         trace_store=TraceStore(root=tmp_path / "traces"),
         backend=DeterministicTestBackend(),
     )
+    class PassingValidator:
+        def validate(self, **_kwargs):
+            return ValidationResult(
+                checks=(ValidationCheck(name="all", status=CheckStatus.PASSED),)
+            )
+
+    app.state.engine.workflow.validator = PassingValidator()
     return TestClient(app)
 
 
@@ -20,17 +28,8 @@ def test_trace_endpoint_returns_sanitized_trace_payload(tmp_path):
     response = client.post(
         "/generate",
         json={
-            "prompt": "Возьми wf.vars.contacts и подготовь список таблиц для активных контактов с email: поле id оставь как есть, а email переведи в lower case. Если вход пустой, нужен пустой список через _utils.array.new().",
-            "context": {
-                "wf": {
-                    "vars": {
-                        "contacts": [
-                            {"id": "C1", "active": True, "email": "ADMIN@EXAMPLE.COM"},
-                            {"id": "C2", "active": False, "email": "skip@example.com"},
-                        ]
-                    }
-                }
-            },
+            "prompt": "Return the value.",
+            "context": {"wf": {"vars": {"value": 4}}},
         },
     )
 
@@ -40,7 +39,7 @@ def test_trace_endpoint_returns_sanitized_trace_payload(tmp_path):
     payload = trace.json()
     assert payload["trace_id"] == response.headers["X-Trace-Id"]
     assert payload["session_id"] == response.headers["X-Session-Id"]
-    assert payload["strategy"] == response.headers["X-Strategy"]
+    assert payload["strategy"] is None
     assert "code" in payload
     assert "planner" in payload
     assert "validation_report" in payload

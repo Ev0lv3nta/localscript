@@ -22,14 +22,17 @@ class ContextInspector:
         entries: list[ContextEntry] = []
         truncated = False
         workflow = context.get("wf") if isinstance(context, Mapping) else None
-        roots: tuple[tuple[WorkflowRoot, JsonValue], ...]
+        roots: list[tuple[WorkflowRoot, JsonValue]]
         if isinstance(workflow, Mapping):
-            roots = (
-                (WorkflowRoot.VARS, workflow.get("vars")),
-                (WorkflowRoot.INIT_VARIABLES, workflow.get("initVariables")),
-            )
+            roots = []
+            if "vars" in workflow:
+                roots.append((WorkflowRoot.VARS, workflow["vars"]))
+            if "initVariables" in workflow:
+                roots.append(
+                    (WorkflowRoot.INIT_VARIABLES, workflow["initVariables"])
+                )
         else:
-            roots = ()
+            roots = []
 
         def walk(value: JsonValue, path: WorkflowPath) -> None:
             nonlocal truncated
@@ -44,8 +47,7 @@ class ContextInspector:
                 walk(value[0], WorkflowPath(root=path.root, segments=(*path.segments, "[]")))
 
         for root, value in roots:
-            if value is not None:
-                walk(value, WorkflowPath(root=root))
+            walk(value, WorkflowPath(root=root))
         return ContextInventory(entries=tuple(entries), truncated=truncated)
 
     def sample(self, context: JsonValue) -> JsonValue:

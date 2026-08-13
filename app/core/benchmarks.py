@@ -103,11 +103,9 @@ def _case_observation(case, result, errors, duration_ms, backend_calls, trace_pa
     ]
     return {
         "id": case["id"],
-        "family": case.get("family"),
         "case_type": case.get("case_type", "unknown"),
         "passed": passed,
         "status": result.status,
-        "strategy": result.strategy,
         "repair_rounds": result.repair_rounds,
         "degraded_mode": result.degraded_mode,
         "duration_ms": round(duration_ms, 3),
@@ -182,7 +180,6 @@ def _aggregate_metrics(case_results):
             3,
         ),
         "outcome_counts": dict(Counter(item["status"] for item in case_results)),
-        "strategy_counts": dict(Counter(item["strategy"] for item in case_results)),
         "latency_ms": {
             "cold_first": round(durations[0], 3) if durations else None,
             "warm_p50": _percentile(warm_durations, 0.50),
@@ -303,12 +300,6 @@ def run_dataset_benchmark(dataset_path, profile=None, backend=None):
             result = engine.generate(prompt=case["prompt"], context=case.get("context"))
             duration_ms = (perf_counter() - started) * 1000.0
             errors = result.verification_errors + evaluate_case(result.code, case)
-            expected_strategy = case.get("expected_strategy")
-            if expected_strategy and result.strategy != expected_strategy:
-                errors.append("expected_strategy::{0}".format(expected_strategy))
-            forbidden_strategy = case.get("forbidden_strategy")
-            if forbidden_strategy and result.strategy == forbidden_strategy:
-                errors.append("forbidden_strategy::{0}".format(forbidden_strategy))
             case_results.append(
                 _case_observation(
                     case=case,
@@ -387,7 +378,6 @@ def run_rich_dataset_benchmark(dataset_path, profile=None, backend=None):
                 trace_payload=trace_store.read(final_result.trace_id),
             )
             observation["initial_status"] = result.status
-            observation["initial_strategy"] = result.strategy
             case_results.append(observation)
 
     failures = [item for item in case_results if not item["passed"]]
@@ -436,7 +426,6 @@ def run_repeated_dataset_benchmark(
                     "repeat": repeat_index,
                     "passed": case["passed"],
                     "status": case["status"],
-                    "strategy": case["strategy"],
                     "errors": case["errors"],
                     "duration_ms": case["duration_ms"],
                 }
@@ -448,7 +437,6 @@ def run_repeated_dataset_benchmark(
             (
                 item["passed"],
                 item["status"],
-                item["strategy"],
                 tuple(item["errors"]),
             )
             for item in observations

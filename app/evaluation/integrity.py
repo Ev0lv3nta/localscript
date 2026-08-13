@@ -5,12 +5,9 @@ import unicodedata
 from difflib import SequenceMatcher
 from pathlib import Path
 
-import yaml
-
 from app.core.public_eval import load_cases
-from app.core.resources import materialized_resource, read_resource_text
+from app.core.resources import materialized_resource
 from app.evaluation.manifest import dataset_specs, load_evaluation_manifest
-from app.families import is_known_family
 
 FUZZY_THRESHOLD = 0.85
 OUTPUT_STYLES = frozenset({"lua_block", "lua_expression", "json_envelope"})
@@ -53,8 +50,6 @@ def _validate_case(case, corpus, seen_ids, seen_inputs):
         errors.append("case_prompt_missing::{0}".format(case_id))
     if case.get("context") is not None and not isinstance(case.get("context"), dict):
         errors.append("case_context_not_object::{0}".format(case_id))
-    if not is_known_family(case.get("family")):
-        errors.append("case_family_unknown::{0}".format(case_id))
     if (
         case.get("expected_output_style") is not None
         and case.get("expected_output_style") not in OUTPUT_STYLES
@@ -80,18 +75,6 @@ def _validate_case(case, corpus, seen_ids, seen_inputs):
         if "expected_code" in case or "reference_code" in case:
             errors.append("public_case_reference_injection::{0}".format(case_id))
     return errors
-
-
-def _kb_records():
-    payload = yaml.safe_load(read_resource_text("kb/examples.yaml")) or {}
-    return [
-        {
-            "source": "knowledge_base",
-            "id": str(example.get("id")),
-            "prompt": str(example.get("prompt") or ""),
-        }
-        for example in payload.get("examples", [])
-    ]
 
 
 def _find_cross_corpus_overlaps(protected_records, comparison_records):
@@ -170,7 +153,7 @@ def run_integrity_check(private_holdout_path=None):
     schema_errors = []
     datasets = []
     public_records = []
-    comparison_records = _kb_records()
+    comparison_records = []
 
     for spec in specs:
         with materialized_resource(spec.path) as dataset_path:

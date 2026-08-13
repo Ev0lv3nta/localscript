@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
 from typing import Annotated, Literal, TypeAlias
 
@@ -77,8 +78,23 @@ class PlanStep(StrictModel):
 
 class AcceptanceCase(StrictModel):
     name: str = Field(min_length=1, max_length=80)
-    context: JsonValue
+    context: dict[str, JsonValue]
     expected: JsonValue
+
+    @field_validator("context")
+    @classmethod
+    def validate_workflow_context(
+        cls,
+        context: dict[str, JsonValue],
+    ) -> dict[str, JsonValue]:
+        workflow = context.get("wf")
+        if not isinstance(workflow, Mapping):
+            raise ValueError("acceptance context must contain a wf object")
+        if not any(root in workflow for root in ("vars", "initVariables")):
+            raise ValueError(
+                "acceptance context must contain wf.vars or wf.initVariables"
+            )
+        return context
 
 
 class TaskPlan(StrictModel):
@@ -163,7 +179,7 @@ class ValidationCheck(StrictModel):
 
 
 class ValidationResult(StrictModel):
-    checks: tuple[ValidationCheck, ...]
+    checks: tuple[ValidationCheck, ...] = Field(min_length=1)
     observations: tuple[JsonValue, ...] = ()
 
     @property
@@ -190,6 +206,38 @@ class WorkflowState(StrictModel):
     validation: ValidationResult | None = None
     review: ReviewDecision | None = None
     revision_count: int = Field(default=0, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def validate_stage_payload(self) -> "WorkflowState":
+        empty = self.plan is None and self.candidate is None and self.validation is None
+        if self.stage in {
+            WorkflowStage.RECEIVED,
+            WorkflowStage.CLARIFICATION_REQUIRED,
+        }:
+            if not empty or self.review is not None or self.revision_count != 0:
+                raise ValueError("stage must not carry generated workflow artifacts")
+            return self
+
+        if self.plan is None:
+            raise ValueError("workflow stage requires a task plan")
+        if self.stage is WorkflowStage.PLANNED:
+            if self.candidate is not None or self.validation is not None or self.review is not None:
+                raise ValueError("planned stage may only carry a task plan")
+        elif self.stage in {WorkflowStage.GENERATED, WorkflowStage.REVISED}:
+            if self.candidate is None or self.validation is not None or self.review is not None:
+                raise ValueError("candidate stage requires one unvalidated candidate")
+            expected_revisions = 1 if self.stage is WorkflowStage.REVISED else 0
+            if self.revision_count != expected_revisions:
+                raise ValueError("candidate stage has an inconsistent revision count")
+        elif self.stage is WorkflowStage.VALIDATED:
+            if self.candidate is None or self.validation is None or self.review is not None:
+                raise ValueError("validated stage requires candidate and validation")
+        elif self.stage in {WorkflowStage.REVIEWED, WorkflowStage.COMPLETED}:
+            if self.candidate is None or self.validation is None or self.review is None:
+                raise ValueError("reviewed stage requires candidate, validation, and review")
+        elif self.stage is WorkflowStage.FAILED and self.candidate is None:
+            raise ValueError("failed generated workflow requires its rejected candidate internally")
+        return self
 
 
 class WorkflowStatus(str, Enum):

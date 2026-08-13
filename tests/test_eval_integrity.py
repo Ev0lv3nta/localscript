@@ -80,10 +80,19 @@ def test_private_holdout_identity_mismatch_fails_closed(tmp_path):
     assert "private_holdout_identity_mismatch" in report["errors"]
 
 
-def test_public_benchmark_always_executes_explicit_semantic_oracle():
+def test_public_benchmark_always_executes_explicit_semantic_oracle(monkeypatch):
+    class Execution:
+        ok = True
+        degraded = False
+        value = 999
+        error_code = ""
+
+    monkeypatch.setattr(
+        "app.core.public_eval.execute_output",
+        lambda *_args, **_kwargs: Execution(),
+    )
     case = {
         "id": "public_wrong_code",
-        "family": "counter_increment",
         "prompt": "Верни увеличенный счётчик.",
         "context": {"wf": {"vars": {"counter": 4}}},
         "expected_output_style": "lua_block",
@@ -95,3 +104,16 @@ def test_public_benchmark_always_executes_explicit_semantic_oracle():
     failures = evaluate_case("return 999", case)
 
     assert "semantic_mismatch" in failures
+
+
+def test_eval_without_explicit_expected_result_does_not_infer_prompt_intent():
+    failures = evaluate_case(
+        "return 5",
+        {
+            "id": "no_oracle",
+            "prompt": "Return five.",
+            "context": {"wf": {"vars": {}}},
+        },
+    )
+
+    assert failures == ["dataset_missing_expected_result"]

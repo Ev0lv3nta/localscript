@@ -9,7 +9,7 @@ from app.workflow.contracts import (
     ValidationCheck,
     ValidationResult,
 )
-from app.workflow.roles import CODE_ADAPTER, StructuredModelClient
+from app.workflow.roles import CODE_RESPONSE, StructuredModelClient
 
 
 class SequenceBackend:
@@ -25,7 +25,7 @@ class SequenceBackend:
 def test_structured_model_passes_json_schema_and_parses_strictly():
     backend = SequenceBackend([json.dumps({"code": "return 1"})])
 
-    candidate = StructuredModelClient(backend.complete).request("write code", CODE_ADAPTER)
+    candidate = StructuredModelClient(backend.complete).request("write code", CODE_RESPONSE)
 
     assert candidate == CodeCandidate(code="return 1")
     assert backend.calls[0][1]["type"] == "object"
@@ -34,7 +34,7 @@ def test_structured_model_passes_json_schema_and_parses_strictly():
 def test_structured_model_allows_exactly_one_schema_correction():
     backend = SequenceBackend(["not json", json.dumps({"code": "return 2"})])
 
-    candidate = StructuredModelClient(backend.complete).request("write code", CODE_ADAPTER)
+    candidate = StructuredModelClient(backend.complete).request("write code", CODE_RESPONSE)
 
     assert candidate.code == "return 2"
     assert len(backend.calls) == 2
@@ -45,7 +45,7 @@ def test_structured_model_fails_closed_after_second_invalid_response():
     backend = SequenceBackend(["not json", "still not json"])
 
     with pytest.raises(BackendProtocol) as error:
-        StructuredModelClient(backend.complete).request("write code", CODE_ADAPTER)
+        StructuredModelClient(backend.complete).request("write code", CODE_RESPONSE)
 
     assert error.value.reason == "structured_response_invalid"
     assert len(backend.calls) == 2

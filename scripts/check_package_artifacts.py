@@ -12,10 +12,6 @@ from pathlib import Path
 
 WHEEL_REQUIRED = {
     "app/resources/config/profiles/competition.yaml",
-    "app/resources/kb/rules.yaml",
-    "app/resources/kb/examples.yaml",
-    "app/resources/kb/templates.yaml",
-    "app/resources/kb/critic_rules.yaml",
     "app/resources/evals/manifest.json",
     "app/resources/evals/public/v1.jsonl",
     "app/resources/evals/regression/adversarial_eval.jsonl",
@@ -56,12 +52,11 @@ SDIST_REQUIRED_SUFFIXES = WHEEL_REQUIRED | {
     "docs/evaluation.md",
     "docs/security.md",
     "scripts/bootstrap_lua54.sh",
-    "scripts/bench_ablation.py",
     "scripts/bench_repeated.py",
     "scripts/release_gate.py",
     "tests/conftest.py",
     "tests/contracts/test_outcomes_contract.py",
-    "tests/characterization/test_generation_fail_closed.py",
+    "tests/test_workflow_coordinator.py",
     "third_party/lua/lua-5.4.6.tar.gz",
 }
 
@@ -142,12 +137,10 @@ def _installed_wheel_smoke(wheel_path):
                     "import os;"
                     "from pathlib import Path;"
                     "from app.core.config import get_runtime_profile;"
-                    "from app.core.kb import load_critic_rules,load_examples,load_rules;"
                     "from app.core.traces import TraceStore;"
                     "from app.main import create_app;"
                     "p=get_runtime_profile();"
                     "assert p.name=='competition';"
-                    "assert load_rules() and load_examples() and load_critic_rules();"
                     "assert TraceStore().root.is_relative_to(Path(os.environ['LOCALSCRIPT_STATE_DIR']).resolve());"
                     "assert create_app().state.ui_enabled"
                 ),

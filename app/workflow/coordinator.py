@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from app.generation.backend_errors import BackendError, BackendUnavailable
 from app.workflow.context import ContextInspector
@@ -81,20 +81,25 @@ class WorkflowCoordinator:
                 )
 
             plan = decision
-            state = state.model_copy(update={"stage": WorkflowStage.PLANNED, "plan": plan})
+            state = WorkflowState(stage=WorkflowStage.PLANNED, plan=plan)
             self._observe(observe, state.stage)
             plan_check = self._validate_plan(plan)
             if not plan_check.ok:
                 return self._failure(plan_check, WorkflowStage.PLANNED)
 
             candidate = self.generator.run(prompt=prompt, plan=plan)
-            state = state.model_copy(
-                update={"stage": WorkflowStage.GENERATED, "candidate": candidate}
+            state = WorkflowState(
+                stage=WorkflowStage.GENERATED,
+                plan=plan,
+                candidate=candidate,
             )
             self._observe(observe, state.stage)
             validation = self.validator.validate(candidate=candidate, plan=plan)
-            state = state.model_copy(
-                update={"stage": WorkflowStage.VALIDATED, "validation": validation}
+            state = WorkflowState(
+                stage=WorkflowStage.VALIDATED,
+                plan=plan,
+                candidate=candidate,
+                validation=validation,
             )
             self._observe(observe, state.stage)
             review: ReviewDecision | None = None
@@ -105,8 +110,12 @@ class WorkflowCoordinator:
                     candidate=candidate,
                     validation=validation,
                 )
-                state = state.model_copy(
-                    update={"stage": WorkflowStage.REVIEWED, "review": review}
+                state = WorkflowState(
+                    stage=WorkflowStage.REVIEWED,
+                    plan=plan,
+                    candidate=candidate,
+                    validation=validation,
+                    review=review,
                 )
                 self._observe(observe, state.stage)
                 if not isinstance(review, ReviewRejected):
@@ -124,15 +133,21 @@ class WorkflowCoordinator:
                 validation=validation,
                 review=review,
             )
-            state = state.model_copy(
-                update={
-                    "stage": WorkflowStage.REVISED,
-                    "candidate": revised,
-                    "revision_count": 1,
-                }
+            state = WorkflowState(
+                stage=WorkflowStage.REVISED,
+                plan=plan,
+                candidate=revised,
+                revision_count=1,
             )
             self._observe(observe, state.stage)
             revised_validation = self.validator.validate(candidate=revised, plan=plan)
+            state = WorkflowState(
+                stage=WorkflowStage.VALIDATED,
+                plan=plan,
+                candidate=revised,
+                validation=revised_validation,
+                revision_count=1,
+            )
             self._observe(observe, WorkflowStage.VALIDATED)
             if not revised_validation.ok:
                 return self._failure(
@@ -145,6 +160,14 @@ class WorkflowCoordinator:
                 plan=plan,
                 candidate=revised,
                 validation=revised_validation,
+            )
+            state = WorkflowState(
+                stage=WorkflowStage.REVIEWED,
+                plan=plan,
+                candidate=revised,
+                validation=revised_validation,
+                review=revised_review,
+                revision_count=1,
             )
             self._observe(observe, WorkflowStage.REVIEWED)
             if isinstance(revised_review, ReviewRejected):
@@ -194,6 +217,18 @@ class WorkflowCoordinator:
                     ),
                 ),
             )
+        except ValidationError:
+            self._observe(observe, WorkflowStage.FAILED)
+            return WorkflowResult(
+                status=WorkflowStatus.VALIDATION_FAILED,
+                diagnostics=(
+                    WorkflowDiagnostic(
+                        code="invalid_json_context",
+                        message="Workflow context must be a valid JSON value.",
+                        stage=state.stage,
+                    ),
+                ),
+            )
 
     @staticmethod
     def _validate_plan(plan: TaskPlan) -> ValidationResult:
@@ -208,9 +243,35 @@ class WorkflowCoordinator:
                     message="Acceptance case names must be unique.",
                 )
             )
-        else:
+        for case in plan.acceptance_cases:
+            if not WorkflowCoordinator._matches_output_contract(
+                case.expected,
+                shape=plan.output.shape.value,
+                nullable=plan.output.nullable,
+            ):
+                checks.append(
+                    ValidationCheck(
+                        name="plan_contract",
+                        status=CheckStatus.FAILED,
+                        code="acceptance_output_contract_mismatch",
+                        message=(
+                            "Acceptance case `{0}` contradicts the declared output contract."
+                        ).format(case.name),
+                    )
+                )
+        if not checks:
             checks.append(ValidationCheck(name="plan_contract", status=CheckStatus.PASSED))
         return ValidationResult(checks=tuple(checks))
+
+    @staticmethod
+    def _matches_output_contract(value: JsonValue, *, shape: str, nullable: bool) -> bool:
+        if value is None:
+            return nullable
+        if shape == "array":
+            return isinstance(value, list)
+        if shape == "object":
+            return isinstance(value, dict)
+        return not isinstance(value, (list, dict))
 
     @staticmethod
     def _failure(

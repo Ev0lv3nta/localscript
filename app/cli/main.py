@@ -13,11 +13,16 @@ from app.core.config import get_runtime_profile
 from app.core.resources import materialized_resource, resource_exists
 from app.core.runtime_lock import build_runtime_lock, write_runtime_lock
 from app.core.traces import TraceStore
-from app.core.verifier import verify_code
 from app.generation.engine import GenerationEngine
 from app.generation.ollama import OllamaBackend
-from app.generation.taskspec import TaskSpec
-from app.validation.validators import ValidationPipeline
+from app.workflow.contracts import (
+    CheckStatus,
+    CodeCandidate,
+    OutputContract,
+    OutputFormat,
+    OutputShape,
+)
+from app.workflow.validation import DeterministicCandidateValidator
 
 cli = typer.Typer(help="LocalScript local CLI")
 
@@ -126,56 +131,47 @@ def analyze(
 
 
 @cli.command()
-def verify(
+def validate(
     code=typer.Option(None, help="Inline LocalScript/Lua code."),
     code_file=typer.Option(None, help="Path to a file with LocalScript/Lua code."),
+    context=typer.Option('{"wf":{"vars":{}}}', help="Workflow context as JSON."),
+    output_format=typer.Option("lua_block", help="lua_block or json_envelope."),
+    output_shape=typer.Option("scalar", help="scalar, array, or object."),
+    nullable=typer.Option(False, help="Allow a null result."),
 ):
     if not code and not code_file:
         raise typer.BadParameter("Provide --code or --code-file.")
 
     content = code or Path(code_file).read_text(encoding="utf-8")
-    stripped = (content or "").strip()
-    output_style = "json_envelope"
-    if not (stripped.startswith("{") and stripped.endswith("}")):
-        output_style = "lua_block"
+    try:
+        parsed_context = json.loads(context)
+    except json.JSONDecodeError as error:
+        raise typer.BadParameter("--context must be valid JSON") from error
+    if not isinstance(parsed_context, dict):
+        raise typer.BadParameter("--context must contain a JSON object")
+    try:
+        output = OutputContract(
+            format=OutputFormat(output_format),
+            shape=OutputShape(output_shape),
+            nullable=nullable,
+        )
+    except ValueError as error:
+        raise typer.BadParameter("invalid output contract") from error
 
-    task_spec = TaskSpec(
-        normalized_prompt="generic_lua_verification",
-        family="generic_lua",
-        output_style=output_style,
-        target_root="unknown",
-        context_paths=[],
-        family_confidence=0.0,
-        generation_hints={},
-        assumptions=["Standalone CLI verify path."],
-        ambiguity_notes=[],
+    report = DeterministicCandidateValidator().validate_existing(
+        candidate=CodeCandidate(code=content),
+        output=output,
+        context=parsed_context,
     )
-    pipeline = ValidationPipeline()
-    report = pipeline.run(
-        code=content,
-        task_spec=task_spec,
-        profile=get_runtime_profile(),
-        source_context=None,
-        prompt="generic_lua_verification",
-    )
-    errors = []
-    for error_code in report.error_codes() + verify_code(content):
-        if error_code not in errors:
-            errors.append(error_code)
-    degraded_codes = [
-        message.code
-        for message in report.messages
-        if message.level == "warning" and "degraded" in message.message.lower()
-    ]
+    failed = [check for check in report.checks if check.status is CheckStatus.FAILED]
+    errors = [check.code for check in failed if check.code]
     payload = {
-        "ok": not errors,
+        "ok": report.ok,
         "errors": errors,
-        "validation_report": report.to_dict(),
-        "degraded_mode": bool(degraded_codes),
-        "degraded_codes": degraded_codes,
+        "validation": report.model_dump(mode="json"),
     }
     typer.echo(json.dumps(payload, ensure_ascii=False))
-    raise typer.Exit(code=0 if not errors else 1)
+    raise typer.Exit(code=0 if report.ok else 1)
 
 
 @cli.command()

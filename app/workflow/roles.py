@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from typing import TypeVar
+from typing import Generic, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -39,8 +39,9 @@ class StructuredModelClient:
     def request(
         self,
         prompt: str,
-        adapter: TypeAdapter[SchemaValue],
+        response: "StructuredResponse[SchemaValue]",
     ) -> SchemaValue:
+        adapter = response.adapter
         json_schema = adapter.json_schema()
         raw = self._complete(prompt, response_format=json_schema)
         try:
@@ -72,6 +73,18 @@ class StructuredModelClient:
         )
 
 
+class StructuredResponse(Generic[SchemaValue]):
+    def __init__(self, adapter: TypeAdapter[SchemaValue]) -> None:
+        self.adapter = adapter
+
+
+PLANNING_RESPONSE: StructuredResponse[PlanningDecision] = StructuredResponse(
+    PLANNING_ADAPTER
+)
+CODE_RESPONSE: StructuredResponse[CodeCandidate] = StructuredResponse(CODE_ADAPTER)
+REVIEW_RESPONSE: StructuredResponse[ReviewDecision] = StructuredResponse(REVIEW_ADAPTER)
+
+
 class PlannerRole:
     def __init__(self, model: StructuredModelClient) -> None:
         self.model = model
@@ -97,7 +110,7 @@ Interpret the request; do not write Lua. Return exactly one JSON PlanningDecisio
 
 For a plan:
 - express workflow paths as a root enum plus path segments, never as an invented dotted string;
-- describe ordered implementation steps without choosing a predefined task family;
+- describe ordered implementation steps without choosing a predefined task category;
 - preserve the requested output format and shape;
 - provide 1 to 3 small executable acceptance cases with complete workflow contexts and exact JSON results;
 - acceptance cases must test the requested behavior, not a preferred source-code spelling.
@@ -111,7 +124,7 @@ Domain specification:
 Input:
 {payload}
 """.format(domain=DOMAIN_SPECIFICATION, payload=json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return self.model.request(role_prompt, PLANNING_ADAPTER)
+        return self.model.request(role_prompt, PLANNING_RESPONSE)
 
 
 class GeneratorRole:
@@ -137,7 +150,7 @@ Task plan:
             request=prompt,
             plan=plan.model_dump_json(),
         )
-        return self.model.request(role_prompt, CODE_ADAPTER)
+        return self.model.request(role_prompt, CODE_RESPONSE)
 
     def revise(
         self,
@@ -177,7 +190,7 @@ Structured findings:
             code=candidate.code,
             findings=json.dumps(failure_payload, ensure_ascii=False, sort_keys=True),
         )
-        return self.model.request(role_prompt, CODE_ADAPTER)
+        return self.model.request(role_prompt, CODE_RESPONSE)
 
 
 class ReviewerRole:
@@ -218,4 +231,4 @@ Deterministic validation:
             code=candidate.code,
             validation=validation.model_dump_json(),
         )
-        return self.model.request(role_prompt, REVIEW_ADAPTER)
+        return self.model.request(role_prompt, REVIEW_RESPONSE)

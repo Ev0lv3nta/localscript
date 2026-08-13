@@ -77,6 +77,16 @@ def test_context_inspector_walks_json_without_prompt_classification():
     assert ("wf.initVariables.region", "string") in entries
 
 
+def test_context_inspector_preserves_explicit_null_roots():
+    inventory = ContextInspector().inventory(
+        {"wf": {"vars": None, "initVariables": {}}}
+    )
+
+    entries = {(entry.path.dotted, entry.value_type.value) for entry in inventory.entries}
+    assert ("wf.vars", "null") in entries
+    assert ("wf.initVariables", "object") in entries
+
+
 def test_context_sample_falls_back_to_typed_inventory_when_large():
     sample = ContextInspector(sample_chars=20).sample(
         {"wf": {"vars": {"value": "x" * 100}}}

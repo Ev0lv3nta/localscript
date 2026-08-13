@@ -8,22 +8,30 @@ from app.workflow.contracts import (
     OutputFormat,
     OutputShape,
     PlanningDecision,
+    ReviewApproved,
     ReviewDecision,
+    ReviewRejected,
     TaskPlan,
     WorkflowPath,
+    WorkflowResult,
     WorkflowRoot,
 )
+from app.workflow.validation import DeterministicCandidateValidator
 
 __all__ = [
     "AcceptanceCase",
     "ClarificationRequest",
     "CodeCandidate",
+    "DeterministicCandidateValidator",
     "OutputContract",
     "OutputFormat",
     "OutputShape",
     "PlanningDecision",
+    "ReviewApproved",
     "ReviewDecision",
+    "ReviewRejected",
     "TaskPlan",
     "WorkflowPath",
     "WorkflowRoot",
+    "WorkflowResult",
 ]
