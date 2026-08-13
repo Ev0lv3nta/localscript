@@ -51,7 +51,7 @@ def test_dangerous_stdlib_validator_rejects_debug_namespace():
     assert "dangerous_stdlib_debug_forbidden" in report.error_codes()
 
 
-def test_loop_variable_shadowing_package_is_reported_for_safe_renaming():
+def test_local_shadowing_is_lexical_and_does_not_trigger_global_policy():
     report = ValidationPipeline().run(
         code=(
             "local result = _utils.array.new()\n"
@@ -64,8 +64,8 @@ def test_loop_variable_shadowing_package_is_reported_for_safe_renaming():
         profile=get_runtime_profile(),
     )
 
-    assert "shadowed_stdlib_local::package" in report.error_codes()
-    assert "dangerous_stdlib_package_forbidden" in report.error_codes()
+    assert "dangerous_stdlib_package_forbidden" not in report.error_codes()
+    assert not any(code.startswith("lua_global_not_allowed") for code in report.error_codes())
 
 
 def test_runtime_executor_denies_unsafe_namespace_even_without_pipeline():

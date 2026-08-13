@@ -1,12 +1,12 @@
 import pytest
 
 from app.validation.base import BaseValidator
+from app.validation.lua_ast import extract_lua_chunks
 from app.validation.runtime_executor import execute_output
 from app.validation.validators import (
     ContractValidator,
     JsonEnvelopeValidator,
     ValidationPipeline,
-    _extract_lua_chunks,
 )
 
 
@@ -15,7 +15,7 @@ from app.validation.validators import (
     [None, [], {}, 42, b"{}", "not-json", "[]", "null", "42", '"text"', "{}"],
 )
 def test_envelope_chunk_extraction_is_total(code):
-    assert _extract_lua_chunks(code, "json_envelope") == []
+    assert extract_lua_chunks(code, "json_envelope") == ()
 
 
 @pytest.mark.parametrize(
