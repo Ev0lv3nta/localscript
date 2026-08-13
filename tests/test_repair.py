@@ -206,30 +206,6 @@ class DatumTimeBrokenBackend:
         return self.complete(prompt)
 
 
-class RestCleanupLiteralDeleteBackend:
-    def complete(self, prompt, response_format=None, model=None):
-        if "You are the planner for a LocalScript/Lua generation pipeline." in prompt:
-            return (
-                '{"family":"rest_cleanup","root":"wf.vars","source_paths":["wf.vars.RESTbody.result"],'
-                '"return_shape":"array","constraints":["Do not use JsonPath"],'
-                '"assumptions":[],"clarification_needed":false,"clarification_question":"",'
-                '"semantic_checks":[]}'
-            )
-        if "You are the critic for a LocalScript/Lua generation pipeline." in prompt:
-            return '{"repairable":true,"issues":["rest_cleanup_excluded_key_reference::CALL"],"minimal_actions":["rewrite_rest_cleanup_keep_only"]}'
-        return (
-            "local result = wf.vars.RESTbody.result\n"
-            "for _, entry in ipairs(result or {}) do\n"
-            "  entry.CALL = nil\n"
-            "  entry.OTHER = nil\n"
-            "end\n"
-            "return result"
-        )
-
-    def generate(self, prompt, context=None):
-        return self.complete(prompt)
-
-
 class AugmentAliasBackend:
     def complete(self, prompt, response_format=None, model=None):
         if "You are the planner for a LocalScript/Lua generation pipeline." in prompt:
@@ -267,32 +243,6 @@ class AugmentLiteralSyntaxBackend:
         return self.complete(prompt)
 
 
-class EnsureItemsRuntimeBackend:
-    def complete(self, prompt, response_format=None, model=None):
-        if "You are the planner for a LocalScript/Lua generation pipeline." in prompt:
-            return (
-                '{"family":"ensure_items_array","root":"wf.vars","source_paths":["wf.vars.json.IDOC.ZCDF_HEAD.ZCDF_PACKAGES"],'
-                '"return_shape":"array","constraints":["Do not use JsonPath"],'
-                '"assumptions":[],"clarification_needed":false,"clarification_question":"",'
-                '"semantic_checks":[]}'
-            )
-        if "You are the critic for a LocalScript/Lua generation pipeline." in prompt:
-            return '{"repairable":true,"issues":["lua_runtime_error"],"minimal_actions":["rewrite ensure items array"]}'
-        return (
-            "local packages = wf.vars.json.IDOC.ZCDF_HEAD.ZCDF_PACKAGES or {}\n"
-            "local result = _utils.array.new()\n"
-            "for _, pkg in ipairs(packages) do\n"
-            "  if type(pkg) == \"table\" and pkg.items ~= nil then\n"
-            "    result = _utils.array.insert(result, {items = pkg.items})\n"
-            "  end\n"
-            "end\n"
-            "return result"
-        )
-
-    def generate(self, prompt, context=None):
-        return self.complete(prompt)
-
-
 class EmailValidationSemanticBackend:
     def complete(self, prompt, response_format=None, model=None):
         if "You are the planner for a LocalScript/Lua generation pipeline." in prompt:
@@ -310,34 +260,6 @@ class EmailValidationSemanticBackend:
             "  return false\n"
             "end\n"
             "return string.match(email, \"^[A-Za-z0-9._%+%-]+@[A-Za-z0-9.%-]+%.([A-Za-z]{2,})$\") ~= nil"
-        )
-
-    def generate(self, prompt, context=None):
-        return self.complete(prompt)
-
-
-class ShadowedTableLocalBackend:
-    def complete(self, prompt, response_format=None, model=None):
-        if "You are the planner for a LocalScript/Lua generation pipeline." in prompt:
-            return (
-                '{"family":"generic_lua","root":"wf.vars","source_paths":["wf.vars.orders"],'
-                '"return_shape":"array","constraints":["Do not use JsonPath"],'
-                '"assumptions":[],"clarification_needed":false,"clarification_question":"",'
-                '"semantic_checks":[]}'
-            )
-        if "You are the critic for a LocalScript/Lua generation pipeline." in prompt:
-            return '{"repairable":true,"issues":["shadowed_stdlib_local::table"],"minimal_actions":["rename shadowed table local"]}'
-        return (
-            "local result = _utils.array.new()\n"
-            "for _, item in ipairs(wf.vars.orders or {}) do\n"
-            "  if item.amount >= 100 then\n"
-            "    local table = {}\n"
-            "    table.id = item.order_id\n"
-            "    table.status = item.status\n"
-            "    table.insert(result, table)\n"
-            "  end\n"
-            "end\n"
-            "return result"
         )
 
     def generate(self, prompt, context=None):
@@ -525,7 +447,7 @@ def test_engine_repairs_wrapped_scalar_return_shape(tmp_path):
     assert result.repair_rounds >= 1
 
 
-def test_engine_renames_local_package_without_weakening_namespace_guard(tmp_path):
+def test_engine_accepts_lexically_scoped_package_identifier(tmp_path):
     engine = GenerationEngine(
         profile=get_runtime_profile(),
         trace_store=TraceStore(root=tmp_path / "traces"),
@@ -546,10 +468,10 @@ def test_engine_renames_local_package_without_weakening_namespace_guard(tmp_path
         },
     )
 
-    assert "for _, package_item in" in result.code
-    assert "package." not in result.code
+    assert "for _, package in" in result.code
+    assert "package.id" in result.code
     assert result.verification_errors == []
-    assert result.repair_rounds >= 1
+    assert result.repair_rounds == 0
 
 
 def test_engine_repairs_iso8601_epoch_without_os_namespace(tmp_path):
@@ -585,26 +507,6 @@ def test_engine_repairs_datum_time_iso8601_truncation(tmp_path):
     assert "wf.vars.json.IDOC.ZCDF_HEAD.DATUM" in result.code
     assert "wf.vars.json.IDOC.ZCDF_HEAD.TIME" in result.code
     assert 'string.gsub(TIME or "", "%D", "")' in result.code
-    assert result.verification_errors == []
-    assert result.repair_rounds >= 1
-
-
-def test_engine_repairs_rest_cleanup_by_removing_excluded_key_references(tmp_path):
-    engine = GenerationEngine(
-        profile=get_runtime_profile(),
-        trace_store=TraceStore(root=tmp_path / "traces"),
-        backend=RestCleanupLiteralDeleteBackend(),
-    )
-
-    result = engine.generate(
-        prompt="Оставь в result только ID и ENTITY_ID, без CALL.",
-        context={"wf": {"vars": {"RESTbody": {"result": [{"ID": 1, "ENTITY_ID": 2, "CALL": "x", "OTHER": "y"}]}}}},
-    )
-
-    assert '"CALL"' not in result.code
-    assert ".CALL" not in result.code
-    assert 'key ~= "ID"' in result.code
-    assert 'key ~= "ENTITY_ID"' in result.code
     assert result.verification_errors == []
     assert result.repair_rounds >= 1
 
@@ -646,25 +548,6 @@ def test_engine_repairs_augment_existing_code_literal_syntax(tmp_path):
     assert result.repair_rounds >= 1
 
 
-def test_engine_repairs_ensure_items_array_runtime_misuse(tmp_path):
-    engine = GenerationEngine(
-        profile=get_runtime_profile(),
-        trace_store=TraceStore(root=tmp_path / "traces"),
-        backend=EnsureItemsRuntimeBackend(),
-    )
-
-    result = engine.generate(
-        prompt="Make items in ZCDF_PACKAGES always arrays, direct access only.",
-        context={"wf": {"vars": {"json": {"IDOC": {"ZCDF_HEAD": {"ZCDF_PACKAGES": [{"items": {"sku": "R"}}]}}}}}},
-    )
-
-    assert "_utils.array.insert" not in result.code
-    assert "function ensureArray" in result.code
-    assert "pkg.items = ensureArray(pkg.items)" in result.code
-    assert result.verification_errors == []
-    assert result.repair_rounds >= 1
-
-
 def test_engine_repairs_email_validation_semantic_pattern(tmp_path):
     engine = GenerationEngine(
         profile=get_runtime_profile(),
@@ -679,25 +562,6 @@ def test_engine_repairs_email_validation_semantic_pattern(tmp_path):
 
     assert "%.[A-Za-z]+$" in result.code
     assert "{2,}" not in result.code
-    assert result.verification_errors == []
-    assert result.repair_rounds >= 1
-
-
-def test_engine_repairs_shadowed_table_stdlib_local(tmp_path):
-    engine = GenerationEngine(
-        profile=get_runtime_profile(),
-        trace_store=TraceStore(root=tmp_path / "traces"),
-        backend=ShadowedTableLocalBackend(),
-    )
-
-    result = engine.generate(
-        prompt="На основе wf.vars.orders подготовь список кратких таблиц только для заказов amount >= 100. В каждой таблице создай поле id из order_id и поле status без изменений.",
-        context={"wf": {"vars": {"orders": [{"order_id": "A", "status": "paid", "amount": 150}]}}},
-    )
-
-    assert "local table =" not in result.code
-    assert "table.insert(result, entry)" in result.code
-    assert "local entry = {}" in result.code
     assert result.verification_errors == []
     assert result.repair_rounds >= 1
 

@@ -59,6 +59,8 @@ LOCKED_LICENSES = {
     "sniffio": "Apache-2.0 OR MIT",
     "starlette": "BSD-3-Clause",
     "typer": "MIT",
+    "tree-sitter": "MIT",
+    "tree-sitter-lua": "MIT",
     "typing-extensions": "PSF-2.0",
     "typing-inspection": "MIT",
     "uvicorn": "BSD-3-Clause",

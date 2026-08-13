@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import subprocess
 import tempfile
 from copy import deepcopy
@@ -8,66 +7,10 @@ from copy import deepcopy
 from app.families import get_family_definition
 from app.generation.taskspec import TaskResolutionSource
 from app.validation.base import BaseValidator, ValidationReport, ValidatorContext
+from app.validation.lua_ast import analyze_lua_output, extract_lua_chunks
 from app.validation.oracles import UNSUPPORTED, build_expected_result, compare_expected_and_actual
 from app.validation.runtime import find_lua_binary, find_luac_binary
-from app.validation.runtime_executor import DANGEROUS_LUA_PATTERNS, execute_output
-
-SHADOW_PROTECTED_GLOBALS = (
-    "table",
-    "string",
-    "math",
-    "utf8",
-    "package",
-    "_utils",
-    "wf",
-)
-
-
-def _declares_local_identifier(code, identifier):
-    escaped = re.escape(identifier)
-    declarations = (
-        r"\blocal\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*,\s*)*{0}\b".format(escaped),
-        r"\bfor\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*,\s*)*{0}\s*(?:,|\bin\b)".format(escaped),
-    )
-    return any(re.search(pattern, code or "") for pattern in declarations)
-
-
-def _strip_lua_wrapper(code):
-    if not isinstance(code, str):
-        return ""
-    stripped = code.strip()
-    if stripped.startswith("lua{") and stripped.endswith("}lua"):
-        return stripped[4:-4]
-    return stripped
-
-
-def _extract_lua_chunks(code, output_style):
-    if output_style != "json_envelope":
-        if not isinstance(code, str) or not code.strip():
-            return []
-        return [_strip_lua_wrapper(code)]
-
-    if not isinstance(code, str):
-        return []
-
-    try:
-        payload = json.loads(code)
-    except (ValueError, TypeError, RecursionError):
-        return []
-
-    if not isinstance(payload, dict) or not payload:
-        return []
-
-    chunks = []
-    for value in payload.values():
-        if not (
-            isinstance(value, str)
-            and value.startswith("lua{")
-            and value.endswith("}lua")
-        ):
-            return []
-        chunks.append(_strip_lua_wrapper(value))
-    return chunks
+from app.validation.runtime_executor import execute_output
 
 
 def _find_lua_binary():
@@ -205,35 +148,24 @@ class DomainLintValidator(BaseValidator):
         return report
 
 
-class DangerousStdlibValidator(BaseValidator):
-    name = "dangerous_stdlib"
+class LuaAstPolicyValidator(BaseValidator):
+    name = "lua_ast_policy"
 
     def validate(self, code, context):
         report = ValidationReport()
-        for token, error_code, message in DANGEROUS_LUA_PATTERNS:
-            if token in code:
-                report.add(
-                    self.name,
-                    "error",
-                    error_code,
-                    message,
-                )
-        return report
-
-
-class ShadowedStdlibValidator(BaseValidator):
-    name = "shadowed_stdlib"
-
-    def validate(self, code, context):
-        report = ValidationReport()
-        for identifier in SHADOW_PROTECTED_GLOBALS:
-            if _declares_local_identifier(code, identifier):
-                report.add(
-                    self.name,
-                    "error",
-                    "shadowed_stdlib_local::{0}".format(identifier),
-                    "Local variable `{0}` shadows a protected runtime/global identifier.".format(identifier),
-                )
+        result = analyze_lua_output(code, context.task_spec.output_style)
+        for finding in result.findings:
+            report.add(
+                self.name,
+                "error",
+                finding.code,
+                "Lua chunk #{0}, line {1}, column {2}: {3}".format(
+                    finding.chunk_index,
+                    finding.line,
+                    finding.column,
+                    finding.message,
+                ),
+            )
         return report
 
 
@@ -278,7 +210,7 @@ class LuaSyntaxValidator(BaseValidator):
             )
             return report
 
-        for index, chunk in enumerate(_extract_lua_chunks(code, context.task_spec.output_style), start=1):
+        for index, chunk in enumerate(extract_lua_chunks(code, context.task_spec.output_style), start=1):
             if not chunk.strip():
                 report.add(
                     self.name,
@@ -632,8 +564,7 @@ class ValidationPipeline:
             ContractValidator(),
             JsonEnvelopeValidator(),
             DomainLintValidator(),
-            ShadowedStdlibValidator(),
-            DangerousStdlibValidator(),
+            LuaAstPolicyValidator(),
             LengthBudgetValidator(),
             LuaSyntaxValidator(),
             ScenarioValidator(),
