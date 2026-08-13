@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 
+from app.validation.lua_ast import analyze_lua_chunk
 from app.validation.runtime import find_lua_binary
 
 
@@ -16,27 +17,6 @@ class RuntimeExecutionResult:
     error_code: str = ""
     error_message: str = ""
     degraded: bool = False
-
-
-DANGEROUS_LUA_PATTERNS = [
-    ("os.", "dangerous_stdlib_os_forbidden", "Access to the `os` namespace is forbidden."),
-    ("io.", "dangerous_stdlib_io_forbidden", "Access to the `io` namespace is forbidden."),
-    ("package.", "dangerous_stdlib_package_forbidden", "Access to the `package` namespace is forbidden."),
-    ("require(", "dangerous_stdlib_require_forbidden", "`require` is forbidden."),
-    ("debug.", "dangerous_stdlib_debug_forbidden", "Access to the `debug` namespace is forbidden."),
-    ("dofile(", "dangerous_stdlib_dofile_forbidden", "`dofile` is forbidden."),
-    ("loadfile(", "dangerous_stdlib_loadfile_forbidden", "`loadfile` is forbidden."),
-    ("collectgarbage(", "dangerous_stdlib_collectgarbage_forbidden", "`collectgarbage` is forbidden."),
-]
-
-
-def detect_unsafe_lua_usage(code):
-    if not isinstance(code, str):
-        return None
-    for token, error_code, message in DANGEROUS_LUA_PATTERNS:
-        if token in code:
-            return token, error_code, message
-    return None
 
 
 def _strip_lua_wrapper(code):
@@ -67,11 +47,7 @@ def _extract_lua_chunks(code, output_style):
 
     chunks = []
     for value in payload.values():
-        if not (
-            isinstance(value, str)
-            and value.startswith("lua{")
-            and value.endswith("}lua")
-        ):
+        if not (isinstance(value, str) and value.startswith("lua{") and value.endswith("}lua")):
             return []
         chunks.append(_strip_lua_wrapper(value))
     return chunks
@@ -119,11 +95,13 @@ def _serialize_to_lua(value):
         return _lua_string_literal(value)
     if isinstance(value, list):
         inner = ", ".join(_serialize_to_lua(item) for item in value)
-        return 'setmetatable({%s}, { __localscript_array = true })' % inner
+        return "setmetatable({%s}, { __localscript_array = true })" % inner
     if isinstance(value, dict):
         items = []
         for key, nested in value.items():
-            items.append("[{0}] = {1}".format(_lua_string_literal(str(key)), _serialize_to_lua(nested)))
+            items.append(
+                "[{0}] = {1}".format(_lua_string_literal(str(key)), _serialize_to_lua(nested))
+            )
         return "{%s}" % ", ".join(items)
     return "nil"
 
@@ -133,13 +111,53 @@ def _build_runner(chunk, context):
     serialized_chunk = _lua_string_literal(chunk)
     return """
 local wf_container = {context_literal}
-wf = wf_container.wf or {{}}
-if wf.vars == nil then
-  wf.vars = {{}}
+local raw_wf = wf_container.wf or {{}}
+if raw_wf.vars == nil then
+  raw_wf.vars = {{}}
 end
-if wf.initVariables == nil then
-  wf.initVariables = {{}}
+if raw_wf.initVariables == nil then
+  raw_wf.initVariables = {{}}
 end
+
+local function _ls_readonly(value, cache)
+  if type(value) ~= "table" then
+    return value
+  end
+  cache = cache or {{}}
+  if cache[value] ~= nil then
+    return cache[value]
+  end
+
+  local proxy = {{}}
+  cache[value] = proxy
+  local source_mt = getmetatable(value)
+  local mt = {{
+    __index = function(_, key)
+      return _ls_readonly(value[key], cache)
+    end,
+    __newindex = function()
+      error("workflow input is read-only", 2)
+    end,
+    __len = function()
+      return #value
+    end,
+    __pairs = function()
+      local function iterate(_, previous)
+        local key, nested = next(value, previous)
+        if key == nil then
+          return nil
+        end
+        return key, _ls_readonly(nested, cache)
+      end
+      return iterate, proxy, nil
+    end,
+    __localscript_array = source_mt and source_mt.__localscript_array or nil,
+    __localscript_readonly = true,
+  }}
+  return setmetatable(proxy, mt)
+end
+
+local wf = _ls_readonly(raw_wf)
 
 local function _ls_is_array(tbl)
   if type(tbl) ~= "table" then
@@ -167,10 +185,19 @@ local function _ls_is_array(tbl)
 end
 
 local function _ls_array(value)
-  return setmetatable(value or {{}}, {{ __localscript_array = true }})
+  value = value or {{}}
+  local mt = getmetatable(value)
+  if mt and mt.__localscript_readonly then
+    local copy = {{}}
+    for index, nested in ipairs(value) do
+      copy[index] = nested
+    end
+    value = copy
+  end
+  return setmetatable(value, {{ __localscript_array = true }})
 end
 
-_utils = {{
+local _utils = {{
   array = {{
     new = function(arg1, arg2)
       if arg1 == nil then
@@ -220,7 +247,6 @@ local safe_env = {{
   type = type,
   pairs = pairs,
   ipairs = ipairs,
-  next = next,
   select = select,
   assert = assert,
   error = error,
@@ -268,15 +294,27 @@ local function _ls_to_json(value)
     return "[" .. table.concat(parts, ",") .. "]"
   end
 
-  local keys = {{}}
+  local entries = {{}}
+  local labels = {{}}
   for key, _ in pairs(value) do
-    keys[#keys + 1] = tostring(key)
+    local key_type = type(key)
+    if key_type ~= "string" and key_type ~= "number" then
+      error("JSON object keys must be strings or numbers")
+    end
+    local label = tostring(key)
+    if labels[label] then
+      error("JSON object keys collide after string conversion")
+    end
+    labels[label] = true
+    entries[#entries + 1] = {{ key = key, label = label }}
   end
-  table.sort(keys)
+  table.sort(entries, function(left, right)
+    return left.label < right.label
+  end)
 
   local parts = {{}}
-  for _, key in ipairs(keys) do
-    parts[#parts + 1] = '"' .. _ls_escape_string(key) .. '":' .. _ls_to_json(value[key])
+  for _, entry in ipairs(entries) do
+    parts[#parts + 1] = '"' .. _ls_escape_string(entry.label) .. '":' .. _ls_to_json(value[entry.key])
   end
   return "{{" .. table.concat(parts, ",") .. "}}"
 end
@@ -293,7 +331,13 @@ if not ok then
   return
 end
 
-io.write('{{"ok":true,"value":' .. _ls_to_json(result) .. '}}')
+local serialization_ok, serialized_result = pcall(_ls_to_json, result)
+if not serialization_ok then
+  io.write('{{"ok":false,"error_code":"lua_result_serialization_error","error_message":"' .. _ls_escape_string(tostring(serialized_result)) .. '"}}')
+  return
+end
+
+io.write('{{"ok":true,"value":' .. serialized_result .. '}}')
 """.format(context_literal=serialized_context, chunk_literal=serialized_chunk)
 
 
@@ -320,13 +364,17 @@ def _subprocess_limits():
 
 
 def _run_chunk(chunk, context):
-    unsafe_usage = detect_unsafe_lua_usage(chunk)
-    if unsafe_usage:
-        _, error_code, message = unsafe_usage
+    policy_result = analyze_lua_chunk(chunk)
+    if not policy_result.ok:
+        finding = policy_result.findings[0]
         return RuntimeExecutionResult(
             ok=False,
-            error_code=error_code,
-            error_message=message,
+            error_code=finding.code,
+            error_message="Line {0}, column {1}: {2}".format(
+                finding.line,
+                finding.column,
+                finding.message,
+            ),
         )
 
     lua_binary = _find_lua_binary()
@@ -344,30 +392,53 @@ def _run_chunk(chunk, context):
         temp_path = handle.name
 
     try:
-        completed = subprocess.run(
-            [lua_binary, temp_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=5,
-            close_fds=True,
-            env={"LC_ALL": "C.UTF-8"},
-            preexec_fn=_subprocess_limits(),
-        )
+        try:
+            completed = subprocess.run(
+                [lua_binary, temp_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5,
+                close_fds=True,
+                env={"LC_ALL": "C.UTF-8"},
+                preexec_fn=_subprocess_limits(),
+            )
+        except subprocess.TimeoutExpired:
+            return RuntimeExecutionResult(
+                ok=False,
+                error_code="lua_runtime_timeout",
+                error_message="Lua execution exceeded the 5 second timeout.",
+            )
     finally:
         try:
             os.unlink(temp_path)
         except OSError:
             pass
 
+    try:
+        stdout = (completed.stdout or b"").decode("utf-8")
+    except UnicodeDecodeError:
+        return RuntimeExecutionResult(
+            ok=False,
+            error_code="lua_runtime_invalid_utf8",
+            error_message="Lua subprocess stdout is not valid UTF-8.",
+        )
+    try:
+        stderr = (completed.stderr or b"").decode("utf-8")
+    except UnicodeDecodeError:
+        return RuntimeExecutionResult(
+            ok=False,
+            error_code="lua_runtime_invalid_utf8",
+            error_message="Lua subprocess stderr is not valid UTF-8.",
+        )
+
     if completed.returncode != 0:
         return RuntimeExecutionResult(
             ok=False,
             error_code="lua_runtime_error",
-            error_message=completed.stderr.strip() or completed.stdout.strip(),
+            error_message=stderr.strip() or stdout.strip(),
         )
 
-    stdout = completed.stdout.strip()
+    stdout = stdout.strip()
     try:
         payload = json.loads(stdout or "{}")
     except json.JSONDecodeError:
