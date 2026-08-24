@@ -208,3 +208,36 @@ def test_invalid_structured_model_output_is_typed_and_fail_closed():
 
     assert result.status is WorkflowStatus.VALIDATION_FAILED
     assert result.code is None
+
+
+def test_oversized_workflow_key_is_inspected_instead_of_rejected():
+    workflow = coordinator(plan(), [validation()], [ReviewApproved()])
+
+    result = workflow.run(
+        prompt="Return value",
+        context={"wf": {"vars": {"value": 1, "x" * 200: 2}}},
+    )
+
+    assert result.status is WorkflowStatus.COMPLETED
+
+
+class BrokenValidator:
+    def validate(self, **_kwargs):
+        return "not a validation result"
+
+
+def test_stage_contract_violation_is_not_reported_as_a_bad_request():
+    workflow = WorkflowCoordinator(
+        planner=Planner(plan()),
+        generator=Generator(),
+        reviewer=Reviewer([]),
+        validator=BrokenValidator(),
+    )
+
+    result = workflow.run(prompt="Return value", context={"wf": {"vars": {"value": 1}}})
+
+    assert result.status is WorkflowStatus.VALIDATION_FAILED
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        "workflow_contract_violation"
+    ]
+    assert result.code is None

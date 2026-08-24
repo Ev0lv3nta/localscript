@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 
+from pydantic import ValidationError
+
 from app.workflow.contracts import (
     ContextEntry,
     ContextInventory,
@@ -42,9 +44,17 @@ class ContextInspector:
             entries.append(ContextEntry(path=path, value_type=self._value_type(value)))
             if isinstance(value, Mapping):
                 for key in sorted(value):
-                    walk(value[key], WorkflowPath(root=path.root, segments=(*path.segments, key)))
+                    child = self._child(path, key)
+                    if child is None:
+                        truncated = True
+                        continue
+                    walk(value[key], child)
             elif isinstance(value, Sequence) and not isinstance(value, str) and value:
-                walk(value[0], WorkflowPath(root=path.root, segments=(*path.segments, "[]")))
+                child = self._child(path, "[]")
+                if child is None:
+                    truncated = True
+                    return
+                walk(value[0], child)
 
         for root, value in roots:
             walk(value, WorkflowPath(root=root))
@@ -62,6 +72,19 @@ class ContextInspector:
                 for entry in inventory.entries
             ],
         }
+
+    @staticmethod
+    def _child(path: WorkflowPath, segment: str) -> WorkflowPath | None:
+        """Extend a workflow path, or report that the contract cannot represent the key.
+
+        Workflow contexts come from user data, so a key may be longer than the contract allows or
+        may contain control characters. Such a subtree is omitted from the inventory and marks it
+        truncated instead of failing the whole request.
+        """
+        try:
+            return WorkflowPath(root=path.root, segments=(*path.segments, segment))
+        except ValidationError:
+            return None
 
     @staticmethod
     def _value_type(value: JsonValue) -> ContextValueType:

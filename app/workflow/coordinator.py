@@ -28,6 +28,14 @@ from app.workflow.roles import GeneratorRole, PlannerRole, ReviewerRole
 JSON_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 
+class _InvalidJsonContext(Exception):
+    """The caller-supplied workflow context is not a JSON value.
+
+    Kept separate from other contract violations so a defect inside a workflow stage is never
+    reported to the caller as a malformed request.
+    """
+
+
 class CandidateValidator(Protocol):
     def validate(self, *, candidate: CodeCandidate, plan: TaskPlan) -> ValidationResult: ...
 
@@ -63,7 +71,10 @@ class WorkflowCoordinator:
         state = WorkflowState()
         self._observe(observe, state.stage)
         try:
-            json_context = JSON_ADAPTER.validate_python(context, strict=True)
+            try:
+                json_context = JSON_ADAPTER.validate_python(context, strict=True)
+            except ValidationError as error:
+                raise _InvalidJsonContext from error
             inventory = self.context_inspector.inventory(json_context)
             context_sample = self.context_inspector.sample(json_context)
             decision = self.planner.run(
@@ -217,7 +228,7 @@ class WorkflowCoordinator:
                     ),
                 ),
             )
-        except ValidationError:
+        except _InvalidJsonContext:
             self._observe(observe, WorkflowStage.FAILED)
             return WorkflowResult(
                 status=WorkflowStatus.VALIDATION_FAILED,
@@ -225,6 +236,18 @@ class WorkflowCoordinator:
                     WorkflowDiagnostic(
                         code="invalid_json_context",
                         message="Workflow context must be a valid JSON value.",
+                        stage=state.stage,
+                    ),
+                ),
+            )
+        except ValidationError:
+            self._observe(observe, WorkflowStage.FAILED)
+            return WorkflowResult(
+                status=WorkflowStatus.VALIDATION_FAILED,
+                diagnostics=(
+                    WorkflowDiagnostic(
+                        code="workflow_contract_violation",
+                        message="A workflow stage produced a value that violates its contract.",
                         stage=state.stage,
                     ),
                 ),

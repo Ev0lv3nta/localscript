@@ -140,3 +140,15 @@ def test_plan_json_contains_no_family_or_router_fields():
     assert "family" not in payload
     assert "strategy" not in payload
     assert "confidence" not in payload
+
+
+def test_context_inventory_skips_keys_the_path_contract_cannot_represent():
+    inventory = ContextInspector().inventory(
+        {"wf": {"vars": {"a" * 200: 1, "line\nbreak": 2, "region": "ru"}}}
+    )
+
+    entries = {entry.path.dotted for entry in inventory.entries}
+    assert "wf.vars.region" in entries
+    assert not any(len(entry.path.segments) and len(entry.path.segments[-1]) > 128
+                   for entry in inventory.entries)
+    assert inventory.truncated is True
