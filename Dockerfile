@@ -38,7 +38,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /workspace
 
+# Базовый образ пересобирается реже, чем Debian выпускает обновления безопасности,
+# поэтому пакеты рантайма обновляются при сборке: иначе в финальном образе остаются
+# устранимые high-уязвимости базовых пакетов, которые ловит trivy в CI.
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends bash ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --shell /bin/bash appuser
