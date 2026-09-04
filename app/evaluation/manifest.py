@@ -8,9 +8,8 @@ from typing import Any
 from app.core.resources import read_resource_text, resource_exists
 
 MANIFEST_RESOURCE = "evals/manifest.json"
-ALLOWED_CORPORA = frozenset({"public_benchmark", "regression"})
-ALLOWED_RUNNERS = frozenset({"standard", "rich"})
-ALLOWED_GATES = frozenset({"required", "diagnostic"})
+ALLOWED_CORPORA = frozenset({"live"})
+ALLOWED_GATES = frozenset({"required"})
 
 
 @dataclass(frozen=True)
@@ -18,7 +17,6 @@ class EvaluationDataset:
     name: str
     path: str
     corpus: str
-    runner: str
     gate: str
     claim_scope: str
 
@@ -31,7 +29,6 @@ class EvaluationDataset:
             "name": self.name,
             "path": self.path,
             "corpus": self.corpus,
-            "runner": self.runner,
             "gate": self.gate,
             "claim_scope": self.claim_scope,
         }
@@ -42,7 +39,7 @@ def load_evaluation_manifest() -> dict[str, Any]:
         payload = json.loads(read_resource_text(MANIFEST_RESOURCE))
     except (json.JSONDecodeError, OSError, ValueError) as error:
         raise ValueError("evaluation_manifest_invalid") from error
-    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+    if not isinstance(payload, dict) or payload.get("schema_version") != 2:
         raise ValueError("evaluation_manifest_schema_unsupported")
     datasets = payload.get("datasets")
     if not isinstance(datasets, list) or not datasets:
@@ -76,7 +73,6 @@ def dataset_specs() -> tuple[EvaluationDataset, ...]:
                 name=str(raw["name"]),
                 path=str(raw["path"]),
                 corpus=str(raw["corpus"]),
-                runner=str(raw["runner"]),
                 gate=str(raw["gate"]),
                 claim_scope=str(raw["claim_scope"]),
             )
@@ -88,13 +84,39 @@ def dataset_specs() -> tuple[EvaluationDataset, ...]:
             raise ValueError("evaluation_manifest_dataset_path_invalid")
         if spec.corpus not in ALLOWED_CORPORA:
             raise ValueError("evaluation_manifest_corpus_invalid")
-        if spec.runner not in ALLOWED_RUNNERS:
-            raise ValueError("evaluation_manifest_runner_invalid")
         if spec.gate not in ALLOWED_GATES:
             raise ValueError("evaluation_manifest_gate_invalid")
         names.add(spec.name)
         paths.add(spec.path)
         specs.append(spec)
-    if sum(spec.corpus == "public_benchmark" for spec in specs) != 1:
-        raise ValueError("evaluation_manifest_public_corpus_invalid")
+    if len(specs) != 1:
+        raise ValueError("evaluation_manifest_live_corpus_invalid")
     return tuple(specs)
+
+
+def stability_plan() -> tuple[str, tuple[str, ...], int]:
+    """Return the dataset, cases and repeat count of the stability check.
+
+    Stability is deliberately narrow: repeating the whole corpus multiplies GPU time without
+    telling us anything the three representative scenarios do not.
+    """
+    payload = load_evaluation_manifest()
+    plan = payload.get("stability")
+    if not isinstance(plan, dict):
+        raise ValueError("evaluation_manifest_stability_missing")
+    dataset = plan.get("dataset")
+    case_ids = plan.get("case_ids")
+    repeats = plan.get("repeats")
+    if (
+        not isinstance(dataset, str)
+        or not isinstance(case_ids, list)
+        or not case_ids
+        or not all(isinstance(item, str) and item for item in case_ids)
+        or not isinstance(repeats, int)
+        or repeats < 2
+    ):
+        raise ValueError("evaluation_manifest_stability_invalid")
+    known = {spec.name for spec in dataset_specs()}
+    if dataset not in known:
+        raise ValueError("evaluation_manifest_stability_dataset_unknown")
+    return dataset, tuple(case_ids), repeats

@@ -162,7 +162,7 @@ def validate(
 
 @cli.command()
 def benchmark(
-    dataset: str = typer.Option("evals/public/v1.jsonl", help="JSONL dataset path."),
+    dataset: str = typer.Option("evals/live/v1.jsonl", help="JSONL dataset path."),
 ) -> None:
     dataset_path = Path(dataset)
     packaged_dataset = dataset.replace("\\", "/")

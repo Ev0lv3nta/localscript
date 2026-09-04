@@ -16,23 +16,20 @@ if PREFERRED_PYTHON.exists() and Path(sys.prefix).resolve() != PREFERRED_VENV:
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.core.benchmarks import run_repeated_dataset_benchmark
+from app.core.benchmarks import run_stability_benchmark
 
 
 def parse_args(argv):
-    parser = argparse.ArgumentParser(description="Повторный прогон LocalScript dataset.")
-    parser.add_argument("--dataset", default="evals/public/v1.jsonl")
-    parser.add_argument("--repeats", type=int, default=3)
+    parser = argparse.ArgumentParser(
+        description="Проверка стабильности LocalScript на сценариях из манифеста."
+    )
     parser.add_argument("--output", type=Path)
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    report = run_repeated_dataset_benchmark(
-        args.dataset,
-        repeats=args.repeats,
-    )
+    report = run_stability_benchmark()
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(

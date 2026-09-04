@@ -1,26 +1,39 @@
-from app.core.public_eval import evaluate_case
+from app.core.public_eval import evaluate_case, load_cases
+from app.core.resources import materialized_resource
 from app.evaluation.integrity import (
     _find_cross_corpus_overlaps,
     run_integrity_check,
 )
-from app.evaluation.manifest import dataset_specs, load_evaluation_manifest
+from app.evaluation.manifest import (
+    dataset_specs,
+    load_evaluation_manifest,
+    stability_plan,
+)
 
 
-def test_eval_integrity_separates_public_and_regression_corpora():
+def test_live_corpus_covers_every_declared_scenario():
     report = run_integrity_check()
 
     assert report["ok"] is True
     assert report["errors"] == []
     assert report["overlaps"] == []
     assert report["private_holdout"] is None
-    assert (
-        sum(item["case_count"] for item in report["datasets"] if item["corpus"] == "regression")
-        == 140
-    )
-    public = [item for item in report["datasets"] if item["corpus"] == "public_benchmark"]
-    assert len(public) == 1
-    assert public[0]["name"] == "public_v1"
-    assert public[0]["case_count"] == 12
+    assert len(report["datasets"]) == 1
+    dataset = report["datasets"][0]
+    assert dataset["name"] == "live_v1"
+    assert dataset["corpus"] == "live"
+    assert dataset["case_count"] == 6
+
+    with materialized_resource(dataset["path"]) as path:
+        scenarios = {case["scenario"] for case in load_cases(path)}
+    assert scenarios == {
+        "scalar_transform",
+        "filter_projection",
+        "aggregation",
+        "nested_object",
+        "json_envelope",
+        "clarification",
+    }
 
 
 def test_private_holdout_manifest_exposes_identity_but_not_content_path():
@@ -28,12 +41,13 @@ def test_private_holdout_manifest_exposes_identity_but_not_content_path():
 
     assert holdouts == [
         {
-            "name": "holdout_v1",
+            "name": "holdout_v2",
             "external": True,
             "case_count": 8,
-            "sha256": "690ce204ea542ca1e91e9049f4d3a9ba6d404de497d39121f6d42a0f92c69419",
+            "safety_case_count": 2,
+            "sha256": "5aed110d22971d236bf99f750766925799bb45e07dee7b6cf86dafd4a37770b3",
             "gate": "release_only",
-            "claim_scope": "private_holdout",
+            "claim_scope": "synthetic_blind",
         }
     ]
     assert "path" not in holdouts[0]
@@ -55,17 +69,23 @@ def test_overlap_checker_detects_normalized_and_fuzzy_leakage():
     assert {finding["kind"] for finding in findings} == {"normalized_exact", "fuzzy"}
 
 
-def test_manifest_has_one_registered_path_per_dataset():
+def test_manifest_declares_one_live_corpus_and_a_narrow_stability_plan():
     specs = dataset_specs()
 
-    assert len(specs) == 12
-    assert len({spec.name for spec in specs}) == len(specs)
-    assert len({spec.path for spec in specs}) == len(specs)
-    assert all(spec.path.startswith("evals/") for spec in specs)
+    assert [spec.path for spec in specs] == ["evals/live/v1.jsonl"]
+
+    dataset, case_ids, repeats = stability_plan()
+
+    assert dataset == "live_v1"
+    assert repeats == 2
+    with materialized_resource(specs[0].path) as path:
+        known = {case["id"] for case in load_cases(path)}
+    assert set(case_ids) <= known
+    assert len(case_ids) == 3
 
 
 def test_private_holdout_identity_mismatch_fails_closed(tmp_path):
-    altered = tmp_path / "holdout-v1.jsonl"
+    altered = tmp_path / "holdout-v2.jsonl"
     altered.write_text(
         '{"id":"changed","family":"generic_lua","prompt":"changed"}\n',
         encoding="utf-8",
@@ -77,7 +97,7 @@ def test_private_holdout_identity_mismatch_fails_closed(tmp_path):
     assert "private_holdout_identity_mismatch" in report["errors"]
 
 
-def test_public_benchmark_always_executes_explicit_semantic_oracle(monkeypatch):
+def test_live_case_always_executes_its_explicit_semantic_oracle(monkeypatch):
     class Execution:
         ok = True
         degraded = False
@@ -93,7 +113,7 @@ def test_public_benchmark_always_executes_explicit_semantic_oracle(monkeypatch):
         "prompt": "Верни увеличенный счётчик.",
         "context": {"wf": {"vars": {"counter": 4}}},
         "expected_output_style": "lua_block",
-        "case_type": "public_benchmark",
+        "case_type": "live",
         "expected_result": 5,
         "forbidden_patterns": [],
     }

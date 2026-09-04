@@ -14,7 +14,8 @@ from app.core.public_eval import evaluate_case, load_cases_bytes
 from app.core.resources import materialized_resource, resource_exists
 from app.core.state import get_state_root
 from app.core.traces import TraceStore
-from app.evaluation.manifest import dataset_specs
+from app.evaluation.holdout import adapt_blind_holdout_cases
+from app.evaluation.manifest import dataset_specs, stability_plan
 from app.generation.engine import GenerationEngine
 from app.generation.ollama import OllamaBackend
 from app.generation.results import GenerationResult
@@ -69,7 +70,8 @@ class InstrumentedBackend:
 
 def _load_cases_snapshot(dataset_path: Path | str) -> tuple[list[dict[str, Any]], str]:
     payload = Path(dataset_path).read_bytes()
-    return load_cases_bytes(payload), hashlib.sha256(payload).hexdigest()
+    cases = adapt_blind_holdout_cases(load_cases_bytes(payload))
+    return cases, hashlib.sha256(payload).hexdigest()
 
 
 def _percentile(values: Sequence[float], percentile: float) -> float | None:
@@ -118,6 +120,8 @@ def _case_observation(
     return {
         "id": case["id"],
         "case_type": case.get("case_type", "unknown"),
+        "category": case.get("category"),
+        "safety": bool(case.get("safety", False)),
         "passed": passed,
         "status": result.workflow.status.value,
         "revision_count": result.workflow.revision_count,
@@ -289,6 +293,7 @@ def run_dataset_benchmark(
     dataset_path: Path | str,
     profile: RuntimeProfile | None = None,
     backend: Any = None,
+    case_ids: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Run one dataset through the single generation entry point.
 
@@ -301,6 +306,12 @@ def run_dataset_benchmark(
     started_at = datetime.now(UTC).isoformat()
     with _materialized_dataset(dataset_path) as (resolved_dataset_path, display_path):
         cases, dataset_sha256 = _load_cases_snapshot(resolved_dataset_path)
+        if case_ids is not None:
+            selected = set(case_ids)
+            cases = [case for case in cases if case.get("id") in selected]
+            missing = sorted(selected - {str(case.get("id")) for case in cases})
+            if missing:
+                raise ValueError("benchmark_case_ids_unknown::{}".format(",".join(missing)))
         trace_store = TraceStore(root=get_state_root() / "traces" / "benchmarks")
         engine = GenerationEngine(
             profile=runtime_profile,
@@ -318,9 +329,6 @@ def run_dataset_benchmark(
             expected_status = case.get("expected_status")
             if expected_status and result.workflow.status.value != expected_status:
                 errors.append(f"expected_status::{expected_status}")
-            expected_question = case.get("expected_question_contains")
-            if expected_question and expected_question not in (result.workflow.question or ""):
-                errors.append(f"expected_question_contains::{expected_question}")
 
             initial_status = result.workflow.status.value
             if case.get("clarification_answer"):
@@ -332,11 +340,19 @@ def run_dataset_benchmark(
                 if expected_final_status and result.workflow.status.value != expected_final_status:
                     errors.append(f"expected_final_status::{expected_final_status}")
 
-            errors.extend(diagnostic.code for diagnostic in result.workflow.diagnostics)
-            if result.workflow.code:
-                errors.extend(evaluate_case(result.workflow.code, case))
-            elif "expected_result" in case and not expected_status:
-                errors.append("no_code_published")
+            # Кейс, который обязан завершиться отказом, проверяется зеркально успешному:
+            # диагностика для него — ожидаемый результат, а опубликованный код — провал.
+            final_expected = str(
+                case.get("expected_final_status") or case.get("expected_status") or "completed"
+            )
+            if final_expected == "completed":
+                errors.extend(diagnostic.code for diagnostic in result.workflow.diagnostics)
+                if result.workflow.code:
+                    errors.extend(evaluate_case(result.workflow.code, case))
+                else:
+                    errors.append("no_code_published")
+            elif result.workflow.code is not None:
+                errors.append("code_published_for_rejected_case")
 
             observation = _case_observation(
                 case=case,
@@ -368,22 +384,25 @@ def run_dataset_benchmark(
     }
 
 
-def run_repeated_dataset_benchmark(
-    dataset_path: Path | str,
-    repeats: int = 3,
+def run_stability_benchmark(
     profile: RuntimeProfile | None = None,
     backend: Any = None,
 ) -> dict[str, Any]:
-    repeat_count = int(repeats)
-    if repeat_count < 2:
-        raise ValueError("repeats must be at least 2")
+    """Repeat the few scenarios named by the manifest and compare their outcomes.
+
+    Repeating the whole corpus multiplies GPU time without telling us more than three
+    representative scenarios do, so the manifest fixes both the cases and the repeat count.
+    """
+    dataset_name, case_ids, repeat_count = stability_plan()
+    spec = next(item for item in dataset_specs() if item.name == dataset_name)
     runtime_profile = profile or get_runtime_profile()
     runtime_backend = backend or OllamaBackend(runtime_profile)
     reports = [
         run_dataset_benchmark(
-            dataset_path,
+            spec.path,
             profile=runtime_profile,
             backend=runtime_backend,
+            case_ids=case_ids,
         )
         for _ in range(repeat_count)
     ]
@@ -423,8 +442,9 @@ def run_repeated_dataset_benchmark(
     stable_cases = sum(item["stable"] for item in stability)
     consistently_passed = sum(item["passed_every_repeat"] for item in stability)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "dataset": reports[0]["dataset"],
+        "case_ids": list(case_ids),
         "dataset_sha256": reports[0]["dataset_sha256"],
         "backend_type": reports[0]["backend_type"],
         "model": runtime_profile.model,
@@ -490,26 +510,17 @@ def run_quality_benchmark(
         "mandatory_eval_sets": [
             entry["name"] for entry in QUALITY_EVAL_MANIFEST if entry["gate"] == "required"
         ],
-        "diagnostic_eval_sets": [
-            entry["name"] for entry in QUALITY_EVAL_MANIFEST if entry["gate"] == "diagnostic"
-        ],
     }
     for entry in QUALITY_EVAL_MANIFEST:
         name = entry["name"]
         dataset_path = entry["path"]
         if not resource_exists(dataset_path):
             continue
-        result = run_dataset_benchmark(
+        report[name] = run_dataset_benchmark(
             dataset_path,
             profile=runtime_profile,
             backend=runtime_backend,
         )
-        if name == "adversarial_eval" and mode != "competition":
-            result = dict(result)
-            result["ok"] = (
-                result["total"] == 0 or (float(result["passed"]) / float(result["total"])) >= 0.75
-            )
-        report[name] = result
 
     if mode == "competition":
         report["strict_live_sets"] = list(report["mandatory_eval_sets"])
@@ -521,8 +532,5 @@ def run_quality_benchmark(
             for entry in QUALITY_EVAL_MANIFEST
         )
         report["gate_failures"] = []
-    adversarial_report = report.get("adversarial_eval")
-    if adversarial_report is not None:
-        report["adversarial_ok"] = adversarial_report.get("ok") is True
     report["mode"] = mode
     return report

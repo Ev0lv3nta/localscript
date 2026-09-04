@@ -72,17 +72,19 @@ def _validate_case(
     else:
         seen_inputs[fingerprint] = str(case_id)
 
-    if corpus == "public_benchmark":
-        if case.get("source") != "owner_synthetic_public_v1":
-            errors.append(f"public_case_source_invalid::{case_id}")
-        if case.get("case_type") != "public_benchmark":
-            errors.append(f"public_case_type_invalid::{case_id}")
+    if corpus == "live":
+        if case.get("source") != "owner_synthetic_live_v1":
+            errors.append(f"live_case_source_invalid::{case_id}")
+        if case.get("case_type") != "live":
+            errors.append(f"live_case_type_invalid::{case_id}")
+        if not isinstance(case.get("scenario"), str) or not case["scenario"].strip():
+            errors.append(f"live_case_scenario_missing::{case_id}")
         if case.get("expected_output_style") not in OUTPUT_STYLES:
-            errors.append(f"public_case_output_style_missing::{case_id}")
-        if "expected_result" not in case and not case.get("semantic_checks"):
-            errors.append(f"public_case_oracle_missing::{case_id}")
+            errors.append(f"live_case_output_style_missing::{case_id}")
+        if "expected_result" not in case:
+            errors.append(f"live_case_oracle_missing::{case_id}")
         if "expected_code" in case or "reference_code" in case:
-            errors.append(f"public_case_reference_injection::{case_id}")
+            errors.append(f"live_case_reference_injection::{case_id}")
     return errors
 
 
@@ -167,8 +169,7 @@ def run_integrity_check(private_holdout_path: Path | str | None = None) -> dict[
     seen_inputs: dict[str, str] = {}
     schema_errors: list[str] = []
     datasets: list[dict[str, Any]] = []
-    public_records: list[dict[str, Any]] = []
-    comparison_records: list[dict[str, Any]] = []
+    live_records: list[dict[str, Any]] = []
 
     for spec in specs:
         with materialized_resource(spec.path) as dataset_path:
@@ -181,10 +182,7 @@ def run_integrity_check(private_holdout_path: Path | str | None = None) -> dict[
                 "id": str(case.get("id")),
                 "prompt": str(case.get("prompt") or ""),
             }
-            if spec.corpus == "public_benchmark":
-                public_records.append(record)
-            else:
-                comparison_records.append(record)
+            live_records.append(record)
         datasets.append(
             {
                 **spec.evidence_dict(),
@@ -225,14 +223,11 @@ def run_integrity_check(private_holdout_path: Path | str | None = None) -> dict[
                     }
                 )
 
-    overlaps = _find_cross_corpus_overlaps(public_records, comparison_records)
+    # Публичный корпус остался один, поэтому сравнивать между собой больше нечего;
+    # смысл проверки теперь в том, что закрытый holdout не пересекается с ним.
+    overlaps: list[dict[str, Any]] = []
     if holdout_records:
-        overlaps.extend(
-            _find_cross_corpus_overlaps(
-                holdout_records,
-                comparison_records + public_records,
-            )
-        )
+        overlaps.extend(_find_cross_corpus_overlaps(holdout_records, live_records))
     errors = list(schema_errors)
     errors.extend(
         "corpus_overlap::{}::{}::{}".format(
