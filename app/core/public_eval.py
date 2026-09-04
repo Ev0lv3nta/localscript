@@ -1,106 +1,66 @@
+from __future__ import annotations
+
 import json
 from pathlib import Path
+from typing import TypeAlias
 
-from app.generation.extractor import TaskExtractor
-from app.validation.oracles import UNSUPPORTED, build_expected_result, compare_expected_and_actual
+from pydantic import JsonValue, TypeAdapter
+
 from app.validation.runtime_executor import execute_output
 
-
-def load_cases(path):
-    dataset_path = Path(path)
-    return load_cases_bytes(dataset_path.read_bytes())
+EvalCase: TypeAlias = dict[str, JsonValue]
+CASES_ADAPTER: TypeAdapter[list[EvalCase]] = TypeAdapter(list[EvalCase])
 
 
-def load_cases_bytes(payload):
-    return [
+def load_cases(path: str | Path) -> list[EvalCase]:
+    return load_cases_bytes(Path(path).read_bytes())
+
+
+def load_cases_bytes(payload: bytes) -> list[EvalCase]:
+    decoded = [
         json.loads(line)
         for line in payload.decode("utf-8").splitlines()
         if line.strip()
     ]
+    return CASES_ADAPTER.validate_python(decoded, strict=True)
 
 
-def normalize_code(code):
-    return "\n".join(
-        line.strip()
-        for line in (code or "").strip().splitlines()
-        if line.strip()
+def evaluate_case(code: str, case: EvalCase) -> list[str]:
+    """Evaluate only an explicit executable oracle; never infer intent from the prompt."""
+    if "expected_result" not in case:
+        return ["dataset_missing_expected_result"]
+    output_format = case.get("expected_output_style", "lua_block")
+    if output_format not in {"lua_block", "json_envelope"}:
+        return ["dataset_output_format_invalid"]
+
+    execution = execute_output(
+        code,
+        case.get("context"),
+        str(output_format),
     )
+    if execution.degraded:
+        return [execution.error_code or "semantic_degraded"]
+    if not execution.ok:
+        return [execution.error_code or "semantic_runtime_error"]
+    if not _json_equal(execution.value, case["expected_result"]):
+        return ["semantic_mismatch"]
+    return []
 
 
-def _case_type(case):
-    explicit_expected = case.get("expected_result")
-    semantic_checks = case.get("semantic_checks") or []
-    return case.get("case_type") or ("live_semantic" if explicit_expected is not None or semantic_checks else "unit_oracle")
-
-
-def _is_live_semantic_case(case):
-    return _case_type(case) in {
-        "live_semantic",
-        "model_backed",
-        "composition",
-        "regression",
-        "multilingual",
-        "adversarial",
-        "large_context",
-        "public_benchmark",
-        "holdout",
-    }
-
-
-def evaluate_case(code, case):
-    failures = []
-    output_style = case.get("expected_output_style")
-    semantic_supported = False
-
-    explicit_expected = case.get("expected_result")
-    semantic_checks = case.get("semantic_checks") or []
-    if _is_live_semantic_case(case):
-        if explicit_expected is None and not semantic_checks:
-            failures.append("dataset_missing_expected_result")
-            return failures
-        semantic_supported = True
-        execution = execute_output(code, case.get("context"), output_style or "lua_block")
-        if execution.degraded:
-            failures.append("semantic_degraded")
-        elif not execution.ok:
-            failures.append(execution.error_code or "semantic_runtime_error")
-        elif explicit_expected is not None and not compare_expected_and_actual(explicit_expected, execution.value):
-            failures.append("semantic_mismatch")
-    else:
-        extractor = TaskExtractor()
-        task_spec = extractor.extract(prompt=case["prompt"], context=case.get("context"))
-        expected = build_expected_result(task_spec, case.get("context"))
-        if expected is not UNSUPPORTED:
-            semantic_supported = True
-            execution = execute_output(code, case.get("context"), output_style or task_spec.output_style)
-            if execution.degraded:
-                failures.append("semantic_degraded")
-            elif not execution.ok:
-                failures.append(execution.error_code or "semantic_runtime_error")
-            elif not compare_expected_and_actual(expected, execution.value):
-                failures.append("semantic_mismatch")
-
-    if case.get("strict_code_match") and case.get("expected_code"):
-        if normalize_code(code) != normalize_code(case["expected_code"]):
-            failures.append("expected_code_mismatch")
-
-    if output_style == "json_envelope":
-        try:
-            payload = json.loads(code)
-        except json.JSONDecodeError:
-            failures.append("json_envelope_invalid")
-        else:
-            for key in case.get("expected_json_keys", []):
-                if key not in payload:
-                    failures.append("missing_json_key::{0}".format(key))
-
-    if not semantic_supported:
-        for assertion in case.get("assertions", []):
-            if assertion not in code:
-                failures.append("missing_assertion::{0}".format(assertion))
-
-    for pattern in case.get("forbidden_patterns", []):
-        if pattern in code:
-            failures.append("forbidden_pattern::{0}".format(pattern))
-
-    return failures
+def _json_equal(actual: object, expected: object) -> bool:
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return type(actual) is type(expected) and actual == expected
+    if isinstance(actual, (int, float)) and isinstance(expected, (int, float)):
+        return actual == expected
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(actual, list) and isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            _json_equal(left, right)
+            for left, right in zip(actual, expected, strict=True)
+        )
+    if isinstance(actual, dict) and isinstance(expected, dict):
+        return actual.keys() == expected.keys() and all(
+            _json_equal(actual[key], expected[key]) for key in actual
+        )
+    return actual == expected

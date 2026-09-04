@@ -4,28 +4,19 @@ from pathlib import Path
 
 import pytest
 
-from app.core.benchmarks import run_dataset_benchmark
 from app.core.config import get_profile_path
-from app.core.kb import load_examples, load_rules
 from app.core.resources import (
     materialized_resource,
     read_resource_text,
     resource_exists,
 )
-from tests.support_backends import DeterministicTestBackend
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_profile_and_kb_load_from_canonical_package_resources():
+def test_profile_loads_from_canonical_package_resources():
     assert get_profile_path().is_file()
-    assert (
-        load_rules()["runtime_constraints"]["local_ollama_profile"]["model"]
-        == "qwen3:8b-q4_K_M"
-    )
-    assert load_examples()
     assert resource_exists("config/profiles/competition.yaml")
-    assert resource_exists("kb/templates.yaml")
 
 
 def test_resource_api_rejects_paths_outside_package():
@@ -78,32 +69,3 @@ def test_source_vram_wrapper_uses_explicit_python(tmp_path):
 
     assert completed.returncode == 0
     assert capture_path.read_text(encoding="utf-8").strip() == str(selected_python)
-
-
-def test_packaged_dataset_is_available_without_checkout_dataset_tree(monkeypatch, tmp_path):
-    monkeypatch.setenv("LOCALSCRIPT_TRACE_DIR", str(tmp_path / "traces"))
-
-    report = run_dataset_benchmark(
-        "evals/regression/public_gold.jsonl",
-        backend=DeterministicTestBackend(),
-    )
-
-    assert report["dataset"] == "evals/regression/public_gold.jsonl"
-    assert report["total"] == 8
-
-
-def test_explicit_user_dataset_path_still_works(monkeypatch, tmp_path):
-    monkeypatch.setenv("LOCALSCRIPT_TRACE_DIR", str(tmp_path / "traces"))
-    dataset_path = tmp_path / "custom.jsonl"
-    dataset_path.write_text(
-        read_resource_text("evals/regression/public_gold.jsonl"),
-        encoding="utf-8",
-    )
-
-    report = run_dataset_benchmark(
-        dataset_path,
-        backend=DeterministicTestBackend(),
-    )
-
-    assert report["dataset"] == str(dataset_path)
-    assert report["total"] == 8

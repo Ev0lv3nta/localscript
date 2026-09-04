@@ -36,9 +36,9 @@ LOCALSCRIPT_REQUIRE_LIVE=1 .venv/bin/python -m pytest -q -m integration --strict
 
 ## Правило изменения контрактов
 
-Изменение `GenerationOutcome`, task resolution, family protocol, validation stages, repair boundary или evaluation claim сначала описывается в ADR. Затем добавляется contract/characterization test, реализация и негативный тест fail-closed поведения.
+Изменение `GenerationOutcome`, контрактов workflow, границ валидации или evaluation claim сначала описывается в ADR. Затем добавляется contract test, реализация и негативный тест fail-closed поведения.
 
-Новая family включает отдельный модуль, fixtures, deterministic oracle и регистрацию. Planner label без доверенного extractor hint не должен включать специализированный oracle.
+Новая возможность генерации не добавляется веткой в Python: она выражается через план, который planner способен построить, и через acceptance cases, которые валидация умеет исполнить. Если для запроса нужен новый Python-путь, это признак того, что меняется сам контракт, и решение идёт через ADR.
 
 ## Git workflow
 

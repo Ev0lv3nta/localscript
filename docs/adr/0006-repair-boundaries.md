@@ -1,6 +1,6 @@
 # ADR 0006: граница deterministic repair
 
-- Статус: принято
+- Статус: заменено [ADR 0007](0007-typed-agentic-workflow.md)
 - Дата: 9 августа 2026 года
 
 ## Контекст

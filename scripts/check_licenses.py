@@ -12,6 +12,7 @@ from pathlib import Path
 from packaging.markers import Marker
 
 ALLOWED_SPDX = {
+    "Apache-2.0",
     "Apache-2.0 OR BSD-2-Clause",
     "Apache-2.0 OR MIT",
     "BSD-2-Clause",
@@ -61,6 +62,7 @@ LOCKED_LICENSES = {
     "typer": "MIT",
     "tree-sitter": "MIT",
     "tree-sitter-lua": "MIT",
+    "types-pyyaml": "Apache-2.0",
     "typing-extensions": "PSF-2.0",
     "typing-inspection": "MIT",
     "uvicorn": "BSD-3-Clause",

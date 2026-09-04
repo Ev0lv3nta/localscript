@@ -1,37 +1,157 @@
+import json
 import threading
 import time
-from pathlib import Path
-
-import pytest
 
 from app.core.config import get_runtime_profile
 from app.core.traces import TraceStore
-from app.domain.outcomes import GenerationStatus, ValidationStatus
-from app.generation.engine import BackendUnavailableError, GenerationEngine
-from app.generation.extractor import TaskExtractor
-from app.generation.model_chain import SameModelChain
-from tests.support_backends import FailIfCalledBackend, UnavailableBackend
+from app.domain.outcomes import GenerationStatus
+from app.generation.backend_errors import BackendUnavailable
+from app.generation.engine import GenerationEngine
+from app.workflow.contracts import CheckStatus, ValidationCheck, ValidationResult
 
 
-def test_engine_raises_when_backend_unreachable(tmp_path, monkeypatch):
-    trace_store = TraceStore(root=tmp_path / "traces")
-    engine = GenerationEngine(
-        profile=get_runtime_profile(),
-        trace_store=trace_store,
-        backend=UnavailableBackend(),
+class SequenceBackend:
+    def __init__(self, responses):
+        self.responses = list(responses)
+
+    def complete(self, _prompt, *, response_format=None):
+        assert response_format is not None
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+class PassingValidator:
+    def validate(self, **_kwargs):
+        return ValidationResult(
+            checks=(ValidationCheck(name="all", status=CheckStatus.PASSED),),
+            observations=({"case": "value", "actual": 4},),
+        )
+
+
+def planner_response():
+    return json.dumps(
+        {
+            "kind": "plan",
+            "objective": "Return the value.",
+            "inputs": [{"root": "wf.vars", "segments": ["value"]}],
+            "output": {"format": "lua_block", "shape": "scalar", "nullable": False},
+            "steps": [
+                {
+                    "description": "Return the value.",
+                    "reads": [{"root": "wf.vars", "segments": ["value"]}],
+                }
+            ],
+            "constraints": [],
+            "acceptance_cases": [
+                {
+                    "name": "value",
+                    "context": {"wf": {"vars": {"value": 4}}},
+                    "expected": 4,
+                }
+            ],
+        }
     )
 
-    with pytest.raises(BackendUnavailableError):
-        engine.generate(prompt="Сделай что-нибудь нестандартное без готового шаблона")
-    trace_files = list(Path(trace_store.root).glob("**/*.json"))
-    assert len(trace_files) == 0
+
+def test_engine_runs_typed_workflow_and_writes_sanitized_trace(tmp_path):
+    store = TraceStore(root=tmp_path / "traces")
+    backend = SequenceBackend(
+        [
+            planner_response(),
+            json.dumps({"code": "return wf.vars.value"}),
+            json.dumps({"kind": "approved"}),
+        ]
+    )
+    engine = GenerationEngine(
+        profile=get_runtime_profile(),
+        trace_store=store,
+        backend=backend,
+        validator=PassingValidator(),
+    )
+
+    result = engine.generate(
+        prompt="Return the private value.",
+        context={"wf": {"vars": {"value": 4, "secret": "do-not-store"}}},
+    )
+
+    assert result.outcome is not None
+    assert result.outcome.status is GenerationStatus.COMPLETED
+    assert result.code == "return wf.vars.value"
+    assert result.strategy == ""
+    trace = store.read(result.trace_id)
+    encoded = json.dumps(trace, ensure_ascii=False)
+    assert "do-not-store" not in encoded
+    assert "Return the private value" not in encoded
+    assert "return wf.vars.value" not in encoded
+    assert trace["diagnostic_codes"] == []
+    assert [event["stage"] for event in trace["stage_events"]] == [
+        "received",
+        "planned",
+        "generated",
+        "validated",
+        "reviewed",
+        "completed",
+    ]
+
+
+def test_engine_returns_typed_clarification_without_candidate(tmp_path):
+    engine = GenerationEngine(
+        profile=get_runtime_profile(),
+        trace_store=TraceStore(root=tmp_path / "traces"),
+        backend=SequenceBackend(
+            [
+                json.dumps(
+                    {
+                        "kind": "clarification",
+                        "question": "Which workflow root should be used?",
+                        "reason": "Both roots contain value.",
+                    }
+                )
+            ]
+        ),
+        validator=PassingValidator(),
+    )
+
+    result = engine.generate_rich(
+        prompt="Return value.",
+        context={
+            "wf": {
+                "vars": {"value": 1},
+                "initVariables": {"value": 2},
+            }
+        },
+    )
+
+    assert result.outcome is not None
+    assert result.outcome.status is GenerationStatus.CLARIFICATION_REQUIRED
+    assert result.code == ""
+    assert result.question == "Which workflow root should be used?"
+
+
+def test_engine_converts_backend_outage_to_fail_closed_outcome(tmp_path):
+    engine = GenerationEngine(
+        profile=get_runtime_profile(),
+        trace_store=TraceStore(root=tmp_path / "traces"),
+        backend=SequenceBackend([BackendUnavailable(reason="transport_error")]),
+        validator=PassingValidator(),
+    )
+
+    result = engine.generate(prompt="Return value.", context=None)
+
+    assert result.outcome is not None
+    assert result.outcome.status is GenerationStatus.BACKEND_UNAVAILABLE
+    assert result.outcome.code is None
+    assert result.code == ""
 
 
 def test_engine_serializes_updates_for_the_same_session(tmp_path, monkeypatch):
     engine = GenerationEngine(
         profile=get_runtime_profile(),
         trace_store=TraceStore(root=tmp_path / "traces"),
-        backend=FailIfCalledBackend(),
+        backend=SequenceBackend([]),
+        validator=PassingValidator(),
     )
 
     def increment_session(**kwargs):
@@ -62,61 +182,3 @@ def test_engine_serializes_updates_for_the_same_session(tmp_path, monkeypatch):
         thread.join()
 
     assert engine.session_store.read("shared-session")["count"] == 8
-
-
-def test_engine_routes_broken_envelope_prompt_to_safety_guard(tmp_path):
-    trace_store = TraceStore(root=tmp_path / "traces")
-    engine = GenerationEngine(
-        profile=get_runtime_profile(),
-        trace_store=trace_store,
-        backend=FailIfCalledBackend(),
-    )
-
-    result = engine.generate(prompt="Broken envelope: {num: lua{return 1}lua}.")
-
-    assert result.strategy == "safe_fallback"
-    assert result.code == "-- judged-safe fallback\nreturn nil"
-    assert result.verification_errors == []
-    assert result.outcome.status is GenerationStatus.POLICY_REJECTED
-    assert result.outcome.code is None
-
-
-def test_engine_clarification_has_not_run_validation(tmp_path):
-    trace_store = TraceStore(root=tmp_path / "traces")
-    engine = GenerationEngine(
-        profile=get_runtime_profile(),
-        trace_store=trace_store,
-        backend=FailIfCalledBackend(),
-    )
-
-    result = engine.generate_rich(
-        prompt="Нормализуй email и верни его в lower-case.",
-        context={
-            "wf": {
-                "vars": {"email": "A@EXAMPLE.COM"},
-                "initVariables": {"email": "B@EXAMPLE.COM"},
-            }
-        },
-    )
-
-    assert result.outcome.status is GenerationStatus.CLARIFICATION_REQUIRED
-    assert result.outcome.validation.status is ValidationStatus.NOT_RUN
-    assert result.outcome.question == result.question
-    assert result.outcome.code is None
-
-
-def test_parse_planner_downgrades_inconsistent_array_family_to_generic_scalar():
-    task_spec = TaskExtractor().extract(
-        prompt="Для wf.vars.orders сложи amount только у записей со status shipped.",
-        context={"wf": {"vars": {"orders": [{"status": "shipped", "amount": 10}]}}},
-    )
-
-    planner = SameModelChain._parse_planner(
-        SameModelChain,
-        '{"family":"conditional_array_projection","root":"wf.vars","source_paths":["wf.vars.orders"],"return_shape":"scalar","constraints":[],"assumptions":[],"clarification_needed":false,"clarification_question":"","semantic_checks":["must return sum of shipped amounts"]}',
-        task_spec,
-        prompt="Для wf.vars.orders сложи amount только у записей со status shipped.",
-    )
-
-    assert planner["family"] == "generic_lua"
-    assert planner["return_shape"] == "scalar"

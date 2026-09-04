@@ -1,8 +1,6 @@
 import tomllib
 from pathlib import Path
 
-import yaml
-
 from app.core import config as config_module
 from app.core.resources import read_resource_text
 
@@ -61,7 +59,6 @@ def test_runtime_profile_applies_model_environment_overrides(monkeypatch):
 
 def test_documented_and_script_defaults_match_runtime_profile():
     env_example = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
-    rules = yaml.safe_load(read_resource_text("kb/rules.yaml"))
     shell_defaults = {
         PROJECT_ROOT
         / "scripts"
@@ -76,14 +73,6 @@ def test_documented_and_script_defaults_match_runtime_profile():
 
     assert f"LOCALSCRIPT_PRIMARY_MODEL={PRIMARY_MODEL}" in env_example
     assert f"LOCALSCRIPT_FALLBACK_MODEL={FALLBACK_MODEL}" in env_example
-    assert rules["runtime_constraints"]["local_ollama_profile"] == {
-        "model": PRIMARY_MODEL,
-        "fallback_model": FALLBACK_MODEL,
-        "num_ctx": 4096,
-        "num_predict": 256,
-        "batch": 1,
-        "parallel": 1,
-    }
     assert (
         f'FALLBACK_MODEL="${{2:-{FALLBACK_MODEL}}}"'
         in read_resource_text("scripts/bench_vram.sh").splitlines()
