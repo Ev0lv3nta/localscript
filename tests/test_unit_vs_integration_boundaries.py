@@ -19,7 +19,6 @@ def test_quality_benchmark_uses_injected_backend_without_live_ollama(monkeypatch
 
     monkeypatch.setattr("app.core.benchmarks.OllamaBackend", fail_if_live_backend_requested)
     monkeypatch.setattr("app.core.benchmarks.run_dataset_benchmark", fake_dataset_report)
-    monkeypatch.setattr("app.core.benchmarks.run_rich_dataset_benchmark", fake_dataset_report)
 
     report = run_quality_benchmark(backend=DeterministicTestBackend(), mode="dev")
 

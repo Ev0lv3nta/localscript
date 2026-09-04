@@ -1,10 +1,15 @@
+from __future__ import annotations
+
+import contextlib
 import json
 import math
 import os
 import resource
 import subprocess
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from app.validation.lua_ast import analyze_lua_chunk
 from app.validation.runtime import find_lua_binary
@@ -19,7 +24,7 @@ class RuntimeExecutionResult:
     degraded: bool = False
 
 
-def _strip_lua_wrapper(code):
+def _strip_lua_wrapper(code: object) -> str:
     if not isinstance(code, str):
         return ""
     stripped = code.strip()
@@ -28,7 +33,7 @@ def _strip_lua_wrapper(code):
     return stripped
 
 
-def _extract_lua_chunks(code, output_style):
+def _extract_lua_chunks(code: object, output_style: str) -> list[str]:
     if output_style != "json_envelope":
         if not isinstance(code, str) or not code.strip():
             return []
@@ -53,11 +58,11 @@ def _extract_lua_chunks(code, output_style):
     return chunks
 
 
-def _find_lua_binary():
+def _find_lua_binary() -> str | None:
     return find_lua_binary()
 
 
-def _lua_string_literal(value):
+def _lua_string_literal(value: str) -> str:
     chunks = ['"']
     for byte in value.encode("utf-8"):
         if byte == 34:
@@ -67,12 +72,12 @@ def _lua_string_literal(value):
         elif 32 <= byte <= 126:
             chunks.append(chr(byte))
         else:
-            chunks.append("\\{0:03d}".format(byte))
+            chunks.append(f"\\{byte:03d}")
     chunks.append('"')
     return "".join(chunks)
 
 
-def _lua_number_literal(value):
+def _lua_number_literal(value: float) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):
@@ -84,7 +89,7 @@ def _lua_number_literal(value):
     return "nil"
 
 
-def _serialize_to_lua(value):
+def _serialize_to_lua(value: Any) -> str:
     if value is None:
         return "nil"
     if isinstance(value, bool):
@@ -95,22 +100,21 @@ def _serialize_to_lua(value):
         return _lua_string_literal(value)
     if isinstance(value, list):
         inner = ", ".join(_serialize_to_lua(item) for item in value)
-        return "setmetatable({%s}, { __localscript_array = true })" % inner
+        # Процентный формат: шаблон сам состоит из фигурных скобок Lua.
+        return "setmetatable({%s}, { __localscript_array = true })" % inner  # noqa: UP031
     if isinstance(value, dict):
         items = []
         for key, nested in value.items():
-            items.append(
-                "[{0}] = {1}".format(_lua_string_literal(str(key)), _serialize_to_lua(nested))
-            )
-        return "{%s}" % ", ".join(items)
+            items.append(f"[{_lua_string_literal(str(key))}] = {_serialize_to_lua(nested)}")
+        return "{%s}" % ", ".join(items)  # noqa: UP031
     return "nil"
 
 
-def _build_runner(chunk, context):
+def _build_runner(chunk: str, context: Any) -> str:
     serialized_context = _serialize_to_lua(context or {})
     serialized_chunk = _lua_string_literal(chunk)
-    return """
-local wf_container = {context_literal}
+    return f"""
+local wf_container = {serialized_context}
 local raw_wf = wf_container.wf or {{}}
 if raw_wf.vars == nil then
   raw_wf.vars = {{}}
@@ -319,7 +323,7 @@ local function _ls_to_json(value)
   return "{{" .. table.concat(parts, ",") .. "}}"
 end
 
-local chunk, load_error = load({chunk_literal}, "localscript_generated", "t", safe_env)
+local chunk, load_error = load({serialized_chunk}, "localscript_generated", "t", safe_env)
 if not chunk then
   io.write('{{"ok":false,"error_code":"lua_load_error","error_message":' .. _ls_to_json(load_error) .. '}}')
   return
@@ -338,43 +342,31 @@ if not serialization_ok then
 end
 
 io.write('{{"ok":true,"value":' .. serialized_result .. '}}')
-""".format(context_literal=serialized_context, chunk_literal=serialized_chunk)
+"""
 
 
-def _subprocess_limits():
-    def _apply_limits():
-        try:
+def _subprocess_limits() -> Callable[[], None]:
+    def _apply_limits() -> None:
+        with contextlib.suppress(Exception):
             resource.setrlimit(resource.RLIMIT_CPU, (2, 2))
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             resource.setrlimit(resource.RLIMIT_FSIZE, (1024 * 1024, 1024 * 1024))
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             resource.setrlimit(resource.RLIMIT_NOFILE, (16, 16))
-        except Exception:
-            pass
 
     return _apply_limits
 
 
-def _run_chunk(chunk, context):
+def _run_chunk(chunk: str, context: Any) -> RuntimeExecutionResult:
     policy_result = analyze_lua_chunk(chunk)
     if not policy_result.ok:
         finding = policy_result.findings[0]
         return RuntimeExecutionResult(
             ok=False,
             error_code=finding.code,
-            error_message="Line {0}, column {1}: {2}".format(
-                finding.line,
-                finding.column,
-                finding.message,
-            ),
+            error_message=f"Line {finding.line}, column {finding.column}: {finding.message}",
         )
 
     lua_binary = _find_lua_binary()
@@ -395,8 +387,7 @@ def _run_chunk(chunk, context):
         try:
             completed = subprocess.run(
                 [lua_binary, temp_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 timeout=5,
                 close_fds=True,
                 env={"LC_ALL": "C.UTF-8"},
@@ -409,10 +400,8 @@ def _run_chunk(chunk, context):
                 error_message="Lua execution exceeded the 5 second timeout.",
             )
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(temp_path)
-        except OSError:
-            pass
 
     try:
         stdout = (completed.stdout or b"").decode("utf-8")
@@ -456,7 +445,11 @@ def _run_chunk(chunk, context):
     )
 
 
-def execute_output(code, context=None, output_style="lua_block"):
+def execute_output(
+    code: object,
+    context: Any = None,
+    output_style: str = "lua_block",
+) -> RuntimeExecutionResult:
     if not isinstance(code, str):
         return RuntimeExecutionResult(
             ok=False,
@@ -492,13 +485,13 @@ def execute_output(code, context=None, output_style="lua_block"):
                 return RuntimeExecutionResult(
                     ok=False,
                     error_code="json_envelope_value_not_string",
-                    error_message="Envelope value for `{0}` must be a string.".format(key),
+                    error_message=f"Envelope value for `{key}` must be a string.",
                 )
             if not chunk.startswith("lua{") or not chunk.endswith("}lua"):
                 return RuntimeExecutionResult(
                     ok=False,
                     error_code="json_envelope_value_not_lua_wrapper",
-                    error_message="Envelope value for `{0}` must use `lua{{...}}lua`.".format(key),
+                    error_message=f"Envelope value for `{key}` must use `lua{{...}}lua`.",
                 )
 
         result = {}
@@ -515,7 +508,7 @@ def execute_output(code, context=None, output_style="lua_block"):
                 error_code="lua_chunk_missing",
                 error_message="No executable Lua chunk could be extracted.",
             )
-        for (key, _), chunk in zip(payload.items(), chunks):
+        for (key, _), chunk in zip(payload.items(), chunks, strict=True):
             chunk_result = _run_chunk(chunk, context)
             if not chunk_result.ok:
                 return chunk_result

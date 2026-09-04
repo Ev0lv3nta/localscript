@@ -13,14 +13,11 @@ def test_eval_integrity_separates_public_and_regression_corpora():
     assert report["errors"] == []
     assert report["overlaps"] == []
     assert report["private_holdout"] is None
-    assert sum(
-        item["case_count"]
-        for item in report["datasets"]
-        if item["corpus"] == "regression"
-    ) == 140
-    public = [
-        item for item in report["datasets"] if item["corpus"] == "public_benchmark"
-    ]
+    assert (
+        sum(item["case_count"] for item in report["datasets"] if item["corpus"] == "regression")
+        == 140
+    )
+    public = [item for item in report["datasets"] if item["corpus"] == "public_benchmark"]
     assert len(public) == 1
     assert public[0]["name"] == "public_v1"
     assert public[0]["case_count"] == 12

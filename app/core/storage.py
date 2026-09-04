@@ -1,13 +1,17 @@
+from __future__ import annotations
+
 import contextlib
 import json
 import os
 import re
+import sys
 import tempfile
 import threading
 import uuid
-from collections.abc import Mapping
-from datetime import datetime, timezone
+from collections.abc import Callable, Iterator, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 UUID_RE = re.compile(
     r"^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$",
@@ -52,32 +56,37 @@ _THREAD_LOCKS_GUARD = threading.Lock()
 
 
 class InvalidIdentifierError(ValueError):
-    def __init__(self, code, message):
+    def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
 
 
 class UnsafeStoragePathError(RuntimeError):
-    def __init__(self, path):
+    def __init__(self, path: Path | str) -> None:
         self.code = "unsafe_storage_path"
         self.path = Path(path)
-        super().__init__("storage path is outside its root or contains a symbolic link: {0}".format(path))
+        super().__init__(f"storage path is outside its root or contains a symbolic link: {path}")
 
 
 class CorruptStateError(RuntimeError):
-    def __init__(self, path, quarantine_path, cause):
+    def __init__(
+        self,
+        path: Path | str,
+        quarantine_path: Path | str | None,
+        cause: Exception,
+    ) -> None:
         self.code = "corrupt_state_json"
         self.path = Path(path)
         self.quarantine_path = Path(quarantine_path) if quarantine_path else None
         self.cause = cause
-        message = "corrupt state JSON at {0}".format(self.path)
+        message = f"corrupt state JSON at {self.path}"
         if self.quarantine_path is not None:
-            message += "; quarantined at {0}".format(self.quarantine_path)
+            message += f"; quarantined at {self.quarantine_path}"
         super().__init__(message)
 
 
-def validate_identifier(value, code, allow_legacy=True):
+def validate_identifier(value: object, code: str, allow_legacy: bool = True) -> str:
     """Validate IDs without normalizing them.
 
     UUIDv4 (compact or canonical form) is the current format. The restricted
@@ -98,21 +107,21 @@ def validate_identifier(value, code, allow_legacy=True):
         and isinstance(value, str)
         and LEGACY_IDENTIFIER_RE.fullmatch(value)
     )
-    if not (valid_uuid or valid_legacy):
+    if not (valid_uuid or valid_legacy) or not isinstance(value, str):
         raise InvalidIdentifierError(code=code, message=code)
     return value
 
 
-def generate_identifier():
+def generate_identifier() -> str:
     return uuid.uuid4().hex
 
 
-def _assert_not_symlink(path):
+def _assert_not_symlink(path: Path | str) -> None:
     if Path(path).is_symlink():
         raise UnsafeStoragePathError(path)
 
 
-def ensure_directory(path):
+def ensure_directory(path: Path | str) -> Path:
     directory = Path(path)
     _assert_not_symlink(directory)
     directory.mkdir(parents=True, exist_ok=True)
@@ -122,15 +131,15 @@ def ensure_directory(path):
     return directory
 
 
-def resolve_within_root(root, relative_name, code):
+def resolve_within_root(root: Path | str, relative_name: str, code: str) -> Path:
     resolved_root = Path(root).resolve()
     _assert_not_symlink(root)
     candidate = resolved_root / relative_name
     current = resolved_root
     try:
         relative_parts = candidate.relative_to(resolved_root).parts
-    except ValueError:
-        raise InvalidIdentifierError(code=code, message=code)
+    except ValueError as error:
+        raise InvalidIdentifierError(code=code, message=code) from error
     for part in relative_parts:
         current = current / part
         _assert_not_symlink(current)
@@ -140,7 +149,7 @@ def resolve_within_root(root, relative_name, code):
     return resolved_path
 
 
-def _fsync_directory(directory):
+def _fsync_directory(directory: Path | str) -> None:
     flags = os.O_RDONLY
     if hasattr(os, "O_DIRECTORY"):
         flags |= os.O_DIRECTORY
@@ -154,7 +163,7 @@ def _fsync_directory(directory):
         os.close(fd)
 
 
-def atomic_write_json(path, payload):
+def atomic_write_json(path: Path | str, payload: object) -> None:
     target_path = Path(path)
     ensure_directory(target_path.parent)
     _assert_not_symlink(target_path)
@@ -164,10 +173,8 @@ def atomic_write_json(path, payload):
         dir=str(target_path.parent),
     )
     try:
-        try:
+        with contextlib.suppress(AttributeError, OSError):
             os.fchmod(fd, 0o600)
-        except (AttributeError, OSError):
-            pass
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
             handle.flush()
@@ -179,14 +186,14 @@ def atomic_write_json(path, payload):
             os.unlink(temp_path)
 
 
-def _thread_lock_for(path):
+def _thread_lock_for(path: Path | str) -> threading.RLock:
     key = str(Path(path).resolve())
     with _THREAD_LOCKS_GUARD:
         return _THREAD_LOCKS.setdefault(key, threading.RLock())
 
 
 @contextlib.contextmanager
-def file_lock(path):
+def file_lock(path: Path | str) -> Iterator[None]:
     lock_path = Path(path)
     ensure_directory(lock_path.parent)
     _assert_not_symlink(lock_path)
@@ -197,7 +204,7 @@ def file_lock(path):
             flags |= os.O_NOFOLLOW
         fd = os.open(str(lock_path), flags, 0o600)
         try:
-            if os.name == "nt":
+            if sys.platform == "win32":
                 import msvcrt
 
                 if os.fstat(fd).st_size == 0:
@@ -210,7 +217,7 @@ def file_lock(path):
                 fcntl.flock(fd, fcntl.LOCK_EX)
             yield
         finally:
-            if os.name == "nt":
+            if sys.platform == "win32":
                 os.lseek(fd, 0, os.SEEK_SET)
                 msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
             else:
@@ -218,19 +225,21 @@ def file_lock(path):
             os.close(fd)
 
 
-def _quarantine_corrupt_file(path):
+def _quarantine_corrupt_file(path: Path | str) -> Path | None:
     source = Path(path)
     if not source.exists():
         return None
-    quarantine = source.with_name(
-        ".{0}.corrupt-{1}".format(source.name, generate_identifier())
-    )
+    quarantine = source.with_name(f".{source.name}.corrupt-{generate_identifier()}")
     os.replace(source, quarantine)
     _fsync_directory(source.parent)
     return quarantine
 
 
-def read_json(path, quarantine=True, expected_type=None):
+def read_json(
+    path: Path | str,
+    quarantine: bool = True,
+    expected_type: type[Any] | None = None,
+) -> Any:
     source = Path(path)
     _assert_not_symlink(source)
     try:
@@ -241,16 +250,14 @@ def read_json(path, quarantine=True, expected_type=None):
         with os.fdopen(fd, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
         if expected_type is not None and not isinstance(payload, expected_type):
-            raise TypeError(
-                "state JSON must contain {0}".format(expected_type.__name__)
-            )
+            raise TypeError(f"state JSON must contain {expected_type.__name__}")
         return payload
     except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as exc:
         quarantine_path = _quarantine_corrupt_file(source) if quarantine else None
         raise CorruptStateError(source, quarantine_path, exc) from exc
 
 
-def delete_file(path):
+def delete_file(path: Path | str) -> bool:
     target = Path(path)
     _assert_not_symlink(target)
     try:
@@ -261,34 +268,34 @@ def delete_file(path):
     return True
 
 
-def utc_now(clock=None):
-    value = clock() if clock is not None else datetime.now(timezone.utc)
+def utc_now(clock: Callable[[], datetime] | None = None) -> datetime:
+    value = clock() if clock is not None else datetime.now(UTC)
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("state clock must return a timezone-aware datetime")
-    return value.astimezone(timezone.utc)
+    return value.astimezone(UTC)
 
 
-def isoformat_utc(value):
-    aware = value.astimezone(timezone.utc)
+def isoformat_utc(value: datetime) -> str:
+    aware = value.astimezone(UTC)
     return aware.isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
-def parse_utc(value):
+def parse_utc(value: object) -> datetime:
     if not isinstance(value, str):
         raise ValueError("timestamp must be a string")
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("timestamp must be timezone-aware")
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
-def _normalized_key(key):
+def _normalized_key(key: object) -> str:
     return str(key).strip().lower().replace("-", "_").replace(" ", "_")
 
 
-def redact_nested(value, sensitive_keys=SECRET_KEYS):
+def redact_nested(value: Any, sensitive_keys: frozenset[str] = SECRET_KEYS) -> Any:
     if isinstance(value, Mapping):
-        redacted = {}
+        redacted: dict[Any, Any] = {}
         for key, nested_value in value.items():
             normalized = _normalized_key(key)
             if (

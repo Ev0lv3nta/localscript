@@ -1,15 +1,17 @@
+from __future__ import annotations
+
 import os
 from pathlib import Path
 
 
 class UnsafeStatePathError(RuntimeError):
-    def __init__(self, path):
+    def __init__(self, path: Path | str) -> None:
         self.code = "unsafe_state_path"
         self.path = Path(path)
-        super().__init__("state path contains a symbolic link: {0}".format(self.path))
+        super().__init__(f"state path contains a symbolic link: {self.path}")
 
 
-def _resolve_state_location(path):
+def _resolve_state_location(path: Path | str) -> Path:
     candidate = Path(path).expanduser()
     absolute = candidate if candidate.is_absolute() else Path.cwd() / candidate
     current = Path(absolute.anchor)
@@ -23,7 +25,7 @@ def _resolve_state_location(path):
     return absolute.resolve()
 
 
-def get_state_root():
+def get_state_root() -> Path:
     configured_root = os.getenv("LOCALSCRIPT_STATE_DIR")
     if configured_root:
         return _resolve_state_location(configured_root)
@@ -35,7 +37,11 @@ def get_state_root():
     return _resolve_state_location(Path.home() / ".local" / "state" / "localscript")
 
 
-def resolve_state_path(override_name, default_name, root=None):
+def resolve_state_path(
+    override_name: str,
+    default_name: str,
+    root: Path | str | None = None,
+) -> Path:
     configured_path = os.getenv(override_name)
     if configured_path:
         return _resolve_state_location(configured_path)

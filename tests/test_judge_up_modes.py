@@ -21,7 +21,9 @@ def _prepare_fake_project(tmp_path):
     fake_bin.mkdir(parents=True)
 
     source_script = Path(__file__).resolve().parents[1] / "scripts" / "judge_up.sh"
-    (scripts_dir / "judge_up.sh").write_text(source_script.read_text(encoding="utf-8"), encoding="utf-8")
+    (scripts_dir / "judge_up.sh").write_text(
+        source_script.read_text(encoding="utf-8"), encoding="utf-8"
+    )
     (scripts_dir / "judge_up.sh").chmod((scripts_dir / "judge_up.sh").stat().st_mode | stat.S_IEXEC)
 
     _write_executable(
@@ -35,7 +37,7 @@ exit 0
         venv_bin / "python",
         f"""#!/usr/bin/env bash
 if [ "$1" = "-m" ] && [ "$2" = "uvicorn" ]; then
-  exec "{(venv_bin / 'uvicorn').resolve()}" "${{@:3}}"
+  exec "{(venv_bin / "uvicorn").resolve()}" "${{@:3}}"
 fi
 exec "{Path(os.sys.executable).resolve()}" "$@"
 """,
@@ -57,7 +59,9 @@ class _TagsHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
-        payload = b'{"models":[{"name":"qwen3:8b-q4_K_M"},{"name":"qwen3:4b-instruct-2507-q4_K_M"}]}'
+        payload = (
+            b'{"models":[{"name":"qwen3:8b-q4_K_M"},{"name":"qwen3:4b-instruct-2507-q4_K_M"}]}'
+        )
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
@@ -83,8 +87,7 @@ def test_judge_up_remote_api_mode_does_not_require_local_ollama(tmp_path):
         completed = subprocess.run(
             ["bash", str(root / "scripts" / "judge_up.sh")],
             cwd=str(root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             env={
                 **os.environ,
@@ -120,8 +123,7 @@ exit 0
         completed = subprocess.run(
             ["bash", str(root / "scripts" / "judge_up.sh")],
             cwd=str(root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             env={
                 **os.environ,
@@ -146,8 +148,7 @@ def test_judge_up_rejects_unsupported_project_python(tmp_path):
     completed = subprocess.run(
         ["bash", str(root / "scripts" / "judge_up.sh")],
         cwd=str(root),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         env={
             **os.environ,

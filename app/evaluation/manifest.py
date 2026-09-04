@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import json
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from app.core.resources import read_resource_text, resource_exists
 
@@ -20,10 +23,10 @@ class EvaluationDataset:
     claim_scope: str
 
     @property
-    def required(self):
+    def required(self) -> bool:
         return self.gate == "required"
 
-    def evidence_dict(self):
+    def evidence_dict(self) -> dict[str, str]:
         return {
             "name": self.name,
             "path": self.path,
@@ -34,7 +37,7 @@ class EvaluationDataset:
         }
 
 
-def load_evaluation_manifest():
+def load_evaluation_manifest() -> dict[str, Any]:
     try:
         payload = json.loads(read_resource_text(MANIFEST_RESOURCE))
     except (json.JSONDecodeError, OSError, ValueError) as error:
@@ -60,11 +63,11 @@ def load_evaluation_manifest():
     return payload
 
 
-def dataset_specs():
+def dataset_specs() -> tuple[EvaluationDataset, ...]:
     payload = load_evaluation_manifest()
-    specs = []
-    names = set()
-    paths = set()
+    specs: list[EvaluationDataset] = []
+    names: set[str] = set()
+    paths: set[str] = set()
     for raw in payload["datasets"]:
         if not isinstance(raw, dict):
             raise ValueError("evaluation_manifest_dataset_invalid")

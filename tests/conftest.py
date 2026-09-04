@@ -12,9 +12,7 @@ def pytest_collection_modifyitems(config, items):
         if "integration" in marker_names:
             if "unit" in marker_names:
                 raise pytest.UsageError(
-                    "{0} cannot be marked as both unit and integration".format(
-                        item.nodeid
-                    )
+                    f"{item.nodeid} cannot be marked as both unit and integration"
                 )
             continue
         item.add_marker(pytest.mark.unit)

@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 import hashlib
 from collections import Counter
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
+from typing import TYPE_CHECKING, Any
 
 from app.core.config import PROJECT_ROOT, get_runtime_profile
 from app.core.public_eval import evaluate_case, load_cases_bytes
@@ -13,30 +17,35 @@ from app.core.traces import TraceStore
 from app.evaluation.manifest import dataset_specs
 from app.generation.engine import GenerationEngine
 from app.generation.ollama import OllamaBackend
+from app.generation.results import GenerationResult
+
+if TYPE_CHECKING:
+    from app.core.config import RuntimeProfile
 
 QUALITY_EVAL_MANIFEST = tuple(spec.evidence_dict() for spec in dataset_specs())
 
 
 class InstrumentedBackend:
-    def __init__(self, backend):
+    def __init__(self, backend: Any) -> None:
         self.backend = backend
-        self.calls = []
+        self.calls: list[dict[str, Any]] = []
         self.evidence_backend_type = _backend_type(backend)
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         return getattr(self.backend, name)
 
-    def complete(self, prompt, response_format=None, model=None):
+    def complete(
+        self,
+        prompt: str,
+        response_format: object | None = None,
+        model: str | None = None,
+    ) -> str:
         started = perf_counter()
         method = getattr(self.backend, "complete", None)
         try:
             if callable(method):
-                return method(
-                    prompt,
-                    response_format=response_format,
-                    model=model,
-                )
-            return self.backend.generate(prompt)
+                return str(method(prompt, response_format=response_format, model=model))
+            return str(self.backend.generate(prompt))
         finally:
             self.calls.append(
                 {
@@ -45,10 +54,10 @@ class InstrumentedBackend:
                 }
             )
 
-    def generate(self, prompt, context=None):
+    def generate(self, prompt: str, context: Any = None) -> str:
         started = perf_counter()
         try:
-            return self.backend.generate(prompt, context=context)
+            return str(self.backend.generate(prompt, context=context))
         finally:
             self.calls.append(
                 {
@@ -58,12 +67,12 @@ class InstrumentedBackend:
             )
 
 
-def _load_cases_snapshot(dataset_path):
+def _load_cases_snapshot(dataset_path: Path | str) -> tuple[list[dict[str, Any]], str]:
     payload = Path(dataset_path).read_bytes()
     return load_cases_bytes(payload), hashlib.sha256(payload).hexdigest()
 
 
-def _percentile(values, percentile):
+def _percentile(values: Sequence[float], percentile: float) -> float | None:
     if not values:
         return None
     ordered = sorted(float(value) for value in values)
@@ -76,25 +85,30 @@ def _percentile(values, percentile):
     return round(ordered[lower] * (1.0 - weight) + ordered[upper] * weight, 3)
 
 
-def _deduplicate(items):
+def _deduplicate(items: Sequence[str]) -> list[str]:
     return list(dict.fromkeys(item for item in items if item))
 
 
-def _milestone_intervals(trace_payload):
-    intervals = {}
+def _stage_durations(trace_payload: dict[str, Any] | None) -> dict[str, float]:
+    durations: dict[str, float] = {}
     for event in (trace_payload or {}).get("stage_events", []):
-        stage = event.get("stage") if isinstance(event, dict) else None
-        interval = (
-            event.get("interval_since_previous_ms")
-            if isinstance(event, dict)
-            else None
-        )
-        if stage and isinstance(interval, (int, float)):
-            intervals[stage] = round(float(interval), 3)
-    return intervals
+        if not isinstance(event, dict):
+            continue
+        stage = event.get("stage")
+        duration = event.get("duration_ms")
+        if stage and isinstance(duration, (int, float)):
+            durations[stage] = round(float(duration), 3)
+    return durations
 
 
-def _case_observation(case, result, errors, duration_ms, backend_calls, trace_payload):
+def _case_observation(
+    case: dict[str, Any],
+    result: GenerationResult,
+    errors: Sequence[str],
+    duration_ms: float,
+    backend_calls: Sequence[dict[str, Any]],
+    trace_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
     passed = not errors
     model_call_durations = [
         round(float(call["duration_ms"]), 3)
@@ -105,19 +119,18 @@ def _case_observation(case, result, errors, duration_ms, backend_calls, trace_pa
         "id": case["id"],
         "case_type": case.get("case_type", "unknown"),
         "passed": passed,
-        "status": result.status,
-        "repair_rounds": result.repair_rounds,
-        "degraded_mode": result.degraded_mode,
+        "status": result.workflow.status.value,
+        "revision_count": result.workflow.revision_count,
         "duration_ms": round(duration_ms, 3),
         "backend_calls": len(backend_calls),
         "model_call_durations_ms": model_call_durations,
         "model_duration_ms": round(sum(model_call_durations), 3),
-        "milestone_intervals_ms": _milestone_intervals(trace_payload),
+        "stage_durations_ms": _stage_durations(trace_payload),
         "errors": _deduplicate(errors),
     }
 
 
-def _aggregate_metrics(case_results):
+def _aggregate_metrics(case_results: Sequence[dict[str, Any]]) -> dict[str, Any]:
     total = len(case_results)
     passed = sum(item["passed"] for item in case_results)
     syntax_failures = sum(
@@ -125,26 +138,23 @@ def _aggregate_metrics(case_results):
         for item in case_results
     )
     semantic_failures = sum(
-        any("semantic" in error for error in item["errors"])
-        for item in case_results
+        any("semantic" in error for error in item["errors"]) for item in case_results
     )
     invalid_successes = sum(
-        item["status"] == "completed" and not item["passed"]
-        for item in case_results
+        item["status"] == "completed" and not item["passed"] for item in case_results
     )
-    repair_attempts = sum(item["repair_rounds"] > 0 for item in case_results)
-    repair_rescues = sum(
-        item["repair_rounds"] > 0 and item["passed"] for item in case_results
-    )
+    revised_cases = sum(item["revision_count"] > 0 for item in case_results)
+    revision_rescues = sum(item["revision_count"] > 0 and item["passed"] for item in case_results)
     durations = [item["duration_ms"] for item in case_results]
     warm_durations = durations[1:]
-    milestone_values = {}
-    model_call_durations = []
+    stage_values: dict[str, list[float]] = {}
+    model_call_durations: list[float] = []
     for item in case_results:
         model_call_durations.extend(item["model_call_durations_ms"])
-        for stage, duration in item["milestone_intervals_ms"].items():
-            milestone_values.setdefault(stage, []).append(duration)
-    def rate(numerator):
+        for stage, duration in item["stage_durations_ms"].items():
+            stage_values.setdefault(stage, []).append(duration)
+
+    def rate(numerator: float) -> float:
         return round(float(numerator) / float(total), 4) if total else 0.0
 
     return {
@@ -153,19 +163,15 @@ def _aggregate_metrics(case_results):
         "verified_completion_rate": rate(passed),
         "invalid_success_rate": rate(invalid_successes),
         "invalid_success_count": invalid_successes,
-        "repair_attempt_count": repair_attempts,
-        "repair_rescue_count": repair_rescues,
-        "repair_rescue_rate": (
-            round(float(repair_rescues) / float(repair_attempts), 4)
-            if repair_attempts
-            else None
+        "revision_count": revised_cases,
+        "revision_rescue_count": revision_rescues,
+        "revision_rescue_rate": (
+            round(float(revision_rescues) / float(revised_cases), 4) if revised_cases else None
         ),
-        "degraded_count": sum(item["degraded_mode"] for item in case_results),
         "backend_calls_total": sum(item["backend_calls"] for item in case_results),
         "backend_calls_mean": (
             round(
-                float(sum(item["backend_calls"] for item in case_results))
-                / float(total),
+                float(sum(item["backend_calls"] for item in case_results)) / float(total),
                 3,
             )
             if total
@@ -187,19 +193,19 @@ def _aggregate_metrics(case_results):
             "overall_p50": _percentile(durations, 0.50),
             "overall_p95": _percentile(durations, 0.95),
         },
-        "milestone_interval_latency_ms": {
+        "stage_latency_ms": {
             stage: {
                 "p50": _percentile(values, 0.50),
                 "p95": _percentile(values, 0.95),
             }
-            for stage, values in sorted(milestone_values.items())
+            for stage, values in sorted(stage_values.items())
         },
     }
 
 
-def quality_gate_failures(report):
+def quality_gate_failures(report: dict[str, Any]) -> list[str]:
     manifest = report.get("eval_manifest")
-    failures = []
+    failures: list[str] = []
     expected_manifest = [
         {
             "name": entry["name"],
@@ -219,11 +225,11 @@ def quality_gate_failures(report):
         name = entry["name"]
         result = report.get(name)
         if not isinstance(result, dict) or result.get("ok") is not True:
-            failures.append("{0}_failed".format(name))
+            failures.append(f"{name}_failed")
     return failures
 
 
-def _display_user_dataset_path(dataset_path):
+def _display_user_dataset_path(dataset_path: Path | str) -> str:
     path = Path(dataset_path)
     try:
         return str(path.resolve().relative_to(PROJECT_ROOT))
@@ -231,7 +237,7 @@ def _display_user_dataset_path(dataset_path):
         return str(path)
 
 
-def _packaged_dataset_name(dataset_path):
+def _packaged_dataset_name(dataset_path: Path | str) -> str | None:
     path = Path(dataset_path)
     if path.is_absolute():
         try:
@@ -246,7 +252,7 @@ def _packaged_dataset_name(dataset_path):
 
 
 @contextmanager
-def _materialized_dataset(dataset_path):
+def _materialized_dataset(dataset_path: Path | str) -> Iterator[tuple[Path, str]]:
     user_path = Path(dataset_path)
     if user_path.is_file():
         yield user_path, _display_user_dataset_path(user_path)
@@ -254,36 +260,45 @@ def _materialized_dataset(dataset_path):
 
     resource_name = _packaged_dataset_name(dataset_path)
     if not resource_name or not resource_exists(resource_name):
-        raise FileNotFoundError("Dataset not found: {0}".format(dataset_path))
+        raise FileNotFoundError(f"Dataset not found: {dataset_path}")
     with materialized_resource(resource_name) as resource_path:
         yield resource_path, resource_name
 
 
-def _backend_type(backend):
+def _backend_type(backend: Any) -> str:
     explicit = getattr(backend, "evidence_backend_type", None)
     if explicit:
-        return explicit
+        return str(explicit)
     return "live_ollama" if backend.__class__.__name__ == "OllamaBackend" else "fake_backend"
 
 
-def _runtime_metadata(profile, backend):
+def _runtime_metadata(profile: Any, backend: Any) -> dict[str, Any]:
     backend_type = _backend_type(backend)
-    payload = {
+    payload: dict[str, Any] = {
         "backend_type": backend_type,
         "model": getattr(profile, "model", None),
         "profile": getattr(profile, "name", None),
-        "ran_at": datetime.now(timezone.utc).isoformat(),
+        "ran_at": datetime.now(UTC).isoformat(),
     }
     if backend_type == "live_ollama":
         payload["host"] = backend.base_url
     return payload
 
 
-def run_dataset_benchmark(dataset_path, profile=None, backend=None):
+def run_dataset_benchmark(
+    dataset_path: Path | str,
+    profile: RuntimeProfile | None = None,
+    backend: Any = None,
+) -> dict[str, Any]:
+    """Run one dataset through the single generation entry point.
+
+    A case may declare `clarification_answer`; then the first response must be a question and the
+    answer is sent back into the same session before the oracle runs.
+    """
     runtime_profile = profile or get_runtime_profile()
     runtime_backend = backend or OllamaBackend(runtime_profile)
     instrumented_backend = InstrumentedBackend(runtime_backend)
-    started_at = datetime.now(timezone.utc).isoformat()
+    started_at = datetime.now(UTC).isoformat()
     with _materialized_dataset(dataset_path) as (resolved_dataset_path, display_path):
         cases, dataset_sha256 = _load_cases_snapshot(resolved_dataset_path)
         trace_store = TraceStore(root=get_state_root() / "traces" / "benchmarks")
@@ -293,91 +308,45 @@ def run_dataset_benchmark(dataset_path, profile=None, backend=None):
             backend=instrumented_backend,
         )
 
-        case_results = []
+        case_results: list[dict[str, Any]] = []
         for case in cases:
             call_count_before = len(instrumented_backend.calls)
             started = perf_counter()
-            result = engine.generate(prompt=case["prompt"], context=case.get("context"))
-            duration_ms = (perf_counter() - started) * 1000.0
-            errors = result.verification_errors + evaluate_case(result.code, case)
-            case_results.append(
-                _case_observation(
-                    case=case,
-                    result=result,
-                    errors=errors,
-                    duration_ms=duration_ms,
-                    backend_calls=instrumented_backend.calls[call_count_before:],
-                    trace_payload=trace_store.read(result.trace_id),
-                )
-            )
+            result = engine.generate(prompt=case.get("prompt"), context=case.get("context"))
+            errors: list[str] = []
 
-    failures = [item for item in case_results if not item["passed"]]
-
-    return {
-        "schema_version": 2,
-        "dataset": display_path,
-        "dataset_sha256": dataset_sha256,
-        "backend_type": _backend_type(runtime_backend),
-        "total": len(cases),
-        "passed": len(cases) - len(failures),
-        "failed": len(failures),
-        "ok": not failures,
-        "failures": failures[:10],
-        "case_results": case_results,
-        "metrics": _aggregate_metrics(case_results),
-        "started_at": started_at,
-        "finished_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-def run_rich_dataset_benchmark(dataset_path, profile=None, backend=None):
-    runtime_profile = profile or get_runtime_profile()
-    runtime_backend = backend or OllamaBackend(runtime_profile)
-    instrumented_backend = InstrumentedBackend(runtime_backend)
-    started_at = datetime.now(timezone.utc).isoformat()
-    with _materialized_dataset(dataset_path) as (resolved_dataset_path, display_path):
-        cases, dataset_sha256 = _load_cases_snapshot(resolved_dataset_path)
-        trace_store = TraceStore(root=get_state_root() / "traces" / "benchmarks")
-        engine = GenerationEngine(
-            profile=runtime_profile,
-            trace_store=trace_store,
-            backend=instrumented_backend,
-        )
-
-        case_results = []
-        for case in cases:
-            call_count_before = len(instrumented_backend.calls)
-            started = perf_counter()
-            result = engine.generate_rich(prompt=case.get("prompt"), context=case.get("context"))
-            errors = []
             expected_status = case.get("expected_status")
-            if expected_status and result.status != expected_status:
-                errors.append("expected_status::{0}".format(expected_status))
-            expected_question_contains = case.get("expected_question_contains")
-            if expected_question_contains and expected_question_contains not in (result.question or ""):
-                errors.append("expected_question_contains::{0}".format(expected_question_contains))
+            if expected_status and result.workflow.status.value != expected_status:
+                errors.append(f"expected_status::{expected_status}")
+            expected_question = case.get("expected_question_contains")
+            if expected_question and expected_question not in (result.workflow.question or ""):
+                errors.append(f"expected_question_contains::{expected_question}")
 
-            final_result = result
+            initial_status = result.workflow.status.value
             if case.get("clarification_answer"):
-                final_result = engine.generate_rich(
+                result = engine.generate(
                     session_id=result.session_id,
                     clarification_answer=case["clarification_answer"],
                 )
                 expected_final_status = case.get("expected_final_status")
-                if expected_final_status and final_result.status != expected_final_status:
-                    errors.append("expected_final_status::{0}".format(expected_final_status))
-                if final_result.code:
-                    errors.extend(evaluate_case(final_result.code, case))
+                if expected_final_status and result.workflow.status.value != expected_final_status:
+                    errors.append(f"expected_final_status::{expected_final_status}")
+
+            errors.extend(diagnostic.code for diagnostic in result.workflow.diagnostics)
+            if result.workflow.code:
+                errors.extend(evaluate_case(result.workflow.code, case))
+            elif "expected_result" in case and not expected_status:
+                errors.append("no_code_published")
 
             observation = _case_observation(
                 case=case,
-                result=final_result,
+                result=result,
                 errors=errors,
                 duration_ms=(perf_counter() - started) * 1000.0,
                 backend_calls=instrumented_backend.calls[call_count_before:],
-                trace_payload=trace_store.read(final_result.trace_id),
+                trace_payload=trace_store.read(result.trace_id),
             )
-            observation["initial_status"] = result.status
+            observation["initial_status"] = initial_status
             case_results.append(observation)
 
     failures = [item for item in case_results if not item["passed"]]
@@ -395,16 +364,16 @@ def run_rich_dataset_benchmark(dataset_path, profile=None, backend=None):
         "case_results": case_results,
         "metrics": _aggregate_metrics(case_results),
         "started_at": started_at,
-        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": datetime.now(UTC).isoformat(),
     }
 
 
 def run_repeated_dataset_benchmark(
-    dataset_path,
-    repeats=3,
-    profile=None,
-    backend=None,
-):
+    dataset_path: Path | str,
+    repeats: int = 3,
+    profile: RuntimeProfile | None = None,
+    backend: Any = None,
+) -> dict[str, Any]:
     repeat_count = int(repeats)
     if repeat_count < 2:
         raise ValueError("repeats must be at least 2")
@@ -418,7 +387,7 @@ def run_repeated_dataset_benchmark(
         )
         for _ in range(repeat_count)
     ]
-    case_runs = {}
+    case_runs: dict[str, list[dict[str, Any]]] = {}
     for repeat_index, report in enumerate(reports, start=1):
         for case in report["case_results"]:
             case_runs.setdefault(case["id"], []).append(
@@ -431,7 +400,7 @@ def run_repeated_dataset_benchmark(
                 }
             )
 
-    stability = []
+    stability: list[dict[str, Any]] = []
     for case_id, observations in sorted(case_runs.items()):
         signatures = {
             (
@@ -464,15 +433,11 @@ def run_repeated_dataset_benchmark(
         "total_cases": total_cases,
         "stable_cases": stable_cases,
         "stable_case_rate": (
-            round(float(stable_cases) / float(total_cases), 4)
-            if total_cases
-            else 0.0
+            round(float(stable_cases) / float(total_cases), 4) if total_cases else 0.0
         ),
         "consistently_passed_cases": consistently_passed,
         "consistent_pass_rate": (
-            round(float(consistently_passed) / float(total_cases), 4)
-            if total_cases
-            else 0.0
+            round(float(consistently_passed) / float(total_cases), 4) if total_cases else 0.0
         ),
         "invalid_success_count": sum(
             report["metrics"]["invalid_success_count"] for report in reports
@@ -487,7 +452,11 @@ def run_repeated_dataset_benchmark(
     }
 
 
-def run_quality_benchmark(profile=None, backend=None, mode="competition"):
+def run_quality_benchmark(
+    profile: RuntimeProfile | None = None,
+    backend: Any = None,
+    mode: str = "competition",
+) -> dict[str, Any]:
     runtime_profile = profile or get_runtime_profile()
     runtime_backend = backend or OllamaBackend(runtime_profile)
     metadata = _runtime_metadata(runtime_profile, runtime_backend)
@@ -502,7 +471,7 @@ def run_quality_benchmark(profile=None, backend=None, mode="competition"):
             "ok": False,
             "errors": ["strict_requires_live_ollama_backend"],
         }
-    report = {
+    report: dict[str, Any] = {
         "profile": runtime_profile.name,
         "backend_type": metadata["backend_type"],
         "model": metadata["model"],
@@ -519,14 +488,10 @@ def run_quality_benchmark(profile=None, backend=None, mode="competition"):
             for entry in QUALITY_EVAL_MANIFEST
         ],
         "mandatory_eval_sets": [
-            entry["name"]
-            for entry in QUALITY_EVAL_MANIFEST
-            if entry["gate"] == "required"
+            entry["name"] for entry in QUALITY_EVAL_MANIFEST if entry["gate"] == "required"
         ],
         "diagnostic_eval_sets": [
-            entry["name"]
-            for entry in QUALITY_EVAL_MANIFEST
-            if entry["gate"] == "diagnostic"
+            entry["name"] for entry in QUALITY_EVAL_MANIFEST if entry["gate"] == "diagnostic"
         ],
     }
     for entry in QUALITY_EVAL_MANIFEST:
@@ -534,12 +499,7 @@ def run_quality_benchmark(profile=None, backend=None, mode="competition"):
         dataset_path = entry["path"]
         if not resource_exists(dataset_path):
             continue
-        runner = (
-            run_rich_dataset_benchmark
-            if entry["runner"] == "rich"
-            else run_dataset_benchmark
-        )
-        result = runner(
+        result = run_dataset_benchmark(
             dataset_path,
             profile=runtime_profile,
             backend=runtime_backend,
@@ -547,8 +507,7 @@ def run_quality_benchmark(profile=None, backend=None, mode="competition"):
         if name == "adversarial_eval" and mode != "competition":
             result = dict(result)
             result["ok"] = (
-                result["total"] == 0
-                or (float(result["passed"]) / float(result["total"])) >= 0.75
+                result["total"] == 0 or (float(result["passed"]) / float(result["total"])) >= 0.75
             )
         report[name] = result
 
@@ -558,8 +517,7 @@ def run_quality_benchmark(profile=None, backend=None, mode="competition"):
         report["ok"] = not report["gate_failures"]
     else:
         report["ok"] = all(
-            isinstance(report.get(entry["name"]), dict)
-            and report[entry["name"]].get("ok") is True
+            isinstance(report.get(entry["name"]), dict) and report[entry["name"]].get("ok") is True
             for entry in QUALITY_EVAL_MANIFEST
         )
         report["gate_failures"] = []

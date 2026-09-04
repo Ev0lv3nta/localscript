@@ -51,7 +51,7 @@ def _default_policy_analyzer(code: str, output_style: str) -> PolicyResult:
     # PR1 owns the parser and its policy. A dynamic import keeps this adapter independently
     # testable while PR1 and PR2 are developed on separate branches.
     module = importlib.import_module("app.validation.lua_ast")
-    analyzer = cast(Callable[..., PolicyResult], getattr(module, "analyze_lua_output"))
+    analyzer = cast(Callable[..., PolicyResult], module.analyze_lua_output)
     return analyzer(code, output_style=output_style)
 
 
@@ -61,13 +61,12 @@ def _default_runtime_executor(
     output_style: str,
 ) -> RuntimeResult:
     module = importlib.import_module("app.validation.runtime_executor")
-    executor = cast(Callable[..., RuntimeResult], getattr(module, "execute_output"))
+    executor = cast(Callable[..., RuntimeResult], module.execute_output)
     return executor(code=code, context=context, output_style=output_style)
 
 
 def _default_luac_locator() -> str | None:
-    locator = cast(Callable[[], str | None], find_luac_binary)
-    return locator()
+    return find_luac_binary()
 
 
 class _DuplicateEnvelopeKey(ValueError):
@@ -143,7 +142,7 @@ class DeterministicCandidateValidator:
             except Exception:
                 checks.append(
                     self._failed(
-                        "acceptance:{0}".format(case.name),
+                        f"acceptance:{case.name}",
                         "sandbox_internal_error",
                         "The restricted runtime could not execute this acceptance case.",
                     )
@@ -153,7 +152,7 @@ class DeterministicCandidateValidator:
             if execution.degraded:
                 checks.append(
                     self._failed(
-                        "acceptance:{0}".format(case.name),
+                        f"acceptance:{case.name}",
                         execution.error_code or "sandbox_runtime_missing",
                         execution.error_message
                         or "The required restricted Lua runtime is unavailable.",
@@ -163,7 +162,7 @@ class DeterministicCandidateValidator:
             if not execution.ok:
                 checks.append(
                     self._failed(
-                        "acceptance:{0}".format(case.name),
+                        f"acceptance:{case.name}",
                         execution.error_code or "sandbox_execution_failed",
                         execution.error_message
                         or "The candidate failed in the restricted runtime.",
@@ -176,7 +175,7 @@ class DeterministicCandidateValidator:
             except ValidationError:
                 checks.append(
                     self._failed(
-                        "acceptance:{0}".format(case.name),
+                        f"acceptance:{case.name}",
                         "sandbox_non_json_result",
                         "The restricted runtime returned a non-JSON value.",
                     )
@@ -191,7 +190,7 @@ class DeterministicCandidateValidator:
             if shape_error is not None:
                 checks.append(
                     self._failed(
-                        "acceptance:{0}".format(case.name),
+                        f"acceptance:{case.name}",
                         shape_error,
                         "The candidate result does not satisfy the declared output shape.",
                     )
@@ -199,13 +198,13 @@ class DeterministicCandidateValidator:
             elif not self._json_equal(actual, case.expected):
                 checks.append(
                     self._failed(
-                        "acceptance:{0}".format(case.name),
+                        f"acceptance:{case.name}",
                         "acceptance_result_mismatch",
                         "The candidate result does not match the expected JSON value.",
                     )
                 )
             else:
-                checks.append(self._passed("acceptance:{0}".format(case.name)))
+                checks.append(self._passed(f"acceptance:{case.name}"))
 
         return ValidationResult(checks=tuple(checks), observations=tuple(observations))
 
@@ -276,8 +275,7 @@ class DeterministicCandidateValidator:
                 self._failed(
                     "sandbox",
                     execution.error_code or "sandbox_execution_failed",
-                    execution.error_message
-                    or "The candidate failed in the restricted runtime.",
+                    execution.error_message or "The candidate failed in the restricted runtime.",
                 )
             )
             return ValidationResult(checks=tuple(checks))
@@ -454,7 +452,7 @@ class DeterministicCandidateValidator:
                 return self._failed(
                     "luac",
                     "lua_syntax_error",
-                    "Lua chunk #{0} failed the luac syntax check.".format(index),
+                    f"Lua chunk #{index} failed the luac syntax check.",
                 )
         return self._passed("luac")
 
@@ -485,8 +483,7 @@ class DeterministicCandidateValidator:
             return False
         if isinstance(actual, list) and isinstance(expected, list):
             return len(actual) == len(expected) and all(
-                cls._json_equal(left, right)
-                for left, right in zip(actual, expected, strict=True)
+                cls._json_equal(left, right) for left, right in zip(actual, expected, strict=True)
             )
         if isinstance(actual, dict) and isinstance(expected, dict):
             return actual.keys() == expected.keys() and all(

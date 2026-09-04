@@ -75,22 +75,20 @@ line-length = 100
 extend-exclude = ["artifacts", "build", "dist", "third_party"]
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I"]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP", "SIM", "C4", "RUF"]
+
+# Проект документирован и общается с пользователем по-русски, поэтому кириллица в строковых
+# литералах — норма, а не опечатка латиницей.
+ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/*.py" = ["E402"]
+# Typer объявляет параметры именно значением по умолчанию; это его публичный API.
+"app/cli/main.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.11"
-files = [
-  "app/api/schemas.py",
-  "app/domain/outcomes.py",
-  "app/workflow/contracts.py",
-  "app/workflow/context.py",
-  "app/workflow/coordinator.py",
-  "app/workflow/roles.py",
-  "app/workflow/validation.py",
-]
+files = ["app"]
+strict = true
 plugins = ["pydantic.mypy"]
 show_error_codes = true
-warn_unused_configs = true

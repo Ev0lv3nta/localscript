@@ -43,7 +43,9 @@ def test_ci_uses_frozen_matrix_lua_package_container_and_secret_checks():
     assert "make test-unit" in workflow_text
     assert "make policy-check" in workflow_text
     assert "make build-check" in workflow_text
-    assert "scripts/check_package_artifacts.py" in (PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")
+    assert "scripts/check_package_artifacts.py" in (PROJECT_ROOT / "Makefile").read_text(
+        encoding="utf-8"
+    )
     assert "make container-check" in workflow_text
     assert "make dependency-audit" in workflow_text
     assert "pip-audit==2.10.0" in (PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")

@@ -278,8 +278,8 @@ class WorkflowCoordinator:
                         status=CheckStatus.FAILED,
                         code="acceptance_output_contract_mismatch",
                         message=(
-                            "Acceptance case `{0}` contradicts the declared output contract."
-                        ).format(case.name),
+                            f"Acceptance case `{case.name}` contradicts the declared output contract."
+                        ),
                     )
                 )
         if not checks:

@@ -130,7 +130,9 @@ def resolved_packages(lock_packages):
     for dependency in root.get("dependencies", []):
         pending.append((dependency, set(dependency.get("extra", []))))
     for dependencies in root.get("optional-dependencies", {}).values():
-        pending.extend((dependency, set(dependency.get("extra", []))) for dependency in dependencies)
+        pending.extend(
+            (dependency, set(dependency.get("extra", []))) for dependency in dependencies
+        )
 
     resolved = set()
     while pending:
@@ -143,7 +145,9 @@ def resolved_packages(lock_packages):
             continue
         resolved.add(name)
         package = lock_packages[name]
-        pending.extend((child, set(child.get("extra", []))) for child in package.get("dependencies", []))
+        pending.extend(
+            (child, set(child.get("extra", []))) for child in package.get("dependencies", [])
+        )
         for extra in extras:
             pending.extend(
                 (child, set(child.get("extra", [])))
@@ -156,12 +160,12 @@ def check_notices(project_root, notices_path):
     notices = notices_path.read_text(encoding="utf-8")
     for required in (str(LUA_ARCHIVE), LUA_SHA256, "MIT"):
         if required not in notices:
-            raise ValueError("third_party_notice_missing::{0}".format(required))
+            raise ValueError(f"third_party_notice_missing::{required}")
 
     archive_path = project_root / LUA_ARCHIVE
     archive_sha256 = hashlib.sha256(archive_path.read_bytes()).hexdigest()
     if archive_sha256 != LUA_SHA256:
-        raise ValueError("vendored_lua_hash_mismatch::{0}".format(archive_sha256))
+        raise ValueError(f"vendored_lua_hash_mismatch::{archive_sha256}")
 
 
 def check_licenses(lock_path, notices_path):
@@ -171,7 +175,7 @@ def check_licenses(lock_path, notices_path):
     if locked_third_party != mapped:
         missing = sorted(locked_third_party - mapped)
         stale = sorted(mapped - locked_third_party)
-        raise ValueError("license_map_lock_mismatch::missing={0}::stale={1}".format(missing, stale))
+        raise ValueError(f"license_map_lock_mismatch::missing={missing}::stale={stale}")
 
     disallowed = {
         package: license_expression
@@ -179,7 +183,7 @@ def check_licenses(lock_path, notices_path):
         if license_expression not in ALLOWED_SPDX
     }
     if disallowed:
-        raise ValueError("spdx_not_allowed::{0}".format(disallowed))
+        raise ValueError(f"spdx_not_allowed::{disallowed}")
 
     installed = {}
     for distribution in distributions():
@@ -192,24 +196,20 @@ def check_licenses(lock_path, notices_path):
     if set(installed) != expected_installed:
         missing = sorted(expected_installed - set(installed))
         unexpected = sorted(set(installed) - expected_installed)
-        raise ValueError("installed_lock_mismatch::missing={0}::unexpected={1}".format(missing, unexpected))
+        raise ValueError(f"installed_lock_mismatch::missing={missing}::unexpected={unexpected}")
 
     for name in sorted(installed):
         distribution = installed[name]
         locked_version = str(lock_packages[name]["version"])
         if distribution.version != locked_version:
             raise ValueError(
-                "installed_version_mismatch::{0}::installed={1}::locked={2}".format(
-                    name, distribution.version, locked_version
-                )
+                f"installed_version_mismatch::{name}::installed={distribution.version}::locked={locked_version}"
             )
         declared = metadata_license(distribution.metadata)
         expected = normalize_expression(LOCKED_LICENSES[name])
         if declared != expected:
             raise ValueError(
-                "license_metadata_mismatch::{0}::declared={1}::expected={2}".format(
-                    name, declared, expected
-                )
+                f"license_metadata_mismatch::{name}::declared={declared}::expected={expected}"
             )
 
     check_notices(lock_path.parent, notices_path)
@@ -225,9 +225,9 @@ def main():
     try:
         scanned = check_licenses(args.lock.resolve(), args.notices.resolve())
     except (KeyError, OSError, ValueError) as error:
-        print("license_check_failed::{0}".format(error), file=sys.stderr)
+        print(f"license_check_failed::{error}", file=sys.stderr)
         raise SystemExit(1) from error
-    print("license_check_ok::packages={0}".format(scanned))
+    print(f"license_check_ok::packages={scanned}")
 
 
 if __name__ == "__main__":

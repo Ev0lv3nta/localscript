@@ -3,7 +3,7 @@ import multiprocessing
 import os
 import threading
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -66,8 +66,7 @@ def test_session_update_has_no_lost_thread_updates(tmp_path):
 def test_session_update_has_no_lost_process_updates(tmp_path):
     root = tmp_path / "sessions"
     processes = [
-        multiprocessing.Process(target=_process_increment, args=(root, 20))
-        for _ in range(4)
+        multiprocessing.Process(target=_process_increment, args=(root, 20)) for _ in range(4)
     ]
     for process in processes:
         process.start()
@@ -82,10 +81,9 @@ def test_session_transaction_rolls_back_on_error(tmp_path):
     store = SessionStore(root=tmp_path / "sessions")
     store.write(SESSION_ID, {"value": "before"})
 
-    with pytest.raises(RuntimeError):
-        with store.transaction(SESSION_ID) as payload:
-            payload["value"] = "after"
-            raise RuntimeError("stop")
+    with pytest.raises(RuntimeError), store.transaction(SESSION_ID) as payload:
+        payload["value"] = "after"
+        raise RuntimeError("stop")
 
     assert store.read(SESSION_ID)["value"] == "before"
 
@@ -136,8 +134,8 @@ def test_trace_redaction_public_projection_and_uuid4_ids(tmp_path):
     assert persisted["planner"] == REDACTED
     assert persisted["code"] == REDACTED
     public = traces.sanitize_trace(persisted)
-    assert public["code"] == ""
-    assert public["planner"] == {}
+    assert "code" not in public
+    assert "planner" not in public
     assert sentinel not in json.dumps(public)
     assert persisted["created_at"].endswith("Z")
     assert datetime.fromisoformat(persisted["created_at"].replace("Z", "+00:00")).tzinfo
@@ -164,7 +162,7 @@ def test_trace_lookup_uses_index_without_recursive_glob(monkeypatch, tmp_path):
 
 
 def test_retention_count_and_ttl_use_injected_aware_clock(tmp_path):
-    clock = MutableClock(datetime(2026, 7, 27, tzinfo=timezone.utc))
+    clock = MutableClock(datetime(2026, 7, 27, tzinfo=UTC))
     traces = TraceStore(
         root=tmp_path / "traces",
         retention_count=2,

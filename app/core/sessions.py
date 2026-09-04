@@ -1,7 +1,12 @@
+from __future__ import annotations
+
 import contextlib
 import os
+from collections.abc import Callable, Iterator
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
 
 from app.core.state import resolve_state_path
 from app.core.storage import (
@@ -20,25 +25,26 @@ from app.core.storage import (
 )
 
 
-def _retention_value(explicit, environment_name):
+def _retention_value(explicit: int | None, environment_name: str) -> int | None:
+    value: int | None
     if explicit is not None:
         value = int(explicit)
     else:
         configured = os.getenv(environment_name)
         value = int(configured) if configured not in (None, "") else None
     if value is not None and value < 0:
-        raise ValueError("{0} must be non-negative".format(environment_name))
+        raise ValueError(f"{environment_name} must be non-negative")
     return value
 
 
 class SessionStore:
     def __init__(
         self,
-        root=None,
-        retention_count=None,
-        retention_ttl_seconds=None,
-        clock=None,
-    ):
+        root: Path | str | None = None,
+        retention_count: int | None = None,
+        retention_ttl_seconds: int | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self.root = resolve_state_path("LOCALSCRIPT_SESSION_DIR", "sessions", root=root)
         ensure_directory(self.root)
         self._lock_path = self.root / ".locks" / "store.lock"
@@ -50,24 +56,28 @@ class SessionStore:
         )
         self._clock = clock
 
-    def path_for(self, session_id):
+    def path_for(self, session_id: str) -> Path:
         validate_identifier(session_id, "invalid_session_id")
-        return resolve_within_root(
-            self.root, "{0}.json".format(session_id), "invalid_session_id"
-        )
+        return resolve_within_root(self.root, f"{session_id}.json", "invalid_session_id")
 
-    def _read_unlocked(self, session_id):
+    def _read_unlocked(self, session_id: str) -> dict[str, Any] | None:
         path = self.path_for(session_id)
         if not path.exists():
             return None
-        return read_json(path, expected_type=dict)
+        payload: dict[str, Any] = read_json(path, expected_type=dict)
+        return payload
 
-    def read(self, session_id):
+    def read(self, session_id: str) -> dict[str, Any] | None:
         with file_lock(self._lock_path):
             payload = self._read_unlocked(session_id)
             return deepcopy(payload)
 
-    def _write_unlocked(self, session_id, payload, now=None):
+    def _write_unlocked(
+        self,
+        session_id: str,
+        payload: dict[str, Any],
+        now: datetime | None = None,
+    ) -> tuple[Path, dict[str, Any]]:
         path = self.path_for(session_id)
         current = self._read_unlocked(session_id) if path.exists() else None
         timestamp = isoformat_utc(now or utc_now(self._clock))
@@ -76,22 +86,24 @@ class SessionStore:
             raise TypeError("session payload must be a mapping")
         persisted["session_id"] = session_id
         persisted["_state_created_at"] = (
-            current.get("_state_created_at", timestamp)
-            if isinstance(current, dict)
-            else timestamp
+            current.get("_state_created_at", timestamp) if isinstance(current, dict) else timestamp
         )
         persisted["_state_updated_at"] = timestamp
         atomic_write_json(path, persisted)
         return path, persisted
 
-    def write(self, session_id, payload):
+    def write(self, session_id: str, payload: dict[str, Any]) -> Path:
         with file_lock(self._lock_path):
             path, _ = self._write_unlocked(session_id, payload)
             self._cleanup_unlocked()
             return path
 
     @contextlib.contextmanager
-    def transaction(self, session_id, default=None):
+    def transaction(
+        self,
+        session_id: str,
+        default: dict[str, Any] | Callable[[], dict[str, Any]] | None = None,
+    ) -> Iterator[dict[str, Any]]:
         """Yield a locked mutable session and atomically commit on normal exit."""
         with file_lock(self._lock_path):
             current = self._read_unlocked(session_id)
@@ -104,9 +116,14 @@ class SessionStore:
             self._write_unlocked(session_id, working)
             self._cleanup_unlocked()
 
-    def update(self, session_id, updater, default=None):
+    def update(
+        self,
+        session_id: str,
+        updater: Callable[[dict[str, Any]], dict[str, Any] | None],
+        default: dict[str, Any] | Callable[[], dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """Run updater under the store lock and return the committed payload."""
-        committed = None
+        committed: dict[str, Any] = {}
         with self.transaction(session_id, default=default) as payload:
             replacement = updater(payload)
             if replacement is not None:
@@ -117,8 +134,8 @@ class SessionStore:
             committed = payload
         return deepcopy(committed)
 
-    def _session_entries_unlocked(self):
-        entries = []
+    def _session_entries_unlocked(self) -> list[tuple[datetime, Path]]:
+        entries: list[tuple[datetime, Path]] = []
         for path in self.root.iterdir():
             if path.is_symlink():
                 continue
@@ -127,34 +144,32 @@ class SessionStore:
             payload = read_json(path, expected_type=dict)
             timestamp = None
             if isinstance(payload, dict):
-                try:
+                with contextlib.suppress(TypeError, ValueError):
                     timestamp = parse_utc(payload.get("_state_updated_at"))
-                except (TypeError, ValueError):
-                    pass
             if timestamp is None:
-                timestamp = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+                timestamp = datetime.fromtimestamp(path.stat().st_mtime, UTC)
             entries.append((timestamp, path))
         return entries
 
-    def _cleanup_unlocked(self):
+    def _cleanup_unlocked(self) -> list[str]:
         if self.retention_count is None and self.retention_ttl_seconds is None:
             return []
         now = utc_now(self._clock)
         entries = sorted(self._session_entries_unlocked(), reverse=True)
-        expired = set()
+        expired: set[Path] = set()
         if self.retention_ttl_seconds is not None:
             cutoff = now - timedelta(seconds=self.retention_ttl_seconds)
             expired.update(path for timestamp, path in entries if timestamp < cutoff)
         if self.retention_count is not None:
             survivors = [(timestamp, path) for timestamp, path in entries if path not in expired]
             expired.update(path for _, path in survivors[self.retention_count :])
-        removed = []
+        removed: list[str] = []
         for path in sorted(expired):
             if delete_file(path):
                 removed.append(path.stem)
         return removed
 
-    def cleanup(self):
+    def cleanup(self) -> list[str]:
         """Apply configured count/TTL retention; repeated calls are idempotent."""
         with file_lock(self._lock_path):
             return self._cleanup_unlocked()

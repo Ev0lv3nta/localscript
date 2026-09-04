@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from enum import Enum
+from enum import StrEnum
 from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
-JsonScalar: TypeAlias = None | bool | int | float | str
+JsonScalar: TypeAlias = bool | int | float | str | None
 
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class WorkflowRoot(str, Enum):
+class WorkflowRoot(StrEnum):
     VARS = "wf.vars"
     INIT_VARIABLES = "wf.initVariables"
 
@@ -35,12 +35,12 @@ class WorkflowPath(StrictModel):
         return ".".join((self.root.value, *self.segments))
 
 
-class OutputFormat(str, Enum):
+class OutputFormat(StrEnum):
     LUA_BLOCK = "lua_block"
     JSON_ENVELOPE = "json_envelope"
 
 
-class OutputShape(str, Enum):
+class OutputShape(StrEnum):
     SCALAR = "scalar"
     ARRAY = "array"
     OBJECT = "object"
@@ -52,7 +52,7 @@ class OutputContract(StrictModel):
     nullable: bool = False
 
 
-class ContextValueType(str, Enum):
+class ContextValueType(StrEnum):
     NULL = "null"
     BOOLEAN = "boolean"
     NUMBER = "number"
@@ -91,9 +91,7 @@ class AcceptanceCase(StrictModel):
         if not isinstance(workflow, Mapping):
             raise ValueError("acceptance context must contain a wf object")
         if not any(root in workflow for root in ("vars", "initVariables")):
-            raise ValueError(
-                "acceptance context must contain wf.vars or wf.initVariables"
-            )
+            raise ValueError("acceptance context must contain wf.vars or wf.initVariables")
         return context
 
 
@@ -158,7 +156,7 @@ ReviewDecision: TypeAlias = Annotated[
 ]
 
 
-class CheckStatus(str, Enum):
+class CheckStatus(StrEnum):
     PASSED = "passed"
     FAILED = "failed"
 
@@ -170,10 +168,12 @@ class ValidationCheck(StrictModel):
     message: str | None = None
 
     @model_validator(mode="after")
-    def validate_failure_details(self) -> "ValidationCheck":
+    def validate_failure_details(self) -> ValidationCheck:
         if self.status is CheckStatus.FAILED and (not self.code or not self.message):
             raise ValueError("failed validation check requires code and message")
-        if self.status is CheckStatus.PASSED and (self.code is not None or self.message is not None):
+        if self.status is CheckStatus.PASSED and (
+            self.code is not None or self.message is not None
+        ):
             raise ValueError("passed validation check must not contain failure details")
         return self
 
@@ -184,10 +184,12 @@ class ValidationResult(StrictModel):
 
     @property
     def ok(self) -> bool:
-        return bool(self.checks) and all(check.status is CheckStatus.PASSED for check in self.checks)
+        return bool(self.checks) and all(
+            check.status is CheckStatus.PASSED for check in self.checks
+        )
 
 
-class WorkflowStage(str, Enum):
+class WorkflowStage(StrEnum):
     RECEIVED = "received"
     PLANNED = "planned"
     GENERATED = "generated"
@@ -208,7 +210,7 @@ class WorkflowState(StrictModel):
     revision_count: int = Field(default=0, ge=0, le=1)
 
     @model_validator(mode="after")
-    def validate_stage_payload(self) -> "WorkflowState":
+    def validate_stage_payload(self) -> WorkflowState:
         empty = self.plan is None and self.candidate is None and self.validation is None
         if self.stage in {
             WorkflowStage.RECEIVED,
@@ -240,7 +242,7 @@ class WorkflowState(StrictModel):
         return self
 
 
-class WorkflowStatus(str, Enum):
+class WorkflowStatus(StrEnum):
     COMPLETED = "completed"
     CLARIFICATION_REQUIRED = "clarification_required"
     VALIDATION_FAILED = "validation_failed"
@@ -263,7 +265,7 @@ class WorkflowResult(StrictModel):
     revision_count: int = 0
 
     @model_validator(mode="after")
-    def validate_public_shape(self) -> "WorkflowResult":
+    def validate_public_shape(self) -> WorkflowResult:
         if self.status is WorkflowStatus.COMPLETED:
             if not self.code or self.validation is None or not self.validation.ok:
                 raise ValueError("completed workflow requires code and successful validation")
@@ -275,3 +277,36 @@ class WorkflowResult(StrictModel):
         elif self.question is not None:
             raise ValueError("only clarification may contain a question")
         return self
+
+
+__all__ = [
+    "AcceptanceCase",
+    "CheckStatus",
+    "ClarificationRequest",
+    "CodeCandidate",
+    "ContextEntry",
+    "ContextInventory",
+    "ContextValueType",
+    "JsonScalar",
+    "JsonValue",
+    "OutputContract",
+    "OutputFormat",
+    "OutputShape",
+    "PlanStep",
+    "PlanningDecision",
+    "ReviewApproved",
+    "ReviewDecision",
+    "ReviewFinding",
+    "ReviewRejected",
+    "StrictModel",
+    "TaskPlan",
+    "ValidationCheck",
+    "ValidationResult",
+    "WorkflowDiagnostic",
+    "WorkflowPath",
+    "WorkflowResult",
+    "WorkflowRoot",
+    "WorkflowStage",
+    "WorkflowState",
+    "WorkflowStatus",
+]

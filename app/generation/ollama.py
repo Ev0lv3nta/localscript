@@ -1,10 +1,14 @@
+from __future__ import annotations
+
 import ipaddress
 import json
 import math
 import os
 import threading
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from typing import Mapping
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -17,14 +21,19 @@ from app.generation.backend_errors import (
     BackendUnavailable,
 )
 from app.generation.model_resolver import (
+    ModelTag,
+    ResolvedModel,
     model_identities_match,
     parse_model_tags,
     resolve_model,
 )
 
+if TYPE_CHECKING:
+    from app.core.config import RuntimeProfile
+
 
 class OllamaBackend:
-    def __init__(self, profile):
+    def __init__(self, profile: RuntimeProfile) -> None:
         self.profile = profile
         self.host = profile.ollama_host.rstrip("/")
         self.base_url = self.host
@@ -36,8 +45,8 @@ class OllamaBackend:
         self._closing = False
         self._closed = False
         self._model_lock = threading.RLock()
-        self._resolved_models = {}
-        self._last_resolved_model = None
+        self._resolved_models: dict[str, ResolvedModel] = {}
+        self._last_resolved_model: ResolvedModel | None = None
         self._client = httpx.Client(
             base_url=self.host,
             timeout=_request_timeout(profile.request_timeout_seconds),
@@ -49,7 +58,7 @@ class OllamaBackend:
             trust_env=False,
         )
 
-    def _validate_host_policy(self):
+    def _validate_host_policy(self) -> None:
         parsed = urlparse(self.host)
         if (
             parsed.scheme not in {"http", "https"}
@@ -80,23 +89,23 @@ class OllamaBackend:
 
         raise BackendUnavailable("ollama_host_not_local", reason="host_not_permitted")
 
-    def ping(self):
+    def ping(self) -> bool:
         try:
             self._fetch_tag_details()
             return True
         except BackendError:
             return False
 
-    def list_tags(self):
+    def list_tags(self) -> list[str]:
         return [item.tag for item in self._fetch_tag_details()]
 
-    def list_tag_details(self):
+    def list_tag_details(self) -> list[dict[str, Any]]:
         return [
             {"name": item.tag, "digest": item.digest, "details": dict(item.details)}
             for item in self._fetch_tag_details()
         ]
 
-    def resolve_model(self, model=None, *, refresh=False):
+    def resolve_model(self, model: str | None = None, *, refresh: bool = False) -> ResolvedModel:
         selected = model or self.profile.model
         cache_key = (selected or "").strip()
         with self._model_lock:
@@ -109,15 +118,20 @@ class OllamaBackend:
             self._last_resolved_model = resolved
         return resolved
 
-    def refresh_model(self, model=None):
+    def refresh_model(self, model: str | None = None) -> ResolvedModel:
         return self.resolve_model(model, refresh=True)
 
     @property
-    def last_resolved_model(self):
+    def last_resolved_model(self) -> ResolvedModel | None:
         with self._model_lock:
             return self._last_resolved_model
 
-    def complete(self, prompt, model=None, response_format=None):
+    def complete(
+        self,
+        prompt: str,
+        model: str | None = None,
+        response_format: object | None = None,
+    ) -> str:
         resolved = self.resolve_model(model)
         payload = {
             "model": resolved.tag,
@@ -145,10 +159,10 @@ class OllamaBackend:
             raise BackendProtocol(reason="empty_response")
         return candidate
 
-    def generate(self, prompt, context=None):
+    def generate(self, prompt: str, context: Any = None) -> str:
         return self.complete(self._build_prompt(prompt, context))
 
-    def close(self):
+    def close(self) -> None:
         with self._state:
             if self._closed:
                 return
@@ -168,21 +182,26 @@ class OllamaBackend:
                 self._closing = False
                 self._state.notify_all()
 
-    def __enter__(self):
+    def __enter__(self) -> OllamaBackend:
         with self._state:
             if self._closed or self._closing:
                 raise BackendUnavailable(reason="backend_closed")
         return self
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> Literal[False]:
         self.close()
         return False
 
-    def _fetch_tag_details(self):
+    def _fetch_tag_details(self) -> tuple[ModelTag, ...]:
         payload = self._request_json("GET", "/api/tags")
         return parse_model_tags(payload)
 
-    def _request_json(self, method, path, **kwargs):
+    def _request_json(self, method: str, path: str, **kwargs: Any) -> Mapping[str, Any]:
         try:
             with self._request_slot():
                 response = self._client.request(method, path, **kwargs)
@@ -207,7 +226,7 @@ class OllamaBackend:
         return payload
 
     @contextmanager
-    def _request_slot(self):
+    def _request_slot(self) -> Iterator[None]:
         self._semaphore.acquire()
         entered = False
         try:
@@ -226,7 +245,7 @@ class OllamaBackend:
             self._semaphore.release()
 
     @staticmethod
-    def _build_prompt(prompt, context):
+    def _build_prompt(prompt: str, context: Any) -> str:
         sections = [
             "You generate only LocalScript/Lua code.",
             "Do not use JsonPath.",
@@ -236,19 +255,21 @@ class OllamaBackend:
             prompt or "",
         ]
         if context is not None:
-            sections.extend(["Context JSON:", json.dumps(context, ensure_ascii=False, sort_keys=True)])
+            sections.extend(
+                ["Context JSON:", json.dumps(context, ensure_ascii=False, sort_keys=True)]
+            )
         return "\n".join(sections)
 
 
-def _safe_parallel(value):
+def _safe_parallel(value: Any) -> int:
     try:
         parsed = int(value)
     except (TypeError, ValueError):
         parsed = 1
-    return max(1, min(parsed, 64))
+    return int(max(1, min(parsed, 64)))
 
 
-def _safe_timeout_seconds(value):
+def _safe_timeout_seconds(value: Any) -> float:
     try:
         parsed = float(value)
     except (TypeError, ValueError):
@@ -258,7 +279,7 @@ def _safe_timeout_seconds(value):
     return max(0.1, min(parsed, 3600.0))
 
 
-def _request_timeout(value):
+def _request_timeout(value: Any) -> httpx.Timeout:
     total = _safe_timeout_seconds(value)
     return httpx.Timeout(
         connect=min(total, 5.0),

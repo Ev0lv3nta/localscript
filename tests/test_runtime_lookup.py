@@ -39,7 +39,7 @@ def test_explicit_runtime_override_precedes_checkout_and_path(
     override = _make_executable(tmp_path / "override")
     _make_executable(tmp_path / ".tools" / local_path)
     monkeypatch.setattr(runtime, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(runtime.shutil, "which", lambda command: "/from-path/{0}".format(command))
+    monkeypatch.setattr(runtime.shutil, "which", lambda command: f"/from-path/{command}")
     monkeypatch.setenv(env_name, str(override))
 
     assert finder() == str(override)
@@ -60,7 +60,7 @@ def test_invalid_explicit_runtime_override_does_not_fall_back(
     monkeypatch.setattr(
         runtime.shutil,
         "which",
-        lambda command: None if command == missing_override else "/from-path/{0}".format(command),
+        lambda command: None if command == missing_override else f"/from-path/{command}",
     )
     monkeypatch.setenv(env_name, missing_override)
 
@@ -78,7 +78,7 @@ def test_checkout_runtime_precedes_path(
 ):
     local_binary = _make_executable(tmp_path / ".tools" / local_path)
     monkeypatch.setattr(runtime, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(runtime.shutil, "which", lambda command: "/from-path/{0}".format(command))
+    monkeypatch.setattr(runtime.shutil, "which", lambda command: f"/from-path/{command}")
     monkeypatch.delenv(env_name, raising=False)
 
     assert finder() == str(local_binary)
@@ -97,8 +97,8 @@ def test_path_runtime_is_used_without_override_or_checkout(
     monkeypatch.setattr(
         runtime.shutil,
         "which",
-        lambda command: "/from-path/{0}".format(command) if command == path_name else None,
+        lambda command: f"/from-path/{command}" if command == path_name else None,
     )
     monkeypatch.delenv(env_name, raising=False)
 
-    assert finder() == "/from-path/{0}".format(path_name)
+    assert finder() == f"/from-path/{path_name}"
