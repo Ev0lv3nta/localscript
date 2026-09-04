@@ -3,6 +3,7 @@ from typing import Annotated, Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from app.domain.outcomes import GenerationStatus, ValidationStatus
+from app.workflow.contracts import JsonValue, OutputContract
 
 MAX_SCHEMA_PROMPT_CHARS = 131072
 MAX_SCHEMA_CODE_CHARS = 131072
@@ -149,8 +150,8 @@ class ExamplesResponse(BaseModel):
 
 class ValidateRequest(BaseModel):
     code: CodeText
-    context: Optional[Any] = None
-    output_style: Optional[str] = None
+    context: Dict[str, JsonValue]
+    output: OutputContract
 
 
 class SemanticResultSummary(BaseModel):

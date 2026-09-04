@@ -63,9 +63,9 @@ def resolve_model(requested: str, available: Iterable[ModelTag]) -> ResolvedMode
             item = latest[0]
             return ResolvedModel(tag=item.tag, digest=item.digest)
 
-        family = [item for item in tags if item.tag.split(":", 1)[0] == requested_tag]
-        if len(family) == 1:
-            item = family[0]
+        matching_tags = [item for item in tags if item.tag.split(":", 1)[0] == requested_tag]
+        if len(matching_tags) == 1:
+            item = matching_tags[0]
             return ResolvedModel(tag=item.tag, digest=item.digest)
 
     raise BackendModelError(reason="model_not_found")

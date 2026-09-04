@@ -39,13 +39,41 @@ def test_generate_command_returns_contract_json(tmp_path, monkeypatch):
     assert payload["code"] == "return wf.vars.try_count_n + 1"
 
 
-def test_verify_command_rejects_jsonpath():
-    result = runner.invoke(cli, ["verify", "--code", "return $.wf.vars.email"])
+def test_validate_command_requires_explicit_contract(monkeypatch):
+    class Policy:
+        findings = ()
 
-    assert result.exit_code == 1
+    class Execution:
+        ok = True
+        value = 1
+        error_code = ""
+        error_message = ""
+        degraded = False
+
+    monkeypatch.setattr(
+        "app.workflow.validation._default_policy_analyzer",
+        lambda _code, _style: Policy(),
+    )
+    monkeypatch.setattr(
+        "app.workflow.validation._default_runtime_executor",
+        lambda _code, _context, _style: Execution(),
+    )
+    monkeypatch.setattr(
+        "app.workflow.validation._default_luac_locator",
+        lambda: "/usr/bin/true",
+    )
+
+    result = runner.invoke(cli, ["validate", "--code", "return 1"])
+
+    assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["ok"] is False
-    assert "jsonpath_forbidden" in payload["errors"]
+    assert payload["ok"] is True
+    assert [check["name"] for check in payload["validation"]["checks"]] == [
+        "output_contract",
+        "ast_policy",
+        "luac",
+        "sandbox",
+    ]
 
 
 def test_doctor_flag_parses_as_boolean(monkeypatch):
@@ -229,7 +257,7 @@ def test_analyze_command_returns_route_inspection(monkeypatch):
                 "normalized_prompt": "normalize email",
                 "suggested_strategy": "clarification",
                 "clarification_question": "Use wf.vars or wf.initVariables?",
-                "task_spec": {"family": None, "safety_fallback": False},
+                "task_spec": {"context_inventory": []},
                 "reduced_context": {"roots": ["wf.vars.email", "wf.initVariables.email"]},
                 "available_paths": ["wf.vars.email", "wf.initVariables.email"],
                 "assumptions": [],

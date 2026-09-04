@@ -120,7 +120,7 @@ curl -s http://127.0.0.1:8080/generate \
 ```bash
 .venv/bin/localscript generate --prompt "Верни последний элемент wf.vars.items"
 .venv/bin/localscript interact --prompt "Нормализуй email"
-.venv/bin/localscript verify --code-file example.lua
+.venv/bin/localscript validate --code-file example.lua
 .venv/bin/localscript doctor
 ```
 
@@ -131,22 +131,23 @@ curl -s http://127.0.0.1:8080/generate \
 ```mermaid
 flowchart LR
     C["CLI · HTTP API · UI"] --> A["Application service"]
-    A --> R["Task resolver"]
-    R -->|неоднозначно| Q["Уточнение"]
-    R -->|достаточно данных| M["Ollama chain"]
-    M --> V["Validation pipeline"]
-    V -->|исправимо| P["Ограниченный repair"]
-    P --> V
-    V -->|проверено| O["completed + code"]
-    V -->|не пройдено| F["явный неуспешный исход"]
+    A --> P["Planner"]
+    P -->|неоднозначно| Q["Уточнение"]
+    P -->|план с acceptance cases| G["Generator"]
+    G --> V["AST-policy · luac · ограниченный runtime"]
+    V -->|проверено| R["Reviewer"]
+    V -->|не пройдено| REV["Одна revision"]
+    R -->|отклонено| REV
+    REV --> V
+    R -->|одобрено| O["completed + code"]
+    V -->|повторный отказ| F["явный неуспешный исход"]
 ```
 
 Основные границы ответственности:
 
-- `app/generation` — разрешение задачи, planner/writer chain и state machine;
-- `app/families` — типизированный registry поддерживаемых семейств;
-- `app/validation` — структурная, синтаксическая, policy- и semantic-проверка;
-- `app/repair` — канонические замены и локальные исправления;
+- `app/workflow` — контракты плана, роли planner/generator/reviewer и координатор стадий;
+- `app/generation` — обращения к Ollama, разрешение модели и типизированные ошибки backend;
+- `app/validation` — Lua AST-policy, `luac` и ограниченный runtime;
 - `app/api`, `app/cli`, `app/ui` — транспортные адаптеры без собственной бизнес-логики;
 - `app/evaluation` — целостность корпусов, метрики, повторы и ablation.
 
@@ -158,13 +159,13 @@ Pipeline последовательно проверяет:
 
 1. тип и размер входа, глубину и число узлов контекста;
 2. форму Lua block или JSON envelope;
-3. запрещённые roots, глобальные мутации и неподдерживаемые конструкции;
+3. запрещённые roots, глобальные мутации и неподдерживаемые конструкции по AST, а не по строкам;
 4. синтаксис через `luac`;
-5. ограниченное выполнение Lua в subprocess с лимитами;
-6. семантические инварианты известного family, если они надёжно определены;
+5. выполнение acceptance cases плана в ограниченном Lua-subprocess с лимитами;
+6. совпадение результата с ожидаемым JSON и объявленной формой вывода;
 7. согласованность финального typed outcome.
 
-Проверки не доказывают корректность произвольной программы. Для неизвестного family доступны только общие инварианты, поэтому результат нужно рассматривать как проверенный в рамках заявленного pipeline, а не математически доказанный.
+Проверки не доказывают корректность произвольной программы: они проверяют кандидата ровно на тех acceptance cases, которые planner вывел из запроса. Результат стоит считать проверенным в рамках заявленного pipeline, а не математически доказанным.
 
 ## Оценка качества
 

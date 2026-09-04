@@ -73,9 +73,9 @@ PY
 
 check_lua_runtime() {
   if "${PYTHON_BIN}" - <<'PY' >/dev/null 2>&1
-from app.validation.validators import _find_lua_binary, _find_luac_binary
-assert _find_lua_binary()
-assert _find_luac_binary()
+from app.validation.runtime import find_lua_binary, find_luac_binary
+assert find_lua_binary()
+assert find_luac_binary()
 PY
   then
     pass "lua_runtime_available"

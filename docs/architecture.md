@@ -12,25 +12,22 @@ flowchart TB
     UI --> API
     CLI --> APP["Generation application service"]
     API --> APP
-    APP --> RES["TaskResolver"]
-    RES --> EXT["TaskExtractor"]
-    RES --> PLAN["Planner"]
-    APP --> CHAIN["Model chain"]
-    CHAIN --> OL["Ollama backend"]
-    APP --> VAL["ValidationPipeline"]
-    VAL --> FAM["Family registry и semantic oracles"]
-    VAL --> LUA["Lua 5.4 subprocess"]
-    APP --> REP["Canonical/local repair"]
+    APP --> COORD["WorkflowCoordinator"]
+    COORD --> INV["ContextInspector"]
+    COORD --> ROLES["Planner / Generator / Reviewer"]
+    ROLES --> OL["Ollama backend"]
+    COORD --> VAL["DeterministicCandidateValidator"]
+    VAL --> AST["Lua AST policy"]
+    VAL --> LUA["luac и ограниченный Lua 5.4 runtime"]
     APP --> STATE["SessionStore и TraceStore"]
 
     subgraph trusted["Доверенная локальная граница приложения"]
       APP
-      RES
-      EXT
-      CHAIN
+      COORD
+      INV
+      ROLES
       VAL
-      FAM
-      REP
+      AST
       STATE
     end
 
@@ -47,50 +44,53 @@ Ollama может работать как локальный процесс ли
 sequenceDiagram
     actor User as Пользователь
     participant Adapter as API / CLI / UI
-    participant Engine as GenerationEngine
-    participant Resolver as TaskResolver
-    participant Model as Ollama chain
-    participant Validator as ValidationPipeline
-    participant Repair as RepairLoop
+    participant Coord as WorkflowCoordinator
+    participant Planner as Planner
+    participant Generator as Generator
+    participant Validator as Deterministic validation
+    participant Reviewer as Reviewer
     participant State as Session / Trace store
 
     User->>Adapter: prompt + context
-    Adapter->>Engine: generate command
-    Engine->>State: создать или загрузить сессию
-    Engine->>Resolver: разрешить TaskSpec
+    Adapter->>Coord: generate command
+    Coord->>State: создать или загрузить сессию
+    Coord->>Planner: inventory + запрос
     alt данных недостаточно
-        Resolver-->>Engine: clarification_required
-        Engine->>State: сохранить вопрос
-        Engine-->>Adapter: outcome без code
+        Planner-->>Coord: clarification
+        Coord->>State: сохранить вопрос
+        Coord-->>Adapter: результат без code
         Adapter-->>User: один уточняющий вопрос
     else задача разрешена
-        Resolver-->>Engine: ResolvedTaskSpec
-        Engine->>Model: planner / writer
-        Model-->>Engine: candidate
-        Engine->>Validator: validate(candidate)
-        alt кандидат исправим
-            Validator-->>Engine: typed findings
-            Engine->>Repair: минимальные действия
-            Repair-->>Engine: repaired candidate
-            Engine->>Validator: validate(repaired candidate)
+        Planner-->>Coord: TaskPlan с acceptance cases
+        Coord->>Generator: план + запрос
+        Generator-->>Coord: CodeCandidate
+        Coord->>Validator: AST-policy, luac, acceptance cases
+        alt детерминированная проверка пройдена
+            Coord->>Reviewer: запрос, план, код, результаты
         end
-        alt все обязательные проверки пройдены
-            Engine->>State: сохранить безопасную трассировку
-            Engine-->>Adapter: completed + code
-        else проверка не пройдена
-            Engine->>State: сохранить findings без публикации кода
-            Engine-->>Adapter: validation_failed без code
+        alt проверка или reviewer отклонили кандидата
+            Coord->>Generator: одна revision по structured findings
+            Generator-->>Coord: исправленный CodeCandidate
+            Coord->>Validator: повторная полная проверка
+            Coord->>Reviewer: повторное ревью
+        end
+        alt всё пройдено
+            Coord->>State: сохранить безопасную трассировку
+            Coord-->>Adapter: completed + code
+        else кандидат отклонён
+            Coord->>State: сохранить diagnostics без публикации кода
+            Coord-->>Adapter: отказ без code
         end
     end
 ```
 
 ## Контракты
 
-### Task specification
+### План задачи
 
-`TaskSpec` хранит нормализованный prompt, ожидаемый output style, возможный root, найденные paths, оценки неоднозначности и композиции, family hints и явные допущения. `ResolvedTaskSpec` фиксирует решение resolver и не изменяется в ходе генерации.
+Единственный детерминированный разбор ввода — `ContextInventory`: обход `wf.vars` и `wf.initVariables` с типами значений и типизированными путями. Естественный язык кодом не классифицируется.
 
-Extractor даёт доверенные детерминированные hints только для узких распознаваемых семейств. Planner может предложить family, но неизвестное значение закрывается в `generic_lua` и не получает специализированный oracle.
+`TaskPlan` содержит цель, входные `WorkflowPath`, `OutputContract`, упорядоченные шаги, ограничения и от одного до трёх исполнимых acceptance cases. План неизменяем и полностью определяет, что именно проверяется дальше; альтернатива плану — `ClarificationRequest` с одним конкретным вопросом.
 
 ### Typed outcome
 
@@ -98,13 +98,13 @@ Extractor даёт доверенные детерминированные hints
 
 ### Validation
 
-Pipeline не переписывает код скрытно. Он нормализует только однозначно распознаваемое представление, затем выполняет structural, policy, syntax, runtime и semantic stages. Findings имеют стабильный `code`, severity и stage.
+Валидация не переписывает код. Она проверяет соответствие `OutputContract`, анализирует Lua через AST-policy, компилирует чанки `luac`, выполняет кандидата в ограниченном runtime на каждом acceptance case и сравнивает результат с ожидаемым JSON по структуре. Каждый check имеет стабильный `code` и сообщение; ошибка любой стадии означает, что код не публикуется.
 
-Семантические oracles зарегистрированы рядом с family-модулями. Общая валидация применяется всегда; специализированная — только когда family получен из доверенного источника.
+Ожидаемая форма результата берётся из плана конкретного запроса, а не из зарегистрированной таблицы семейств, поэтому проверка не замкнута на реализацию.
 
-### Repair
+### Revision
 
-Каноническая генерация для известных узких случаев отделена от repair. Repair получает существующий candidate и typed findings, применяет только разрешённые минимальные действия и повторно отправляет результат в полный validation pipeline. Число раундов ограничено профилем.
+Deterministic-отказ или отклонение reviewer даёт ровно одну полноценную revision: generator получает план, отклонённый код и structured findings и возвращает нового кандидата, который проходит полную проверку и ревью заново. Строковых правок кода, канонических шаблонов и task-specific repair нет.
 
 ### Состояние
 
@@ -114,8 +114,10 @@ Trace предназначен для диагностики, а не для п�
 
 ## Структура решений
 
-Архитектурные решения фиксируются короткими ADR в [`docs/adr`](adr/): outcome contract, task resolution, family registry, границы eval-корпусов, evidence и repair. Изменение публичного контракта начинается с ADR или обновления существующего решения, затем получает тест контракта.
+Архитектурные решения фиксируются короткими ADR в [`docs/adr`](adr/): outcome contract, typed agentic workflow, границы eval-корпусов и evidence. Решения о task resolver, реестре семейств и границах repair отмечены как заменённые ADR 0007, а не удалены. Изменение публичного контракта начинается с ADR или обновления существующего решения, затем получает тест контракта.
 
 ## Осознанные ограничения
 
-Проект остаётся небольшим модульным монолитом. Отдельный frontend framework, база данных, очередь задач и микросервисы не добавлены: для локального single-user сценария они увеличили бы поверхность отказа без продуктовой пользы. TaskExtractor остаётся крупным rule-based classifier, но orchestration, family behavior, validation и repair вынесены из него и тестируются отдельно.
+Проект остаётся небольшим модульным монолитом. Отдельный frontend framework, база данных, очередь задач и микросервисы не добавлены: для локального single-user сценария они увеличили бы поверхность отказа без продуктовой пользы.
+
+Это ролевой workflow на одной локальной модели, а не автономная multi-agent система. Reviewer работает на той же модели, что и generator, поэтому он ловит расхождение с планом, но не заменяет независимую экспертизу. Обычный запрос стоит трёх обращений к модели вместо одного — плата за то, что решение принимает модель, а не таблица правил.

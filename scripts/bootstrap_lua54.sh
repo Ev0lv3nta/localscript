@@ -60,7 +60,18 @@ cd "${TOOLS_DIR}"
 rm -rf "${LUA_SRC_DIR}"
 tar -xzf "${ARCHIVE_PATH}"
 cd "${LUA_SRC_DIR}"
-make linux >/dev/null
+case "$(uname -s)" in
+  Darwin)
+    MAKE_TARGET="macosx"
+    ;;
+  Linux)
+    MAKE_TARGET="linux"
+    ;;
+  *)
+    fail "unsupported build platform: $(uname -s)"
+    ;;
+esac
+make "${MAKE_TARGET}" >/dev/null
 
 mkdir -p "${LUA_ROOT}/bin"
 ln -sf "../../lua-${LUA_VERSION}/src/lua" "${LUA_ROOT}/bin/lua"

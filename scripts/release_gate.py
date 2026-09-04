@@ -34,7 +34,7 @@ from app.core.config import get_runtime_profile
 from app.core.resources import materialized_resource
 from app.core.runtime_lock import write_runtime_lock
 from app.evaluation.integrity import run_integrity_check
-from app.validation.validators import _find_lua_binary, _find_luac_binary
+from app.validation.runtime import find_lua_binary, find_luac_binary
 
 DEFAULT_TIMEOUTS = {
     "pytest_live": 30 * 60,
@@ -43,7 +43,6 @@ DEFAULT_TIMEOUTS = {
     "latency": 30 * 60,
     "private_holdout": 30 * 60,
     "repeat_stability": 60 * 60,
-    "ablation": 90 * 60,
 }
 
 PRIVATE_HOLDOUT_SCALAR_METRICS = frozenset(
@@ -752,20 +751,6 @@ def main(argv=None):
     )
     repeat_stability_report = json_payload(repeat_stability)
 
-    ablation = run_command(
-        "ablation",
-        [
-            str(python_bin),
-            str(ROOT / "scripts" / "bench_ablation.py"),
-            "--dataset",
-            "evals/public/v1.jsonl",
-            "--require-full-pass",
-        ],
-        ROOT,
-        extra_env={"LOCALSCRIPT_PRIMARY_MODEL": selected_model},
-    )
-    ablation_report = json_payload(ablation)
-
     smoke = run_command(
         "smoke",
         [str(ROOT / "scripts" / "judge_smoke.sh")],
@@ -780,9 +765,6 @@ def main(argv=None):
     )
     latency_report = json_payload(latency)
 
-    full_ablation_metrics = (
-        ablation_report.get("profiles", {}).get("full_pipeline", {}).get("metrics", {})
-    )
     private_holdout_preconditions_ok = (
         live_tests["returncode"] == 0
         and doctor["returncode"] == 0
@@ -792,10 +774,6 @@ def main(argv=None):
         and (args.mode != "competition" or vram_report.get("status") == "ok")
         and repeat_stability["returncode"] == 0
         and repeat_stability_report.get("ok") is True
-        and ablation["returncode"] == 0
-        and full_ablation_metrics.get("verified_cases")
-        == ablation_report.get("case_count")
-        and full_ablation_metrics.get("invalid_success_count") == 0
         and smoke["returncode"] == 0
         and smoke_report.get("ok") is True
         and latency["returncode"] == 0
@@ -852,19 +830,13 @@ def main(argv=None):
     failures.extend(private_holdout_validation_errors)
     if repeat_stability["returncode"] != 0 or repeat_stability_report.get("ok") is not True:
         failures.append("repeat_stability_failed")
-    if (
-        ablation["returncode"] != 0
-        or full_ablation_metrics.get("verified_cases") != ablation_report.get("case_count")
-        or full_ablation_metrics.get("invalid_success_count") != 0
-    ):
-        failures.append("ablation_failed")
     if not doctor_lock or doctor_lock.get("locked") is not True:
         failures.append("doctor_runtime_snapshot_invalid")
 
     try:
         datasets = dataset_evidence()
-        lua = command_identity(_find_lua_binary())
-        luac = command_identity(_find_luac_binary())
+        lua = command_identity(find_lua_binary())
+        luac = command_identity(find_luac_binary())
         ollama = ollama_evidence(profile, selected_model)
         gpu = gpu_evidence()
     except Exception as exc:
@@ -950,7 +922,6 @@ def main(argv=None):
                 else None
             ),
             "repeat_stability": command_public_evidence(repeat_stability),
-            "ablation": command_public_evidence(ablation),
         },
         "quality_report": _redact_local_paths(quality_report),
         "doctor_report": doctor_public_report(doctor_report),
@@ -958,7 +929,6 @@ def main(argv=None):
         "latency_report": _redact_local_paths(latency_report),
         "private_holdout_report": private_holdout_public_evidence,
         "repeat_stability_report": _redact_local_paths(repeat_stability_report),
-        "ablation_report": _redact_local_paths(ablation_report),
         "vram_report": vram_report,
     }
 

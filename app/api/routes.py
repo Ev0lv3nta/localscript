@@ -1,4 +1,3 @@
-import json
 import os
 from pathlib import Path
 
@@ -26,7 +25,6 @@ from app.api.schemas import (
     ValidationSummary,
 )
 from app.core.storage import InvalidIdentifierError
-from app.core.verifier import verify_code
 from app.domain.outcomes import DiagnosticSeverity, GenerationStatus, ValidationStatus
 from app.generation.backend_errors import (
     BackendError,
@@ -35,9 +33,9 @@ from app.generation.backend_errors import (
     BackendTimeout,
     BackendUnavailable,
 )
-from app.generation.taskspec import TaskSpec
-from app.validation.runtime_executor import execute_output
-from app.validation.validators import _find_lua_binary, _find_luac_binary
+from app.validation.runtime import find_lua_binary, find_luac_binary
+from app.workflow.contracts import CheckStatus, CodeCandidate
+from app.workflow.validation import DeterministicCandidateValidator
 
 router = APIRouter()
 
@@ -231,26 +229,6 @@ def _handle_backend_error(exc):
     )
 
 
-def _detect_output_style(code, explicit_style):
-    if explicit_style in {"lua_block", "json_envelope"}:
-        return explicit_style
-    stripped = (code or "").strip()
-    if stripped.startswith("{") and stripped.endswith("}"):
-        try:
-            payload = json.loads(stripped)
-        except json.JSONDecodeError:
-            return "lua_block"
-        if isinstance(payload, dict) and payload:
-            if all(
-                isinstance(value, str)
-                and value.strip().startswith("lua{")
-                and value.strip().endswith("}lua")
-                for value in payload.values()
-            ):
-                return "json_envelope"
-    return "lua_block"
-
-
 @router.get("/health", response_model=HealthResponse)
 def health(request: Request):
     profile = request.app.state.profile
@@ -276,8 +254,8 @@ def ready(request: Request, response: Response):
         "backend_reachable": backend_reachable,
         "primary_model_present": profile.model in tags,
         "fallback_model_present": profile.fallback_model in tags,
-        "lua_runtime_present": bool(_find_lua_binary()),
-        "luac_runtime_present": bool(_find_luac_binary()),
+        "lua_runtime_present": bool(find_lua_binary()),
+        "luac_runtime_present": bool(find_luac_binary()),
     }
     errors = [name for name, ok in checks.items() if not ok]
     if errors:
@@ -417,59 +395,44 @@ def get_examples():
 @router.post("/api/validate", response_model=ValidateResponse)
 def validate_code(payload: ValidateRequest, request: Request):
     _validate_payload_limits(request, "validate existing code", payload.context)
-    output_style = _detect_output_style(payload.code, payload.output_style)
-    task_spec = TaskSpec(
-        normalized_prompt="validate existing code",
-        output_style=output_style,
-        target_root="unknown",
-        context_paths=request.app.state.engine.extractor._collect_context_paths(payload.context),
+    report = DeterministicCandidateValidator().validate_existing(
+        candidate=CodeCandidate(code=payload.code),
+        output=payload.output,
+        context=payload.context,
     )
-    report = request.app.state.engine.validation_pipeline.run(
-        code=payload.code,
-        task_spec=task_spec,
-        profile=request.app.state.profile,
-        source_context=payload.context,
-        prompt="validate existing code",
-        planner_semantic_checks=None,
+    failed = [check for check in report.checks if check.status is CheckStatus.FAILED]
+    first_error = failed[0] if failed else None
+    actual = None
+    if report.observations:
+        observation = report.observations[-1]
+        if isinstance(observation, dict):
+            actual = observation.get("actual")
+    semantic_summary = SemanticResultSummary(
+        ok=report.ok,
+        value=actual,
+        error_code=first_error.code if first_error else None,
+        error_message=first_error.message if first_error else None,
+        degraded=(first_error is not None and first_error.code == "sandbox_runtime_missing"),
     )
-    verification_errors = []
-    for error_code in report.error_codes() + verify_code(payload.code):
-        if error_code not in verification_errors:
-            verification_errors.append(error_code)
-    if report.has_errors:
-        first_error = next(
-            message for message in report.messages if message.level == "error"
-        )
-        semantic_summary = SemanticResultSummary(
-            ok=False,
-            error_code=first_error.code,
-            error_message=(
-                "Semantic execution skipped after validation error: "
-                + first_error.message
-            ),
-        )
-    else:
-        semantic_result = execute_output(
-            code=payload.code,
-            context=payload.context,
-            output_style=output_style,
-        )
-        semantic_summary = SemanticResultSummary(
-            ok=semantic_result.ok,
-            value=semantic_result.value,
-            error_code=semantic_result.error_code or None,
-            error_message=semantic_result.error_message or None,
-            degraded=semantic_result.degraded,
-        )
+    verification_errors = [check.code for check in failed if check.code]
+    validation_report = {
+        "has_errors": bool(failed),
+        "has_warnings": False,
+        "messages": [
+            {
+                "validator": check.name,
+                "level": "error" if check.status is CheckStatus.FAILED else "info",
+                "code": check.code,
+                "message": check.message,
+            }
+            for check in report.checks
+        ],
+    }
     return ValidateResponse(
-        ok=(
-            not verification_errors
-            and not report.has_errors
-            and semantic_summary.ok
-        ),
+        ok=report.ok,
         verification_errors=verification_errors,
-        validation_report=report.to_dict(),
-        degraded_mode=request.app.state.engine._is_degraded(strategy="validate", validation_report=report),
+        validation_report=validation_report,
+        degraded_mode=semantic_summary.degraded,
         semantic_result=semantic_summary,
     )
 
