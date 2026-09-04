@@ -1,7 +1,12 @@
+from __future__ import annotations
+
 import os
 import re
+from collections.abc import Callable, Iterator
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
 
 from app.core.state import resolve_state_path
 from app.core.storage import (
@@ -24,25 +29,26 @@ from app.core.storage import (
 DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def _retention_value(explicit, environment_name):
+def _retention_value(explicit: int | None, environment_name: str) -> int | None:
+    value: int | None
     if explicit is not None:
         value = int(explicit)
     else:
         configured = os.getenv(environment_name)
         value = int(configured) if configured not in (None, "") else None
     if value is not None and value < 0:
-        raise ValueError("{0} must be non-negative".format(environment_name))
+        raise ValueError(f"{environment_name} must be non-negative")
     return value
 
 
 class TraceStore:
     def __init__(
         self,
-        root=None,
-        retention_count=None,
-        retention_ttl_seconds=None,
-        clock=None,
-    ):
+        root: Path | str | None = None,
+        retention_count: int | None = None,
+        retention_ttl_seconds: int | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self.root = resolve_state_path("LOCALSCRIPT_TRACE_DIR", "traces", root=root)
         ensure_directory(self.root)
         self._index_root = ensure_directory(self.root / ".index")
@@ -57,17 +63,15 @@ class TraceStore:
         )
         self._clock = clock
 
-    def _trace_index_path(self, trace_id):
+    def _trace_index_path(self, trace_id: str) -> Path:
         validate_identifier(trace_id, "invalid_trace_id")
-        return resolve_within_root(
-            self._trace_index, "{0}.idx".format(trace_id), "invalid_trace_id"
-        )
+        return resolve_within_root(self._trace_index, f"{trace_id}.idx", "invalid_trace_id")
 
-    def _session_index_dir(self, session_id):
+    def _session_index_dir(self, session_id: str) -> Path:
         validate_identifier(session_id, "invalid_session_id")
         return resolve_within_root(self._session_index, session_id, "invalid_session_id")
 
-    def write(self, trace):
+    def write(self, trace: dict[str, Any]) -> str:
         if not isinstance(trace, dict):
             raise TypeError("trace payload must be a mapping")
         now = utc_now(self._clock)
@@ -77,14 +81,12 @@ class TraceStore:
         validate_identifier(session_id, "invalid_session_id")
         created_at = isoformat_utc(now)
         date_name = now.strftime("%Y-%m-%d")
-        relative_path = "{0}/{1}.json".format(date_name, trace_id)
+        relative_path = f"{date_name}/{trace_id}.json"
         with file_lock(self._lock_path):
             date_dir = ensure_directory(
                 resolve_within_root(self.root, date_name, "invalid_trace_path")
             )
-            trace_path = resolve_within_root(
-                date_dir, "{0}.json".format(trace_id), "invalid_trace_id"
-            )
+            trace_path = resolve_within_root(date_dir, f"{trace_id}.json", "invalid_trace_id")
             payload = redact_nested(deepcopy(trace), TRACE_PRIVATE_KEYS)
             if "code" in payload:
                 payload["code"] = REDACTED
@@ -100,19 +102,19 @@ class TraceStore:
             }
             atomic_write_json(self._trace_index_path(trace_id), pointer)
             session_dir = ensure_directory(self._session_index_dir(session_id))
-            atomic_write_json(session_dir / "{0}.idx".format(trace_id), pointer)
+            atomic_write_json(session_dir / f"{trace_id}.idx", pointer)
             self._cleanup_unlocked()
         return trace_id
 
-    def _path_from_pointer(self, pointer):
+    def _path_from_pointer(self, pointer: object) -> Path:
         relative_path = pointer.get("relative_path") if isinstance(pointer, dict) else None
         if not isinstance(relative_path, str):
             raise ValueError("invalid trace index pointer")
         return resolve_within_root(self.root, relative_path, "invalid_trace_path")
 
-    def _find_legacy_path_unlocked(self, trace_id):
+    def _find_legacy_path_unlocked(self, trace_id: str) -> Path | None:
         # Compatibility scan is bounded to immediate YYYY-MM-DD directories.
-        filename = "{0}.json".format(trace_id)
+        filename = f"{trace_id}.json"
         for directory in sorted(self.root.iterdir(), reverse=True):
             if (
                 directory.is_symlink()
@@ -125,26 +127,26 @@ class TraceStore:
                 return candidate
         return None
 
-    def read(self, trace_id):
+    def read(self, trace_id: str) -> dict[str, Any] | None:
         validate_identifier(trace_id, "invalid_trace_id")
         with file_lock(self._lock_path):
             index_path = self._trace_index_path(trace_id)
+            trace_path: Path | None
             if index_path.exists():
-                trace_path = self._path_from_pointer(
-                    read_json(index_path, expected_type=dict)
-                )
+                trace_path = self._path_from_pointer(read_json(index_path, expected_type=dict))
             else:
                 trace_path = self._find_legacy_path_unlocked(trace_id)
             if trace_path is None or not trace_path.exists():
                 return None
-            return read_json(trace_path, expected_type=dict)
+            payload: dict[str, Any] = read_json(trace_path, expected_type=dict)
+            return payload
 
-    def latest_for_session(self, session_id):
+    def latest_for_session(self, session_id: str) -> dict[str, Any] | None:
         validate_identifier(session_id, "invalid_session_id")
         with file_lock(self._lock_path):
             session_dir = self._session_index_dir(session_id)
             if session_dir.exists():
-                pointers = []
+                pointers: list[tuple[datetime, dict[str, Any]]] = []
                 for pointer_path in session_dir.iterdir():
                     if (
                         pointer_path.is_symlink()
@@ -157,12 +159,13 @@ class TraceStore:
                         pointers.append((parse_utc(pointer["created_at"]), pointer))
                     except (KeyError, TypeError, ValueError):
                         continue
-                for _, pointer in sorted(pointers, reverse=True):
-                    trace_path = self._path_from_pointer(pointer)
-                    if trace_path.exists():
-                        return read_json(trace_path, expected_type=dict)
+                for _, pointer in sorted(pointers, key=lambda item: item[0], reverse=True):
+                    indexed_path = self._path_from_pointer(pointer)
+                    if indexed_path.exists():
+                        indexed: dict[str, Any] = read_json(indexed_path, expected_type=dict)
+                        return indexed
 
-            latest = None
+            latest: tuple[datetime, dict[str, Any]] | None = None
             for trace_path in self._iter_trace_paths_unlocked():
                 payload = read_json(trace_path, expected_type=dict)
                 if payload.get("session_id") != session_id:
@@ -170,14 +173,12 @@ class TraceStore:
                 try:
                     created_at = parse_utc(payload.get("created_at"))
                 except (TypeError, ValueError):
-                    created_at = datetime.fromtimestamp(
-                        trace_path.stat().st_mtime, timezone.utc
-                    )
+                    created_at = datetime.fromtimestamp(trace_path.stat().st_mtime, UTC)
                 if latest is None or created_at > latest[0]:
                     latest = (created_at, payload)
             return latest[1] if latest else None
 
-    def _iter_trace_paths_unlocked(self):
+    def _iter_trace_paths_unlocked(self) -> Iterator[Path]:
         for directory in self.root.iterdir():
             if (
                 directory.is_symlink()
@@ -194,70 +195,67 @@ class TraceStore:
                 ):
                     yield path
 
-    def _delete_trace_unlocked(self, trace_path, payload):
-        trace_id = payload.get("trace_id", trace_path.stem)
+    def _delete_trace_unlocked(self, trace_path: Path, payload: dict[str, Any]) -> str:
+        trace_id = str(payload.get("trace_id", trace_path.stem))
         session_id = payload.get("session_id")
         delete_file(trace_path)
         delete_file(self._trace_index_path(trace_id))
         if session_id:
             session_dir = self._session_index_dir(session_id)
-            delete_file(session_dir / "{0}.idx".format(trace_id))
+            delete_file(session_dir / f"{trace_id}.idx")
         return trace_id
 
-    def _cleanup_unlocked(self):
+    def _cleanup_unlocked(self) -> list[str]:
         if self.retention_count is None and self.retention_ttl_seconds is None:
             return []
         now = utc_now(self._clock)
-        entries = []
+        entries: list[tuple[datetime, Path, dict[str, Any]]] = []
         for path in self._iter_trace_paths_unlocked():
             payload = read_json(path, expected_type=dict)
             try:
                 timestamp = parse_utc(payload.get("created_at"))
             except (TypeError, ValueError):
-                timestamp = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+                timestamp = datetime.fromtimestamp(path.stat().st_mtime, UTC)
             entries.append((timestamp, path, payload))
         entries.sort(key=lambda item: item[0], reverse=True)
-        expired = set()
+        expired: set[Path] = set()
         if self.retention_ttl_seconds is not None:
             cutoff = now - timedelta(seconds=self.retention_ttl_seconds)
             expired.update(path for timestamp, path, _ in entries if timestamp < cutoff)
         if self.retention_count is not None:
             survivors = [item for item in entries if item[1] not in expired]
             expired.update(path for _, path, _ in survivors[self.retention_count :])
-        removed = []
+        removed: list[str] = []
         for _, path, payload in entries:
             if path in expired:
                 removed.append(self._delete_trace_unlocked(path, payload))
         return removed
 
-    def cleanup(self):
+    def cleanup(self) -> list[str]:
         with file_lock(self._lock_path):
             return self._cleanup_unlocked()
 
     @staticmethod
-    def sanitize_trace(payload):
+    def sanitize_trace(payload: dict[str, Any] | None) -> dict[str, Any] | None:
         """Return a stable public projection without request or model output."""
         if payload is None:
             return None
+        stage_events = payload.get("stage_events")
+        diagnostic_codes = payload.get("diagnostic_codes")
         return {
             "trace_id": payload.get("trace_id"),
             "session_id": payload.get("session_id"),
             "status": payload.get("status"),
-            "strategy": payload.get("strategy"),
             "model": payload.get("model"),
-            "fallback_model": payload.get("fallback_model"),
-            "degraded_mode": bool(payload.get("degraded_mode", False)),
-            "repair_rounds": int(payload.get("repair_rounds", 0) or 0),
-            "assumptions": [],
-            "verification_errors": [],
-            "validation_report": {},
-            "planner": {},
-            "critic": {},
-            "repair_trace": [],
-            "rules_applied": [],
-            "examples_used": [],
-            "critic_rules_used": [],
-            "semantic_checks": [],
-            "backend_error": None,
-            "code": "",
+            "revision_count": int(payload.get("revision_count", 0) or 0),
+            "diagnostic_codes": (
+                [str(code) for code in diagnostic_codes]
+                if isinstance(diagnostic_codes, list)
+                else []
+            ),
+            "stage_events": (
+                [event for event in stage_events if isinstance(event, dict)]
+                if isinstance(stage_events, list)
+                else []
+            ),
         }

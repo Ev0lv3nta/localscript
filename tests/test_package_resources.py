@@ -35,7 +35,7 @@ def test_source_vram_wrapper_resolves_supported_python_in_order():
 
     positions = [
         wrapper.index("LOCALSCRIPT_PYTHON_BIN"),
-        wrapper.index('${PROJECT_ROOT}/.venv/bin/python'),
+        wrapper.index("${PROJECT_ROOT}/.venv/bin/python"),
         wrapper.index("/opt/venv/bin/python"),
         wrapper.index("command -v python3"),
     ]

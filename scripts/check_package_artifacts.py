@@ -55,7 +55,7 @@ SDIST_REQUIRED_SUFFIXES = WHEEL_REQUIRED | {
     "scripts/bench_repeated.py",
     "scripts/release_gate.py",
     "tests/conftest.py",
-    "tests/contracts/test_outcomes_contract.py",
+    "tests/test_workflow_contracts.py",
     "tests/test_workflow_coordinator.py",
     "third_party/lua/lua-5.4.6.tar.gz",
 }
@@ -70,15 +70,15 @@ def _assert_wheel_manifest(wheel_path):
         names = set(archive.namelist())
         metadata_names = [name for name in names if name.endswith(".dist-info/METADATA")]
         if len(metadata_names) != 1:
-            raise SystemExit("wheel_invalid_metadata_count::{0}".format(len(metadata_names)))
+            raise SystemExit(f"wheel_invalid_metadata_count::{len(metadata_names)}")
         metadata = archive.read(metadata_names[0]).decode("utf-8")
         parsed_metadata = Parser().parsestr(metadata)
     missing = sorted(WHEEL_REQUIRED - names)
     if missing:
-        raise SystemExit("wheel_missing_files::{0}".format(",".join(missing)))
+        raise SystemExit("wheel_missing_files::{}".format(",".join(missing)))
     for license_name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
         if not any(name.endswith(".dist-info/licenses/" + license_name) for name in names):
-            raise SystemExit("wheel_missing_license::{0}".format(license_name))
+            raise SystemExit(f"wheel_missing_license::{license_name}")
     python_constraints = {
         constraint.strip()
         for constraint in (parsed_metadata.get("Requires-Python") or "").split(",")
@@ -99,7 +99,7 @@ def _assert_sdist_manifest(sdist_path):
         if not any(name == suffix or name.endswith("/" + suffix) for name in names)
     )
     if missing:
-        raise SystemExit("sdist_missing_files::{0}".format(",".join(missing)))
+        raise SystemExit("sdist_missing_files::{}".format(",".join(missing)))
 
 
 def _installed_wheel_smoke(wheel_path):
@@ -124,7 +124,7 @@ def _installed_wheel_smoke(wheel_path):
                 "LOCALSCRIPT_STATE_DIR": str(state_dir),
                 "LOCALSCRIPT_UI_ENABLED": "1",
                 "VIRTUAL_ENV": str(venv),
-                "PATH": "{0}{1}{2}".format(venv / "bin", os.pathsep, smoke_env.get("PATH", "")),
+                "PATH": f"{venv / 'bin'}{os.pathsep}{smoke_env.get('PATH', '')}",
             }
         )
         _run([str(venv / "bin" / "localscript"), "--help"], cwd=empty_cwd, env=smoke_env)
@@ -159,9 +159,9 @@ def main():
     wheels = sorted(dist_dir.glob("*.whl"))
     sdists = sorted(dist_dir.glob("*.tar.gz"))
     if len(wheels) != 1:
-        raise SystemExit("expected_one_wheel::found={0}".format(len(wheels)))
+        raise SystemExit(f"expected_one_wheel::found={len(wheels)}")
     if len(sdists) != 1:
-        raise SystemExit("expected_one_sdist::found={0}".format(len(sdists)))
+        raise SystemExit(f"expected_one_sdist::found={len(sdists)}")
     wheel_path = wheels[0]
     sdist_path = sdists[0]
 

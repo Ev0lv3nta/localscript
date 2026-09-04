@@ -75,10 +75,10 @@ make run
 
 ## HTTP API
 
-Простой endpoint возвращает только проверенный код:
+Генерация — один endpoint:
 
 ```bash
-curl -s http://127.0.0.1:8080/generate \
+curl -s http://127.0.0.1:8080/api/generate \
   -H 'Content-Type: application/json' \
   -d '{
     "prompt": "Нормализуй wf.vars.email и верни строку в нижнем регистре",
@@ -86,13 +86,21 @@ curl -s http://127.0.0.1:8080/generate \
   }'
 ```
 
-Ответ при успехе:
+Ответ типизирован: `status`, `session_id`, `trace_id`, `diagnostics`, `validation` и число правок. Поле `code` появляется только у `completed`, `question` — только у `clarification_required`; собрать противоречивый ответ нельзя, это запрещает сама модель ответа.
 
 ```json
-{"code":"local value = wf.vars.email or \"\"\nreturn string.lower(value)"}
+{
+  "status": "completed",
+  "session_id": "<uuid>",
+  "trace_id": "<uuid>",
+  "code": "local value = wf.vars.email or \"\"\nreturn string.lower(value)",
+  "question": null,
+  "diagnostics": [],
+  "revision_count": 0
+}
 ```
 
-Для интерфейса, итераций и диагностики используется `POST /api/generate`. Он возвращает `status`, `session_id`, `trace_id`, стратегию, допущения и сводку проверки. Возможные исходы:
+Возможные исходы:
 
 | Статус | Значение | Публикуется `code` |
 |---|---|---:|
@@ -111,7 +119,7 @@ curl -s http://127.0.0.1:8080/generate \
 }
 ```
 
-Самостоятельная проверка кода доступна через `POST /api/validate`. Полная и всегда актуальная схема — в Swagger и `/openapi.json`.
+Самостоятельная проверка готового кода доступна через `POST /api/validate`: он принимает код, контекст и явный контракт вывода — формат, форму результата и допустимость `nil`. Полная и всегда актуальная схема — в Swagger и `/openapi.json`.
 
 ## CLI
 
@@ -119,12 +127,12 @@ curl -s http://127.0.0.1:8080/generate \
 
 ```bash
 .venv/bin/localscript generate --prompt "Верни последний элемент wf.vars.items"
-.venv/bin/localscript interact --prompt "Нормализуй email"
+.venv/bin/localscript generate --session-id <uuid> --answer "Используй wf.vars"
 .venv/bin/localscript validate --code-file example.lua
 .venv/bin/localscript doctor
 ```
 
-`interact` сохраняет идентификатор сессии для ответа на уточнение или последующей правки. `doctor --judge` — дорогая GPU-проверка выбранной модели; это релизный инструмент, а не обычная healthcheck-команда.
+`generate` начинает сессию по `--prompt` и продолжает её по `--session-id` с `--answer` или `--feedback`; идентификатор сессии печатается в ответе. `doctor --judge` — дорогая GPU-проверка выбранной модели; это релизный инструмент, а не обычная healthcheck-команда.
 
 ## Как устроена генерация
 

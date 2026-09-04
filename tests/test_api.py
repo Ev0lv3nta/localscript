@@ -66,7 +66,7 @@ def test_generate_endpoint_publishes_only_validated_code_and_sanitized_trace(tmp
     client, app = make_client(tmp_path)
 
     response = client.post(
-        "/generate",
+        "/api/generate",
         json={
             "prompt": "Return the value.",
             "context": {"wf": {"vars": {"value": 4, "secret": "not-in-trace"}}},
@@ -74,7 +74,10 @@ def test_generate_endpoint_publishes_only_validated_code_and_sanitized_trace(tmp
     )
 
     assert response.status_code == 200
-    assert response.json() == {"code": "return wf.vars.value"}
+    body = response.json()
+    assert body["status"] == "completed"
+    assert body["code"] == "return wf.vars.value"
+    assert body["question"] is None
     trace = app.state.trace_store.read(response.headers["X-Trace-Id"])
     assert trace["diagnostic_codes"] == []
     assert "not-in-trace" not in str(trace)
@@ -85,23 +88,35 @@ def test_generate_endpoint_never_publishes_rejected_candidate(tmp_path):
     client, _ = make_client(tmp_path, validator=RejectingValidator())
 
     response = client.post(
-        "/generate",
+        "/api/generate",
         json={"prompt": "Return the value.", "context": {"wf": {"vars": {"value": 4}}}},
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "validation_failed"
+    assert body["code"] is None
     assert "return wf.vars.value" not in response.text
-    assert response.json()["detail"]["code"] == "validation_failed"
+    assert "dangerous_stdlib_os_forbidden" in [item["code"] for item in body["diagnostics"]]
 
 
 def test_generate_endpoint_maps_backend_outage_without_internal_reason(tmp_path):
     client, _ = make_client(tmp_path, backend=UnavailableBackend())
 
     response = client.post(
-        "/generate",
+        "/api/generate",
         json={"prompt": "Return the value.", "context": {"wf": {"vars": {"value": 4}}}},
     )
 
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "backend_unavailable"
     assert "test_backend_unavailable" not in response.text
+
+
+def test_generate_endpoint_requires_a_prompt_or_a_session(tmp_path):
+    client, _ = make_client(tmp_path)
+
+    response = client.post("/api/generate", json={"context": {"wf": {"vars": {}}}})
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "prompt_or_session_required"

@@ -1,15 +1,18 @@
+from __future__ import annotations
+
 import os
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
 
 from app.core.config import PROJECT_ROOT
 
 
-def _is_executable(path):
+def _is_executable(path: Path) -> bool:
     return path.is_file() and os.access(str(path), os.X_OK)
 
 
-def _resolve_override(value):
+def _resolve_override(value: str) -> str | None:
     candidate = Path(value).expanduser()
     if _is_executable(candidate):
         return str(candidate.resolve())
@@ -20,7 +23,11 @@ def _resolve_override(value):
     return None
 
 
-def _find_runtime_binary(env_name, local_paths, path_names):
+def _find_runtime_binary(
+    env_name: str,
+    local_paths: Sequence[Path],
+    path_names: Sequence[str],
+) -> str | None:
     override = os.getenv(env_name)
     if override:
         return _resolve_override(override)
@@ -39,7 +46,7 @@ def _find_runtime_binary(env_name, local_paths, path_names):
     return None
 
 
-def find_lua_binary():
+def find_lua_binary() -> str | None:
     return _find_runtime_binary(
         "LOCALSCRIPT_LUA_BIN",
         (
@@ -50,7 +57,7 @@ def find_lua_binary():
     )
 
 
-def find_luac_binary():
+def find_luac_binary() -> str | None:
     return _find_runtime_binary(
         "LOCALSCRIPT_LUAC_BIN",
         (

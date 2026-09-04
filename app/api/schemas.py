@@ -1,9 +1,15 @@
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, JsonValue, model_validator
 
-from app.domain.outcomes import GenerationStatus, ValidationStatus
-from app.workflow.contracts import JsonValue, OutputContract
+from app.generation.results import SessionSummary
+from app.workflow.contracts import (
+    OutputContract,
+    StrictModel,
+    ValidationResult,
+    WorkflowDiagnostic,
+    WorkflowStatus,
+)
 
 MAX_SCHEMA_PROMPT_CHARS = 131072
 MAX_SCHEMA_CODE_CHARS = 131072
@@ -22,71 +28,36 @@ SessionIdText = Annotated[str, Field(max_length=MAX_SCHEMA_SESSION_ID_CHARS)]
 
 
 class GenerateRequest(BaseModel):
-    prompt: PromptText
-    context: Optional[Any] = None
-    session_id: Optional[SessionIdText] = None
-    feedback: Optional[FeedbackText] = None
+    prompt: PromptText | None = None
+    context: JsonValue = None
+    session_id: SessionIdText | None = None
+    feedback: FeedbackText | None = None
+    clarification_answer: ClarificationAnswerText | None = None
 
 
-class GenerateResponse(BaseModel):
-    code: CodeText
-
-
-class ValidationSummary(BaseModel):
-    status: ValidationStatus
-    ok: bool
-    errors: List[str]
-    degraded_mode: bool
-    repair_rounds: int
-    messages: List[Dict[str, Any]] = Field(default_factory=list)
-
-
-class SessionStateSummary(BaseModel):
-    session_id: str
-    status: str
-    original_task: Optional[str] = None
-    latest_trace_id: Optional[str] = None
-    last_strategy: Optional[str] = None
-    open_clarification_question: Optional[str] = None
-    clarification_history: List[Any] = Field(default_factory=list)
-    feedback_history: List[str] = Field(default_factory=list)
-    assumptions: List[str] = Field(default_factory=list)
-
-
-class GenerateRichRequest(BaseModel):
-    prompt: Optional[PromptText] = None
-    context: Optional[Any] = None
-    session_id: Optional[SessionIdText] = None
-    feedback: Optional[FeedbackText] = None
-    clarification_answer: Optional[ClarificationAnswerText] = None
-
-
-class GenerateRichResponse(BaseModel):
-    status: GenerationStatus
+class GenerateResponse(StrictModel):
+    status: WorkflowStatus
     session_id: str
     trace_id: str
-    strategy: str
-    question: Optional[str] = None
-    assumptions: List[str]
-    code: Optional[str] = None
-    validation: ValidationSummary
-    session: SessionStateSummary
+    code: str | None = None
+    question: str | None = None
+    diagnostics: tuple[WorkflowDiagnostic, ...] = ()
+    validation: ValidationResult | None = None
+    revision_count: int = 0
 
-
-class AnalyzeRequest(BaseModel):
-    prompt: PromptText
-    context: Optional[Any] = None
-
-
-class AnalyzeResponse(BaseModel):
-    normalized_prompt: str
-    suggested_strategy: str
-    clarification_question: Optional[str] = None
-    task_spec: Any
-    reduced_context: Any
-    available_paths: List[str] = Field(default_factory=list)
-    assumptions: List[str] = Field(default_factory=list)
-    ambiguity_notes: List[str] = Field(default_factory=list)
+    @model_validator(mode="after")
+    def validate_public_shape(self) -> "GenerateResponse":
+        if self.status is WorkflowStatus.COMPLETED:
+            if not self.code or self.validation is None or not self.validation.ok:
+                raise ValueError("completed response requires code and successful validation")
+        elif self.code is not None:
+            raise ValueError("only a completed response may carry code")
+        if self.status is WorkflowStatus.CLARIFICATION_REQUIRED:
+            if not self.question:
+                raise ValueError("clarification response requires a question")
+        elif self.question is not None:
+            raise ValueError("only a clarification response may carry a question")
+        return self
 
 
 class HealthResponse(BaseModel):
@@ -97,31 +68,18 @@ class HealthResponse(BaseModel):
 class ReadyResponse(BaseModel):
     status: str
     profile: str
-    checks: Dict[str, bool] = Field(default_factory=dict)
-    errors: List[str] = Field(default_factory=list)
+    checks: dict[str, bool] = Field(default_factory=dict)
+    errors: list[str] = Field(default_factory=list)
 
 
 class TraceResponse(BaseModel):
     trace_id: str
     session_id: str
-    status: Optional[str] = None
-    strategy: Optional[str] = None
-    model: Optional[str] = None
-    fallback_model: Optional[str] = None
-    degraded_mode: bool = False
-    repair_rounds: int = 0
-    assumptions: List[str] = Field(default_factory=list)
-    verification_errors: List[str] = Field(default_factory=list)
-    validation_report: Dict[str, Any] = Field(default_factory=dict)
-    planner: Dict[str, Any] = Field(default_factory=dict)
-    critic: Dict[str, Any] = Field(default_factory=dict)
-    repair_trace: List[Any] = Field(default_factory=list)
-    rules_applied: List[str] = Field(default_factory=list)
-    examples_used: List[str] = Field(default_factory=list)
-    critic_rules_used: List[str] = Field(default_factory=list)
-    semantic_checks: List[Any] = Field(default_factory=list)
-    backend_error: Optional[str] = None
-    code: str = ""
+    status: str | None = None
+    model: str | None = None
+    revision_count: int = 0
+    diagnostic_codes: list[str] = Field(default_factory=list)
+    stage_events: list[dict[str, JsonValue]] = Field(default_factory=list)
 
 
 class ProfileResponse(BaseModel):
@@ -130,41 +88,42 @@ class ProfileResponse(BaseModel):
     fallback_model: str
     num_ctx: int
     num_predict: int
-    max_repair_rounds: int
     ui_enabled: bool
 
 
 class ExampleEntry(BaseModel):
     id: str
     title: str
-    mode: str
     prompt: str
-    context: Any = None
-    expected_strategy: Optional[str] = None
-    description: Optional[str] = None
+    context: JsonValue = None
+    description: str | None = None
 
 
 class ExamplesResponse(BaseModel):
-    examples: List[ExampleEntry] = Field(default_factory=list)
+    examples: list[ExampleEntry] = Field(default_factory=list)
 
 
 class ValidateRequest(BaseModel):
     code: CodeText
-    context: Dict[str, JsonValue]
+    context: dict[str, JsonValue]
     output: OutputContract
-
-
-class SemanticResultSummary(BaseModel):
-    ok: bool
-    value: Any = None
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
-    degraded: bool = False
 
 
 class ValidateResponse(BaseModel):
     ok: bool
-    verification_errors: List[str] = Field(default_factory=list)
-    validation_report: Dict[str, Any] = Field(default_factory=dict)
-    degraded_mode: bool = False
-    semantic_result: Optional[SemanticResultSummary] = None
+    validation: ValidationResult
+
+
+__all__ = [
+    "ExampleEntry",
+    "ExamplesResponse",
+    "GenerateRequest",
+    "GenerateResponse",
+    "HealthResponse",
+    "ProfileResponse",
+    "ReadyResponse",
+    "SessionSummary",
+    "TraceResponse",
+    "ValidateRequest",
+    "ValidateResponse",
+]

@@ -17,11 +17,7 @@ def load_cases(path: str | Path) -> list[EvalCase]:
 
 
 def load_cases_bytes(payload: bytes) -> list[EvalCase]:
-    decoded = [
-        json.loads(line)
-        for line in payload.decode("utf-8").splitlines()
-        if line.strip()
-    ]
+    decoded = [json.loads(line) for line in payload.decode("utf-8").splitlines() if line.strip()]
     return CASES_ADAPTER.validate_python(decoded, strict=True)
 
 
@@ -56,8 +52,7 @@ def _json_equal(actual: object, expected: object) -> bool:
         return False
     if isinstance(actual, list) and isinstance(expected, list):
         return len(actual) == len(expected) and all(
-            _json_equal(left, right)
-            for left, right in zip(actual, expected, strict=True)
+            _json_equal(left, right) for left, right in zip(actual, expected, strict=True)
         )
     if isinstance(actual, dict) and isinstance(expected, dict):
         return actual.keys() == expected.keys() and all(

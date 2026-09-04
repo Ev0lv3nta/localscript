@@ -18,13 +18,17 @@ const statusLabels = {
   failed: "Ошибка",
 };
 
-const strategyLabels = {
-  ollama_chain: "модель и валидаторы",
-  canonical: "каноническое правило",
-  clarification: "уточнение",
+const stageLabels = {
+  received: "запрос принят",
+  planned: "план",
+  generated: "генерация",
+  validated: "проверка",
+  reviewed: "ревью",
+  revised: "правка",
+  completed: "готово",
+  failed: "отказ",
+  clarification_required: "уточнение",
 };
-
-const riskLabels = { low: "низкий", medium: "средний", high: "высокий" };
 
 const elements = {
   exampleSelect: document.getElementById("exampleSelect"),
@@ -38,8 +42,10 @@ const elements = {
   statusProfile: document.getElementById("statusProfile"),
   statusModel: document.getElementById("statusModel"),
   statusBadge: document.getElementById("statusBadge"),
-  strategyBadge: document.getElementById("strategyBadge"),
-  riskBadge: document.getElementById("riskBadge"),
+  revisionBadge: document.getElementById("revisionBadge"),
+  stageStrip: document.getElementById("stageStrip"),
+  outputShape: document.getElementById("outputShape"),
+  outputNullable: document.getElementById("outputNullable"),
   validationSummary: document.getElementById("validationSummary"),
   clarificationBox: document.getElementById("clarificationBox"),
   clarificationQuestion: document.getElementById("clarificationQuestion"),
@@ -71,7 +77,7 @@ function parseContext() {
   }
 }
 
-function detectOutputStyle(code) {
+function detectOutputFormat(code) {
   const stripped = (code || "").trim();
   if (!stripped.startsWith("{") || !stripped.endsWith("}")) {
     return "lua_block";
@@ -85,6 +91,38 @@ function detectOutputStyle(code) {
     return "lua_block";
   }
   return "lua_block";
+}
+
+function outputContract(code) {
+  return {
+    format: detectOutputFormat(code),
+    shape: elements.outputShape.value,
+    nullable: elements.outputNullable.checked,
+  };
+}
+
+function failedChecks(validation) {
+  return (validation?.checks || []).filter((check) => check.status === "failed");
+}
+
+function renderStages(trace) {
+  elements.stageStrip.innerHTML = "";
+  const events = trace?.stage_events || [];
+  if (events.length === 0) {
+    return;
+  }
+  for (const event of events) {
+    const chip = document.createElement("span");
+    chip.className = "meta-chip";
+    const label = document.createElement("span");
+    label.className = "meta-label";
+    label.textContent = stageLabels[event.stage] || event.stage;
+    const value = document.createElement("span");
+    value.textContent = `${Math.round(event.duration_ms)} мс`;
+    chip.appendChild(label);
+    chip.appendChild(value);
+    elements.stageStrip.appendChild(chip);
+  }
 }
 
 async function apiFetch(url, options = {}) {
@@ -191,6 +229,7 @@ async function refreshTrace() {
   }
   const { body } = await apiFetch(`/api/traces/${state.traceId}`);
   state.latestTrace = body;
+  renderStages(body);
   renderDiagnostics();
 }
 
@@ -204,10 +243,9 @@ function renderClarification(question) {
   elements.clarificationQuestion.textContent = question;
 }
 
-function renderResult(body, responseHeaders) {
+function renderResult(body) {
   state.sessionId = body.session_id;
   state.traceId = body.trace_id;
-  state.latestSession = body.session || {};
   state.latestValidation = body.validation || {};
 
   elements.codeOutput.value = body.code || "";
@@ -218,28 +256,27 @@ function renderResult(body, responseHeaders) {
   const statusKind =
     body.status === "completed" ? "ok" : body.status === "clarification_required" ? "warn" : "error";
   setBadge(elements.statusBadge, statusLabels[body.status] || body.status, statusKind);
-  const strategy = strategyLabels[body.strategy] || body.strategy || "—";
-  setBadge(elements.strategyBadge, `Способ: ${strategy}`, body.strategy === "ollama_chain" ? "ok" : "neutral");
-
-  const risk = responseHeaders.get("x-assumption-risk") || "low";
-  const riskKind = risk === "high" ? "warn" : "neutral";
-  setBadge(elements.riskBadge, `Риск допущений: ${riskLabels[risk] || risk}`, riskKind);
+  setBadge(
+    elements.revisionBadge,
+    `Правок: ${body.revision_count || 0}`,
+    body.revision_count ? "warn" : "neutral",
+  );
 
   if (body.status === "clarification_required") {
     elements.validationSummary.textContent = "Ответьте на уточнение — код пока не публикуется.";
     elements.validationSummary.className = "result-note warn";
-  } else if (body.validation) {
-    if (body.validation.ok) {
-      const rounds = body.validation.repair_rounds || 0;
-      elements.validationSummary.textContent = rounds
-        ? `Проверка пройдена после исправлений: ${rounds}.`
-        : "Проверка пройдена без исправлений.";
-      elements.validationSummary.className = "result-note ok";
-    } else {
-      elements.validationSummary.textContent = `Проверка нашла проблемы: ${(body.validation.errors || []).join(", ") || "см. диагностику"}`;
-      elements.validationSummary.className = "result-note warn";
-    }
+    return;
   }
+  if (body.status === "completed") {
+    elements.validationSummary.textContent = body.revision_count
+      ? "Проверка и ревью пройдены после одной правки."
+      : "Проверка и ревью пройдены без правок.";
+    elements.validationSummary.className = "result-note ok";
+    return;
+  }
+  const codes = (body.diagnostics || []).map((item) => item.code);
+  elements.validationSummary.textContent = `Код не опубликован: ${codes.join(", ") || "см. диагностику"}`;
+  elements.validationSummary.className = "result-note warn";
 }
 
 async function loadStatus() {
@@ -284,7 +321,7 @@ async function generate() {
   const prompt = elements.promptInput.value.trim();
   const context = parseContext();
   pushTimeline("Запрос принят", prompt, "POST /api/generate");
-  const { response, body } = await apiFetch("/api/generate", {
+  const { body } = await apiFetch("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -293,10 +330,10 @@ async function generate() {
       session_id: state.sessionId,
     }),
   });
-  renderResult(body, response.headers);
+  renderResult(body);
   const timelineTitle =
-    body.status === "clarification_required" ? "Найдено уточнение" : "Код сгенерирован";
-  pushTimeline(timelineTitle, body.question || body.code || "Код получен.", body.strategy);
+    body.status === "clarification_required" ? "Найдено уточнение" : "Ответ получен";
+  pushTimeline(timelineTitle, body.question || body.code || "Код не опубликован.", body.status);
   await refreshSession();
   await refreshTrace();
 }
@@ -306,7 +343,7 @@ async function continueSession() {
     throw new Error("Нет активной сессии для продолжения.");
   }
   const answer = elements.clarificationInput.value.trim();
-  const { response, body } = await apiFetch("/api/generate", {
+  const { body } = await apiFetch("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -314,8 +351,8 @@ async function continueSession() {
       clarification_answer: answer,
     }),
   });
-  renderResult(body, response.headers);
-  pushTimeline("Уточнение учтено", answer || "Пустой ответ", body.strategy);
+  renderResult(body);
+  pushTimeline("Уточнение учтено", answer || "Пустой ответ", body.status);
   await refreshSession();
   await refreshTrace();
 }
@@ -325,7 +362,7 @@ async function sendFeedback() {
     throw new Error("Нет активной сессии для правки результата.");
   }
   const feedback = elements.feedbackInput.value.trim();
-  const { response, body } = await apiFetch("/api/generate", {
+  const { body } = await apiFetch("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -333,8 +370,8 @@ async function sendFeedback() {
       feedback,
     }),
   });
-  renderResult(body, response.headers);
-  pushTimeline("Правка применена", feedback || "Пустое замечание", body.strategy);
+  renderResult(body);
+  pushTimeline("Правка применена", feedback || "Пустое замечание", body.status);
   await refreshSession();
   await refreshTrace();
 }
@@ -349,8 +386,8 @@ async function validateCode() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       code,
-      context: parseContext(),
-      output_style: detectOutputStyle(code),
+      context: parseContext() ?? { wf: { vars: {} } },
+      output: outputContract(code),
     }),
   });
   state.latestValidation = body;
@@ -360,7 +397,8 @@ async function validateCode() {
     elements.validationSummary.className = "result-note ok";
     pushTimeline("Проверка пройдена", "Код корректен по validation API.", "validated");
   } else {
-    elements.validationSummary.textContent = `Проверка нашла проблемы: ${(body.verification_errors || []).join(", ") || "см. диагностику"}`;
+    const codes = failedChecks(body.validation).map((check) => check.code);
+    elements.validationSummary.textContent = `Проверка нашла проблемы: ${codes.join(", ") || "см. диагностику"}`;
     elements.validationSummary.className = "result-note warn";
     pushTimeline("Проверка нашла проблемы", elements.validationSummary.textContent, "validation");
   }
@@ -375,9 +413,9 @@ async function copyCurl() {
     prompt: elements.promptInput.value,
     context: elements.contextInput.value.trim() ? JSON.parse(elements.contextInput.value) : null,
   };
-  const curl = `curl -s http://127.0.0.1:8080/generate -H 'Content-Type: application/json' -d '${JSON.stringify(payload)}'`;
+  const curl = `curl -s http://127.0.0.1:8080/api/generate -H 'Content-Type: application/json' -d '${JSON.stringify(payload)}'`;
   await navigator.clipboard.writeText(curl);
-  pushTimeline("cURL скопирован", "Команда для совместимого endpoint /generate готова.", "буфер обмена");
+  pushTimeline("cURL скопирован", "Команда для POST /api/generate готова.", "буфер обмена");
 }
 
 function resetSession() {
@@ -392,8 +430,8 @@ function resetSession() {
   elements.codeOutput.value = "";
   renderClarification("");
   setBadge(elements.statusBadge, "Ожидание", "neutral");
-  setBadge(elements.strategyBadge, "Способ: —", "neutral");
-  setBadge(elements.riskBadge, "Риск допущений: низкий", "neutral");
+  setBadge(elements.revisionBadge, "Правок: 0", "neutral");
+  elements.stageStrip.innerHTML = "";
   elements.validationSummary.textContent = "Сессия сброшена.";
   elements.validationSummary.className = "result-note";
   refreshMetaBadges();
@@ -432,8 +470,7 @@ function showError(error) {
 async function boot() {
   bindEvents();
   setBadge(elements.statusBadge, "Ожидание", "neutral");
-  setBadge(elements.strategyBadge, "Способ: —", "neutral");
-  setBadge(elements.riskBadge, "Риск допущений: низкий", "neutral");
+  setBadge(elements.revisionBadge, "Правок: 0", "neutral");
   refreshMetaBadges();
   renderDiagnostics();
   renderTimeline();

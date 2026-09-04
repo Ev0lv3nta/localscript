@@ -58,8 +58,13 @@ def test_constructor_roots_remain_explicit_and_testable(monkeypatch, tmp_path):
     _clear_state_environment(monkeypatch)
     monkeypatch.setenv("LOCALSCRIPT_STATE_DIR", str(tmp_path / "state"))
 
-    assert TraceStore(root=tmp_path / "custom-traces").root == (tmp_path / "custom-traces").resolve()
-    assert SessionStore(root=tmp_path / "custom-sessions").root == (tmp_path / "custom-sessions").resolve()
+    assert (
+        TraceStore(root=tmp_path / "custom-traces").root == (tmp_path / "custom-traces").resolve()
+    )
+    assert (
+        SessionStore(root=tmp_path / "custom-sessions").root
+        == (tmp_path / "custom-sessions").resolve()
+    )
 
 
 def test_specific_overrides_precede_constructor_and_state_roots(monkeypatch, tmp_path):

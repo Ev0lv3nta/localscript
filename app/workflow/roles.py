@@ -39,7 +39,7 @@ class StructuredModelClient:
     def request(
         self,
         prompt: str,
-        response: "StructuredResponse[SchemaValue]",
+        response: StructuredResponse[SchemaValue],
     ) -> SchemaValue:
         adapter = response.adapter
         json_schema = adapter.json_schema()
@@ -68,7 +68,7 @@ class StructuredModelClient:
                 prompt,
                 "The previous response did not satisfy the JSON schema.",
                 "Return one corrected JSON value only. Do not add markdown or explanations.",
-                "Validation errors: {0}".format(json.dumps(safe_errors, sort_keys=True)),
+                f"Validation errors: {json.dumps(safe_errors, sort_keys=True)}",
             )
         )
 
@@ -78,9 +78,7 @@ class StructuredResponse(Generic[SchemaValue]):
         self.adapter = adapter
 
 
-PLANNING_RESPONSE: StructuredResponse[PlanningDecision] = StructuredResponse(
-    PLANNING_ADAPTER
-)
+PLANNING_RESPONSE: StructuredResponse[PlanningDecision] = StructuredResponse(PLANNING_ADAPTER)
 CODE_RESPONSE: StructuredResponse[CodeCandidate] = StructuredResponse(CODE_ADAPTER)
 REVIEW_RESPONSE: StructuredResponse[ReviewDecision] = StructuredResponse(REVIEW_ADAPTER)
 
@@ -105,7 +103,7 @@ class PlannerRole:
             "clarification_answer": clarification_answer,
             "feedback": feedback,
         }
-        role_prompt = """You are the planner in a local code-generation workflow.
+        role_prompt = f"""You are the planner in a local code-generation workflow.
 Interpret the request; do not write Lua. Return exactly one JSON PlanningDecision.
 
 For a plan:
@@ -119,11 +117,11 @@ For unresolved ambiguity return a clarification with one short, concrete questio
 Never guess between wf.vars and wf.initVariables when both are plausible.
 
 Domain specification:
-{domain}
+{DOMAIN_SPECIFICATION}
 
 Input:
-{payload}
-""".format(domain=DOMAIN_SPECIFICATION, payload=json.dumps(payload, ensure_ascii=False, sort_keys=True))
+{json.dumps(payload, ensure_ascii=False, sort_keys=True)}
+"""
         return self.model.request(role_prompt, PLANNING_RESPONSE)
 
 
@@ -132,24 +130,20 @@ class GeneratorRole:
         self.model = model
 
     def run(self, *, prompt: str, plan: TaskPlan) -> CodeCandidate:
-        role_prompt = """You are the generator in a local code-generation workflow.
+        role_prompt = f"""You are the generator in a local code-generation workflow.
 Return exactly one JSON CodeCandidate. Its code field must contain the requested raw Lua block or
 the complete JSON envelope. Do not use markdown. Implement the structured plan, not a remembered
 example. Workflow inputs are read-only and the code must return its result.
 
 Domain specification:
-{domain}
+{DOMAIN_SPECIFICATION}
 
 Original request:
-{request}
+{prompt}
 
 Task plan:
-{plan}
-""".format(
-            domain=DOMAIN_SPECIFICATION,
-            request=prompt,
-            plan=plan.model_dump_json(),
-        )
+{plan.model_dump_json()}
+"""
         return self.model.request(role_prompt, CODE_RESPONSE)
 
     def revise(
@@ -165,31 +159,25 @@ Task plan:
             "validation": validation.model_dump(mode="json"),
             "review": REVIEW_ADAPTER.dump_python(review, mode="json") if review else None,
         }
-        role_prompt = """You are revising one rejected LocalScript candidate.
+        role_prompt = f"""You are revising one rejected LocalScript candidate.
 Return exactly one JSON CodeCandidate. Replace the candidate with a minimal semantic correction
 that addresses every structured finding. Do not use markdown and do not change the requested result.
 
 Domain specification:
-{domain}
+{DOMAIN_SPECIFICATION}
 
 Original request:
-{request}
+{prompt}
 
 Task plan:
-{plan}
+{plan.model_dump_json()}
 
 Rejected code:
-{code}
+{candidate.code}
 
 Structured findings:
-{findings}
-""".format(
-            domain=DOMAIN_SPECIFICATION,
-            request=prompt,
-            plan=plan.model_dump_json(),
-            code=candidate.code,
-            findings=json.dumps(failure_payload, ensure_ascii=False, sort_keys=True),
-        )
+{json.dumps(failure_payload, ensure_ascii=False, sort_keys=True)}
+"""
         return self.model.request(role_prompt, CODE_RESPONSE)
 
 
@@ -205,30 +193,24 @@ class ReviewerRole:
         candidate: CodeCandidate,
         validation: ValidationResult,
     ) -> ReviewDecision:
-        role_prompt = """You are the reviewer in a fresh context. Return exactly one JSON
+        role_prompt = f"""You are the reviewer in a fresh context. Return exactly one JSON
 ReviewDecision. Compare the original request, structured plan, executable acceptance observations,
 and candidate. Approve only when the code implements the requested semantics and respects the plan.
 Do not infer approval merely from syntax success. Findings must use short stable snake_case codes.
 
 Domain specification:
-{domain}
+{DOMAIN_SPECIFICATION}
 
 Original request:
-{request}
+{prompt}
 
 Task plan:
-{plan}
+{plan.model_dump_json()}
 
 Candidate code:
-{code}
+{candidate.code}
 
 Deterministic validation:
-{validation}
-""".format(
-            domain=DOMAIN_SPECIFICATION,
-            request=prompt,
-            plan=plan.model_dump_json(),
-            code=candidate.code,
-            validation=validation.model_dump_json(),
-        )
+{validation.model_dump_json()}
+"""
         return self.model.request(role_prompt, REVIEW_RESPONSE)

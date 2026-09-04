@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 import hashlib
 import json
 import re
 import unicodedata
+from collections.abc import Sequence
 from difflib import SequenceMatcher
 from pathlib import Path
+from typing import Any
 
 from app.core.public_eval import load_cases
 from app.core.resources import materialized_resource
@@ -13,12 +17,12 @@ FUZZY_THRESHOLD = 0.85
 OUTPUT_STYLES = frozenset({"lua_block", "lua_expression", "json_envelope"})
 
 
-def normalize_prompt(prompt):
+def normalize_prompt(prompt: object) -> str:
     normalized = unicodedata.normalize("NFKC", str(prompt or "")).casefold()
     return " ".join(re.sub(r"[^\w]+", " ", normalized).split())
 
 
-def _sha256_path(dataset_path):
+def _sha256_path(dataset_path: Path | str) -> str:
     digest = hashlib.sha256()
     with Path(dataset_path).open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -26,7 +30,7 @@ def _sha256_path(dataset_path):
     return digest.hexdigest()
 
 
-def _case_input_fingerprint(case):
+def _case_input_fingerprint(case: dict[str, Any]) -> str:
     payload = {
         "prompt": normalize_prompt(case.get("prompt")),
         "context": case.get("context"),
@@ -35,50 +39,58 @@ def _case_input_fingerprint(case):
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _validate_case(case, corpus, seen_ids, seen_inputs):
-    errors = []
+def _validate_case(
+    case: object,
+    corpus: str,
+    seen_ids: set[str],
+    seen_inputs: dict[str, str],
+) -> list[str]:
+    errors: list[str] = []
     if not isinstance(case, dict):
         return ["case_not_object"]
     case_id = case.get("id")
     if not isinstance(case_id, str) or not case_id.strip():
         errors.append("case_id_missing")
     elif case_id in seen_ids:
-        errors.append("case_id_duplicate::{0}".format(case_id))
+        errors.append(f"case_id_duplicate::{case_id}")
     else:
         seen_ids.add(case_id)
     if not isinstance(case.get("prompt"), str) or not case["prompt"].strip():
-        errors.append("case_prompt_missing::{0}".format(case_id))
+        errors.append(f"case_prompt_missing::{case_id}")
     if case.get("context") is not None and not isinstance(case.get("context"), dict):
-        errors.append("case_context_not_object::{0}".format(case_id))
+        errors.append(f"case_context_not_object::{case_id}")
     if (
         case.get("expected_output_style") is not None
         and case.get("expected_output_style") not in OUTPUT_STYLES
     ):
-        errors.append("case_output_style_invalid::{0}".format(case_id))
+        errors.append(f"case_output_style_invalid::{case_id}")
 
     fingerprint = _case_input_fingerprint(case)
     previous = seen_inputs.get(fingerprint)
     if previous is not None:
-        errors.append("case_input_duplicate::{0}::{1}".format(previous, case_id))
+        errors.append(f"case_input_duplicate::{previous}::{case_id}")
     else:
-        seen_inputs[fingerprint] = case_id
+        seen_inputs[fingerprint] = str(case_id)
 
     if corpus == "public_benchmark":
         if case.get("source") != "owner_synthetic_public_v1":
-            errors.append("public_case_source_invalid::{0}".format(case_id))
+            errors.append(f"public_case_source_invalid::{case_id}")
         if case.get("case_type") != "public_benchmark":
-            errors.append("public_case_type_invalid::{0}".format(case_id))
+            errors.append(f"public_case_type_invalid::{case_id}")
         if case.get("expected_output_style") not in OUTPUT_STYLES:
-            errors.append("public_case_output_style_missing::{0}".format(case_id))
+            errors.append(f"public_case_output_style_missing::{case_id}")
         if "expected_result" not in case and not case.get("semantic_checks"):
-            errors.append("public_case_oracle_missing::{0}".format(case_id))
+            errors.append(f"public_case_oracle_missing::{case_id}")
         if "expected_code" in case or "reference_code" in case:
-            errors.append("public_case_reference_injection::{0}".format(case_id))
+            errors.append(f"public_case_reference_injection::{case_id}")
     return errors
 
 
-def _find_cross_corpus_overlaps(protected_records, comparison_records):
-    findings = []
+def _find_cross_corpus_overlaps(
+    protected_records: Sequence[dict[str, Any]],
+    comparison_records: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
     for protected in protected_records:
         protected_prompt = normalize_prompt(protected["prompt"])
         protected_tokens = set(protected_prompt.split())
@@ -119,9 +131,12 @@ def _find_cross_corpus_overlaps(protected_records, comparison_records):
     return findings
 
 
-def _load_external_holdout(dataset_path, expected):
+def _load_external_holdout(
+    dataset_path: Path | str,
+    expected: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     path = Path(dataset_path)
-    evidence = {
+    evidence: dict[str, Any] = {
         "name": expected["name"],
         "case_count": 0,
         "sha256": None,
@@ -146,23 +161,21 @@ def _load_external_holdout(dataset_path, expected):
     return evidence, cases
 
 
-def run_integrity_check(private_holdout_path=None):
+def run_integrity_check(private_holdout_path: Path | str | None = None) -> dict[str, Any]:
     specs = dataset_specs()
-    seen_ids = set()
-    seen_inputs = {}
-    schema_errors = []
-    datasets = []
-    public_records = []
-    comparison_records = []
+    seen_ids: set[str] = set()
+    seen_inputs: dict[str, str] = {}
+    schema_errors: list[str] = []
+    datasets: list[dict[str, Any]] = []
+    public_records: list[dict[str, Any]] = []
+    comparison_records: list[dict[str, Any]] = []
 
     for spec in specs:
         with materialized_resource(spec.path) as dataset_path:
             cases = load_cases(dataset_path)
             digest = _sha256_path(dataset_path)
         for case in cases:
-            schema_errors.extend(
-                _validate_case(case, spec.corpus, seen_ids, seen_inputs)
-            )
+            schema_errors.extend(_validate_case(case, spec.corpus, seen_ids, seen_inputs))
             record = {
                 "source": spec.name,
                 "id": str(case.get("id")),
@@ -181,9 +194,9 @@ def run_integrity_check(private_holdout_path=None):
         )
 
     manifest = load_evaluation_manifest()
-    holdout_evidence = None
-    holdout_cases = []
-    holdout_records = []
+    holdout_evidence: dict[str, Any] | None = None
+    holdout_cases: list[dict[str, Any]] = []
+    holdout_records: list[dict[str, Any]] = []
     if private_holdout_path is not None:
         expected_holdouts = manifest.get("private_holdouts") or []
         if len(expected_holdouts) != 1:
@@ -222,7 +235,7 @@ def run_integrity_check(private_holdout_path=None):
         )
     errors = list(schema_errors)
     errors.extend(
-        "corpus_overlap::{0}::{1}::{2}".format(
+        "corpus_overlap::{}::{}::{}".format(
             finding["protected_id"],
             finding["other_source"],
             finding["other_id"],

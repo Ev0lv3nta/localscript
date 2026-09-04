@@ -29,7 +29,6 @@ def make_profile(**overrides):
         "batch": 1,
         "parallel": 1,
         "max_candidates": 2,
-        "max_repair_rounds": 2,
         "runtime_lua": "lua5.4_subprocess",
         "primary_launch": "./scripts/judge_up.sh",
         "request_timeout_seconds": 45,
@@ -269,9 +268,7 @@ def test_parallel_profile_caps_all_backend_io(monkeypatch):
         ),
     ],
 )
-def test_transport_failures_are_typed_and_sanitized(
-    monkeypatch, failure, error_type, reason
-):
+def test_transport_failures_are_typed_and_sanitized(monkeypatch, failure, error_type, reason):
     fake = FakeClient([failure])
     install_fake_client(monkeypatch, fake)
     backend = OllamaBackend(make_profile())
@@ -412,9 +409,7 @@ def test_loopback_backend_ignores_broken_proxy_environment(monkeypatch):
     thread.start()
     monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
-    profile = make_profile(
-        ollama_host="http://127.0.0.1:{0}".format(server.server_port)
-    )
+    profile = make_profile(ollama_host=f"http://127.0.0.1:{server.server_port}")
 
     try:
         with OllamaBackend(profile) as backend:

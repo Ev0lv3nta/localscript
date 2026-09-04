@@ -29,7 +29,7 @@ def test_generate_rejects_invalid_session_id(tmp_path):
     client = _make_client(tmp_path)
 
     response = client.post(
-        "/generate",
+        "/api/generate",
         json={
             "prompt": "Return the first item from wf.vars.items.",
             "context": {"wf": {"vars": {"items": [1, 2, 3]}}},

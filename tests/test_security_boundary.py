@@ -47,7 +47,7 @@ def test_remote_mode_protects_non_health_routes(monkeypatch, tmp_path):
     assert (
         client.get(
             "/api/profile",
-            headers={"Authorization": "Bearer {0}".format(token)},
+            headers={"Authorization": f"Bearer {token}"},
         ).status_code
         == 200
     )
@@ -115,7 +115,7 @@ def test_runtime_scripts_default_to_loopback_and_compose_publishes_loopback():
     compose = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
 
-    assert 'LOCALSCRIPT_BIND_HOST:-127.0.0.1' in judge_up
+    assert "LOCALSCRIPT_BIND_HOST:-127.0.0.1" in judge_up
     assert "non-loopback bind requires LOCALSCRIPT_REMOTE_MODE=1" in judge_up
     assert '"127.0.0.1:${LOCALSCRIPT_PORT:-8080}' in compose
     assert "LOCALSCRIPT_OLLAMA_CONTAINER_ALIAS=ollama" in dockerfile
@@ -124,6 +124,7 @@ def test_runtime_scripts_default_to_loopback_and_compose_publishes_loopback():
 def test_judge_smoke_requires_dangerous_generation_to_fail_closed():
     judge_smoke = (PROJECT_ROOT / "scripts" / "judge_smoke.sh").read_text(encoding="utf-8")
 
-    assert "danger_response.status_code != 422" in judge_smoke
-    assert 'danger_detail.get("code") != "validation_failed"' in judge_smoke
+    assert 'danger_body.get("status") == "completed"' in judge_smoke
+    assert 'danger_body.get("code") is not None' in judge_smoke
     assert "danger_api_fail_open" in judge_smoke
+    assert "dangerous_stdlib_os_forbidden" in judge_smoke

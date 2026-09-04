@@ -5,8 +5,15 @@ from typer.testing import CliRunner
 from app.cli.main import cli
 from app.core import config as config_module
 from app.core.benchmarks import QUALITY_EVAL_MANIFEST
-from app.generation.engine import GenerationResult
 from app.generation.ollama import OllamaBackend
+from app.generation.results import GenerationResult, SessionStatus, SessionSummary
+from app.workflow.contracts import (
+    CheckStatus,
+    ValidationCheck,
+    ValidationResult,
+    WorkflowResult,
+    WorkflowStatus,
+)
 
 runner = CliRunner()
 
@@ -15,27 +22,38 @@ def test_generate_command_returns_contract_json(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALSCRIPT_TRACE_DIR", str(tmp_path / "traces"))
 
     class DummyEngine:
-        def generate(self, prompt=None, session_id=None, feedback=None):
+        def generate(self, **_kwargs):
             return GenerationResult(
-                code="return wf.vars.try_count_n + 1",
+                workflow=WorkflowResult(
+                    status=WorkflowStatus.COMPLETED,
+                    code="return wf.vars.try_count_n + 1",
+                    validation=ValidationResult(
+                        checks=(ValidationCheck(name="all", status=CheckStatus.PASSED),)
+                    ),
+                ),
                 trace_id="trace-1",
                 session_id="session-1",
-                strategy="ollama_chain",
-                verification_errors=[],
-                validation_report={"has_errors": False, "has_warnings": False, "messages": []},
-                repair_rounds=0,
-                degraded_mode=False,
+                session=SessionSummary(
+                    session_id="session-1",
+                    status=SessionStatus.COMPLETED,
+                    original_task="Увеличь счётчик.",
+                ),
             )
 
     monkeypatch.setattr("app.cli.main.build_engine", lambda: DummyEngine())
 
     result = runner.invoke(
         cli,
-        ["generate", "--prompt", "Увеличь wf.vars.try_count_n ровно на единицу и верни новый счётчик."],
+        [
+            "generate",
+            "--prompt",
+            "Увеличь wf.vars.try_count_n ровно на единицу и верни новый счётчик.",
+        ],
     )
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
+    assert payload["status"] == "completed"
     assert payload["code"] == "return wf.vars.try_count_n + 1"
 
 
@@ -84,18 +102,18 @@ def test_doctor_flag_parses_as_boolean(monkeypatch):
     monkeypatch.setattr(
         "app.cli.main.run_quality_benchmark",
         lambda profile=None, backend=None, mode="competition": {
-                "backend_type": "live_ollama",
-                "eval_manifest": [
-                    {
-                        "name": entry["name"],
-                        "path": entry["path"],
-                        "corpus": entry["corpus"],
-                        "gate": entry["gate"],
-                        "claim_scope": entry["claim_scope"],
-                    }
-                    for entry in QUALITY_EVAL_MANIFEST
-                ],
-                "public_v1": {"ok": True},
+            "backend_type": "live_ollama",
+            "eval_manifest": [
+                {
+                    "name": entry["name"],
+                    "path": entry["path"],
+                    "corpus": entry["corpus"],
+                    "gate": entry["gate"],
+                    "claim_scope": entry["claim_scope"],
+                }
+                for entry in QUALITY_EVAL_MANIFEST
+            ],
+            "public_v1": {"ok": True},
             "public_gold": {"ok": True},
             "stress_eval": {"ok": True},
             "showcase_eval": {"ok": True},
@@ -119,7 +137,7 @@ def test_doctor_flag_parses_as_boolean(monkeypatch):
 
     monkeypatch.setattr(
         "app.cli.main.subprocess.run",
-        lambda args, stdout=None, stderr=None, text=None: Completed(
+        lambda args, capture_output=None, text=None: Completed(
             json.dumps({"status": "ok", "model": args[2]})
         ),
     )
@@ -153,22 +171,23 @@ def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tm
         "list_tags",
         lambda self: ["qwen3:8b-q4_K_M", "qwen3:4b-instruct-2507-q4_K_M"],
     )
+
     def fake_quality_benchmark(profile=None, backend=None, mode="competition"):
         benchmark_models.append(profile.model)
         assert backend.profile.model == profile.model
         return {
-                "backend_type": "live_ollama",
-                "eval_manifest": [
-                    {
-                        "name": entry["name"],
-                        "path": entry["path"],
-                        "corpus": entry["corpus"],
-                        "gate": entry["gate"],
-                        "claim_scope": entry["claim_scope"],
-                    }
-                    for entry in QUALITY_EVAL_MANIFEST
-                ],
-                "public_v1": {"ok": True},
+            "backend_type": "live_ollama",
+            "eval_manifest": [
+                {
+                    "name": entry["name"],
+                    "path": entry["path"],
+                    "corpus": entry["corpus"],
+                    "gate": entry["gate"],
+                    "claim_scope": entry["claim_scope"],
+                }
+                for entry in QUALITY_EVAL_MANIFEST
+            ],
+            "public_v1": {"ok": True},
             "public_gold": {"ok": True},
             "stress_eval": {"ok": True},
             "showcase_eval": {"ok": True},
@@ -191,7 +210,7 @@ def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tm
             self.stdout = stdout
             self.stderr = ""
 
-    def fake_run(args, stdout=None, stderr=None, text=None):
+    def fake_run(args, capture_output=None, text=None):
         assert args[0] == "bash"
         model = args[2]
         status = "over_cap" if model == "qwen3:8b-q4_K_M" else "ok"
@@ -207,68 +226,50 @@ def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tm
     assert payload["selection_reason"] == "primary_over_vram_cap"
     assert payload["hard_gate_failures"] == []
     assert benchmark_models == ["qwen3:4b-instruct-2507-q4_K_M"]
-    assert json.loads(lock_path.read_text(encoding="utf-8"))["selected_model"] == "qwen3:4b-instruct-2507-q4_K_M"
+    assert (
+        json.loads(lock_path.read_text(encoding="utf-8"))["selected_model"]
+        == "qwen3:4b-instruct-2507-q4_K_M"
+    )
     config_module.get_runtime_profile.cache_clear()
 
 
-def test_interact_command_returns_rich_agent_payload(monkeypatch):
+def test_generate_command_continues_a_clarification_session(monkeypatch):
     class DummyEngine:
-        def generate_rich(self, prompt=None, session_id=None, clarification_answer=None, feedback=None):
+        def generate(self, **kwargs):
+            assert kwargs["session_id"] == "session-1"
+            assert kwargs["clarification_answer"] == "Use wf.vars."
             return GenerationResult(
-                code="",
+                workflow=WorkflowResult(
+                    status=WorkflowStatus.CLARIFICATION_REQUIRED,
+                    question="Use wf.vars or wf.initVariables?",
+                ),
                 trace_id="trace-1",
                 session_id="session-1",
-                strategy="clarification",
-                verification_errors=[],
-                validation_report={"has_errors": False, "has_warnings": False, "messages": []},
-                repair_rounds=0,
-                degraded_mode=False,
-                status="clarification_needed",
-                question="Use wf.vars or wf.initVariables?",
-                assumptions=["Ambiguous root detected."],
-                session_summary={
-                    "session_id": "session-1",
-                    "status": "clarification_needed",
-                    "original_task": "Normalize email.",
-                    "latest_trace_id": "trace-1",
-                    "last_strategy": "clarification",
-                    "open_clarification_question": "Use wf.vars or wf.initVariables?",
-                    "clarification_history": [],
-                    "feedback_history": [],
-                    "assumptions": ["Ambiguous root detected."],
-                },
+                session=SessionSummary(
+                    session_id="session-1",
+                    status=SessionStatus.CLARIFICATION_REQUIRED,
+                    original_task="Normalize email.",
+                    open_clarification_question="Use wf.vars or wf.initVariables?",
+                ),
             )
 
     monkeypatch.setattr("app.cli.main.build_engine", lambda: DummyEngine())
 
-    result = runner.invoke(cli, ["interact", "--prompt", "Normalize email."])
+    result = runner.invoke(
+        cli,
+        ["generate", "--session-id", "session-1", "--answer", "Use wf.vars."],
+    )
 
-    assert result.exit_code == 0
+    assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["status"] == "clarification_needed"
+    assert payload["status"] == "clarification_required"
     assert payload["question"] == "Use wf.vars or wf.initVariables?"
-    assert payload["session"]["status"] == "clarification_needed"
+    assert payload["code"] is None
 
 
-def test_analyze_command_returns_route_inspection(monkeypatch):
-    class DummyEngine:
-        def analyze(self, prompt, context=None):
-            return {
-                "normalized_prompt": "normalize email",
-                "suggested_strategy": "clarification",
-                "clarification_question": "Use wf.vars or wf.initVariables?",
-                "task_spec": {"context_inventory": []},
-                "reduced_context": {"roots": ["wf.vars.email", "wf.initVariables.email"]},
-                "available_paths": ["wf.vars.email", "wf.initVariables.email"],
-                "assumptions": [],
-                "ambiguity_notes": ["mixed root"],
-            }
+def test_generate_command_requires_a_prompt_or_a_session(monkeypatch):
+    monkeypatch.setattr("app.cli.main.build_engine", lambda: None)
 
-    monkeypatch.setattr("app.cli.main.build_engine", lambda: DummyEngine())
+    result = runner.invoke(cli, ["generate"])
 
-    result = runner.invoke(cli, ["analyze", "--prompt", "Normalize email."])
-
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["suggested_strategy"] == "clarification"
-    assert payload["clarification_question"] == "Use wf.vars or wf.initVariables?"
+    assert result.exit_code != 0
