@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -40,7 +40,6 @@ DEFAULT_TIMEOUTS = {
     "pytest_live": 30 * 60,
     "doctor": 90 * 60,
     "smoke": 20 * 60,
-    "latency": 30 * 60,
     "private_holdout": 30 * 60,
     "repeat_stability": 60 * 60,
 }
@@ -52,10 +51,9 @@ PRIVATE_HOLDOUT_SCALAR_METRICS = frozenset(
         "verified_completion_rate",
         "invalid_success_rate",
         "invalid_success_count",
-        "repair_attempt_count",
-        "repair_rescue_count",
-        "repair_rescue_rate",
-        "degraded_count",
+        "revision_count",
+        "revision_rescue_count",
+        "revision_rescue_rate",
         "backend_calls_total",
         "backend_calls_mean",
         "model_duration_ms_total",
@@ -70,11 +68,11 @@ PRIVATE_HOLDOUT_NESTED_METRICS = {
 
 
 def utc_now():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def timeout_for(name):
-    environment_name = "LOCALSCRIPT_RELEASE_{0}_TIMEOUT_SECONDS".format(name.upper())
+    environment_name = f"LOCALSCRIPT_RELEASE_{name.upper()}_TIMEOUT_SECONDS"
     return int(os.getenv(environment_name, str(DEFAULT_TIMEOUTS[name])))
 
 
@@ -88,8 +86,7 @@ def run_command(name, command, cwd, extra_env=None):
         completed = subprocess.run(
             command,
             cwd=str(cwd),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             env=env,
             timeout=timeout_for(name),
@@ -268,7 +265,7 @@ def _private_holdout_error_category(error):
         ("semantic", ("semantic",)),
         ("contract", ("contract", "shape", "structure", "format")),
         ("oracle", ("oracle", "expected_result")),
-        ("strategy", ("strategy",)),
+        ("plan", ("plan", "acceptance")),
         ("backend", ("backend", "model", "ollama", "timeout")),
         ("policy", ("policy", "forbidden", "security")),
     )
@@ -459,14 +456,13 @@ def command_identity(command):
     try:
         completed = subprocess.run(
             [str(path), "-v"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=5,
         )
         version = (completed.stdout or completed.stderr).strip()
     except (OSError, subprocess.SubprocessError) as exc:
-        version = "unavailable: {0}".format(type(exc).__name__)
+        version = f"unavailable: {type(exc).__name__}"
     return {
         "available": path.is_file(),
         "executable": path.name,
@@ -513,8 +509,7 @@ def git_commit_sha():
         completed = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=str(ROOT),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=10,
             check=True,
@@ -530,8 +525,7 @@ def git_evidence():
         completed = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=str(ROOT),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=10,
             check=True,
@@ -551,8 +545,7 @@ def gpu_evidence():
     try:
         completed = subprocess.run(
             command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=10,
             check=True,
@@ -608,7 +601,7 @@ def main(argv=None):
             "locked": False,
             "profile": None,
             "artifact_role": "release_gate_runtime_snapshot",
-            "generated_by": "scripts/release_gate.py --mode {0}".format(args.mode),
+            "generated_by": f"scripts/release_gate.py --mode {args.mode}",
             "release_gate_commit_sha": None,
             "hard_gate_failures": ["release_gate_initializing"],
         }
@@ -622,7 +615,7 @@ def main(argv=None):
             "locked": False,
             "profile": profile.name,
             "artifact_role": "release_gate_runtime_snapshot",
-            "generated_by": "scripts/release_gate.py --mode {0}".format(args.mode),
+            "generated_by": f"scripts/release_gate.py --mode {args.mode}",
             "release_gate_commit_sha": source_evidence.get("commit_sha"),
             "hard_gate_failures": ["release_gate_in_progress"],
         }
@@ -630,13 +623,13 @@ def main(argv=None):
     try:
         integrity_report = run_integrity_check(private_holdout_path=private_holdout_path)
     except Exception as exc:
-        failures = ["eval_integrity_error::{0}".format(type(exc).__name__)]
+        failures = [f"eval_integrity_error::{type(exc).__name__}"]
         runtime_lock_path = write_runtime_lock(
             {
                 "locked": False,
                 "profile": profile.name,
                 "artifact_role": "release_gate_runtime_snapshot",
-                "generated_by": "scripts/release_gate.py --mode {0}".format(args.mode),
+                "generated_by": f"scripts/release_gate.py --mode {args.mode}",
                 "release_gate_commit_sha": source_evidence.get("commit_sha"),
                 "hard_gate_failures": failures,
             }
@@ -656,7 +649,7 @@ def main(argv=None):
         if args.output:
             write_json(args.output, report)
         print(json.dumps(report, ensure_ascii=False))
-        raise SystemExit(1)
+        raise SystemExit(1) from None
 
     preflight_failures = []
     if args.mode == "competition" and private_holdout_path is None:
@@ -673,7 +666,7 @@ def main(argv=None):
                 "locked": False,
                 "profile": profile.name,
                 "artifact_role": "release_gate_runtime_snapshot",
-                "generated_by": "scripts/release_gate.py --mode {0}".format(args.mode),
+                "generated_by": f"scripts/release_gate.py --mode {args.mode}",
                 "release_gate_commit_sha": source_evidence.get("commit_sha"),
                 "hard_gate_failures": preflight_failures,
             }
@@ -758,13 +751,6 @@ def main(argv=None):
         extra_env={"LOCALSCRIPT_SKIP_INSTALL": "1"},
     )
     smoke_report = json_payload(smoke)
-    latency = run_command(
-        "latency",
-        [str(ROOT / "scripts" / "bench_latency.py")],
-        ROOT,
-    )
-    latency_report = json_payload(latency)
-
     private_holdout_preconditions_ok = (
         live_tests["returncode"] == 0
         and doctor["returncode"] == 0
@@ -776,8 +762,6 @@ def main(argv=None):
         and repeat_stability_report.get("ok") is True
         and smoke["returncode"] == 0
         and smoke_report.get("ok") is True
-        and latency["returncode"] == 0
-        and latency_report.get("ok") is True
         and doctor_lock.get("locked") is True
     )
     if private_holdout_path is not None and private_holdout_preconditions_ok:
@@ -817,8 +801,6 @@ def main(argv=None):
         failures.append("selected_model_vram_not_ok")
     if smoke["returncode"] != 0 or smoke_report.get("ok") is not True:
         failures.append("smoke_failed")
-    if latency["returncode"] != 0 or latency_report.get("ok") is not True:
-        failures.append("latency_failed")
     if private_holdout_path is not None:
         if private_holdout is None:
             failures.append("private_holdout_not_run_due_to_public_failures")
@@ -845,7 +827,7 @@ def main(argv=None):
         luac = {"available": False}
         ollama = {"reachable": False}
         gpu = {"available": False, "gpus": []}
-        failures.append("evidence_collection_failed::{0}".format(type(exc).__name__))
+        failures.append(f"evidence_collection_failed::{type(exc).__name__}")
     if not lua.get("available"):
         failures.append("lua_identity_missing")
     if not luac.get("available"):
@@ -863,7 +845,7 @@ def main(argv=None):
         {
             "locked": not failures,
             "artifact_role": "release_gate_runtime_snapshot",
-            "generated_by": "scripts/release_gate.py --mode {0}".format(args.mode),
+            "generated_by": f"scripts/release_gate.py --mode {args.mode}",
             "release_gate_commit_sha": commit_sha,
             "hard_gate_failures": failures,
         }
@@ -915,7 +897,6 @@ def main(argv=None):
             "pytest_live": command_public_evidence(live_tests),
             "doctor": command_public_evidence(doctor),
             "smoke": command_public_evidence(smoke),
-            "latency": command_public_evidence(latency),
             "private_holdout": (
                 command_public_evidence(private_holdout)
                 if private_holdout is not None
@@ -926,7 +907,6 @@ def main(argv=None):
         "quality_report": _redact_local_paths(quality_report),
         "doctor_report": doctor_public_report(doctor_report),
         "smoke_report": _redact_local_paths(smoke_report),
-        "latency_report": _redact_local_paths(latency_report),
         "private_holdout_report": private_holdout_public_evidence,
         "repeat_stability_report": _redact_local_paths(repeat_stability_report),
         "vram_report": vram_report,

@@ -9,7 +9,6 @@ batch: 1
 parallel: 1
 max_candidates: 2
 model_chain_rounds: 2
-max_repair_rounds: 2
 runtime_lua: lua5.4_subprocess
 primary_launch: ./scripts/judge_up.sh
 ollama_host: http://127.0.0.1:11434

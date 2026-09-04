@@ -26,23 +26,31 @@ def _make_client(tmp_path):
 def test_trace_endpoint_returns_sanitized_trace_payload(tmp_path):
     client = _make_client(tmp_path)
     response = client.post(
-        "/generate",
+        "/api/generate",
         json={
             "prompt": "Return the value.",
             "context": {"wf": {"vars": {"value": 4}}},
         },
     )
 
-    trace = client.get("/api/traces/{0}".format(response.headers["X-Trace-Id"]))
+    trace = client.get("/api/traces/{}".format(response.headers["X-Trace-Id"]))
 
     assert trace.status_code == 200
     payload = trace.json()
     assert payload["trace_id"] == response.headers["X-Trace-Id"]
     assert payload["session_id"] == response.headers["X-Session-Id"]
-    assert payload["strategy"] is None
-    assert "code" in payload
-    assert "planner" in payload
-    assert "validation_report" in payload
+    assert payload["status"] == "completed"
+    assert payload["diagnostic_codes"] == []
+    assert next(event["stage"] for event in payload["stage_events"]) == "received"
+    assert set(payload) == {
+        "trace_id",
+        "session_id",
+        "status",
+        "model",
+        "revision_count",
+        "diagnostic_codes",
+        "stage_events",
+    }
 
 
 def test_trace_endpoint_rejects_invalid_trace_id(tmp_path):

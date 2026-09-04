@@ -1,10 +1,19 @@
+from __future__ import annotations
+
+
 class BackendError(RuntimeError):
     """A safe-to-publish backend failure."""
 
-    code = "backend_error"
-    default_message = "Backend request failed."
+    code: str = "backend_error"
+    default_message: str = "Backend request failed."
 
-    def __init__(self, message=None, *, reason=None, status_code=None):
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        reason: str | None = None,
+        status_code: int | None = None,
+    ) -> None:
         self.public_message = message or self.default_message
         self.reason = reason or self.code
         self.status_code = status_code

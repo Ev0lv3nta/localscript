@@ -28,8 +28,9 @@ def test_validate_endpoint_uses_explicit_output_contract(tmp_path):
     )
 
     assert response.status_code == 200
-    assert response.json()["ok"] is True
-    assert response.json()["semantic_result"]["value"] == 10
+    body = response.json()
+    assert body["ok"] is True
+    assert body["validation"]["observations"] == [{"actual": 10}]
 
 
 def test_validate_endpoint_rejects_real_dangerous_call(tmp_path):
@@ -45,8 +46,10 @@ def test_validate_endpoint_rejects_real_dangerous_call(tmp_path):
     )
 
     assert response.status_code == 200
-    assert response.json()["ok"] is False
-    assert "dangerous_stdlib_os_forbidden" in response.json()["verification_errors"]
+    body = response.json()
+    assert body["ok"] is False
+    failed = [check["code"] for check in body["validation"]["checks"] if check["status"] == "failed"]
+    assert "dangerous_stdlib_os_forbidden" in failed
 
 
 def test_validate_endpoint_requires_contract_and_context(tmp_path):

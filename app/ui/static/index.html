@@ -77,9 +77,10 @@
 
         <div class="badge-row" aria-live="polite">
           <span class="state-badge neutral" id="statusBadge">Ожидание</span>
-          <span class="state-badge neutral" id="strategyBadge">Способ: —</span>
-          <span class="state-badge neutral" id="riskBadge">Риск допущений: низкий</span>
+          <span class="state-badge neutral" id="revisionBadge">Правок: 0</span>
         </div>
+
+        <div class="status-strip" id="stageStrip" aria-label="Стадии обработки"></div>
 
         <label for="codeOutput">Lua-код</label>
         <textarea
@@ -94,6 +95,16 @@
           <button id="copyCodeBtn" type="button" class="secondary-btn">Скопировать код</button>
           <button id="validateBtn" type="button" class="secondary-btn">Проверить ещё раз</button>
           <button id="copyCurlBtn" type="button" class="ghost-btn">Скопировать cURL</button>
+        </div>
+
+        <div class="inline-row compact-row">
+          <label for="outputShape">Ожидаемая форма результата</label>
+          <select id="outputShape" aria-label="Ожидаемая форма результата">
+            <option value="scalar">скаляр</option>
+            <option value="array">массив</option>
+            <option value="object">объект</option>
+          </select>
+          <label class="optional"><input type="checkbox" id="outputNullable" /> допускается nil</label>
         </div>
 
         <div id="validationSummary" class="result-note" role="status">Отправьте первый запрос.</div>

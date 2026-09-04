@@ -1,5 +1,6 @@
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from app.generation.backend_errors import BackendModelError, BackendProtocolError
 
@@ -37,7 +38,11 @@ def parse_model_tags(payload: object) -> tuple[ModelTag, ...]:
             ModelTag(
                 tag=tag.strip(),
                 digest=digest.strip() if isinstance(digest, str) else "",
-                details=dict(item.get("details")) if isinstance(item.get("details"), Mapping) else {},
+                details=(
+                    dict(details)
+                    if isinstance(details := item.get("details"), Mapping)
+                    else {}
+                ),
             )
         )
     return tuple(parsed)

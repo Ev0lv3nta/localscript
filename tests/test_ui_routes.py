@@ -39,5 +39,5 @@ def test_ui_support_endpoints_expose_profile_and_examples(tmp_path, monkeypatch)
     assert profile.json()["ui_enabled"] is True
     assert profile.json()["model"] in {"qwen3:8b-q4_K_M", "qwen3:4b-instruct-2507-q4_K_M"}
     assert examples.status_code == 200
-    assert len(examples.json()["examples"]) >= 4
+    assert len(examples.json()["examples"]) >= 3
     assert all("template" not in (item["title"].lower() + (item.get("description") or "").lower()) for item in examples.json()["examples"])

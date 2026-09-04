@@ -83,8 +83,7 @@ def test_judge_up_remote_api_mode_does_not_require_local_ollama(tmp_path):
         completed = subprocess.run(
             ["bash", str(root / "scripts" / "judge_up.sh")],
             cwd=str(root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             env={
                 **os.environ,
@@ -120,8 +119,7 @@ exit 0
         completed = subprocess.run(
             ["bash", str(root / "scripts" / "judge_up.sh")],
             cwd=str(root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             env={
                 **os.environ,
@@ -146,8 +144,7 @@ def test_judge_up_rejects_unsupported_project_python(tmp_path):
     completed = subprocess.run(
         ["bash", str(root / "scripts" / "judge_up.sh")],
         cwd=str(root),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         env={
             **os.environ,

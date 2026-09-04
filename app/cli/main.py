@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import json
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -21,13 +24,14 @@ from app.workflow.contracts import (
     OutputContract,
     OutputFormat,
     OutputShape,
+    WorkflowStatus,
 )
 from app.workflow.validation import DeterministicCandidateValidator
 
 cli = typer.Typer(help="LocalScript local CLI")
 
 
-def _display_path(path):
+def _display_path(path: Path | str) -> str:
     target = Path(path).resolve()
     project_root = Path(__file__).resolve().parents[2]
     try:
@@ -36,7 +40,7 @@ def _display_path(path):
         return str(target)
 
 
-def build_engine():
+def build_engine() -> GenerationEngine:
     profile = get_runtime_profile()
     return GenerationEngine(
         profile=profile,
@@ -45,12 +49,11 @@ def build_engine():
     )
 
 
-def run_vram_probe(model, fallback_model):
+def run_vram_probe(model: str, fallback_model: str) -> dict[str, Any]:
     with materialized_resource("scripts/bench_vram.sh") as vram_script:
         completed = subprocess.run(
             ["bash", str(vram_script), model, fallback_model, "judged_probe"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
         )
     try:
@@ -63,86 +66,69 @@ def run_vram_probe(model, fallback_model):
         }
     report.setdefault("model", model)
     report.setdefault("fallback_model", fallback_model)
-    return report
+    typed_report: dict[str, Any] = report
+    return typed_report
 
 
 @cli.command()
 def generate(
-    prompt=typer.Option(..., help="Natural-language generation request."),
-    session_id=typer.Option(None, help="Optional iterative generation session id."),
-    feedback=typer.Option(None, help="Optional feedback for revising the previous session output."),
-):
-    engine = build_engine()
-    result = engine.generate(prompt=prompt, session_id=session_id, feedback=feedback)
-    typer.echo(
-        json.dumps(
-            {
-                "code": result.code,
-                "trace_id": result.trace_id,
-                "session_id": result.session_id,
-                "strategy": result.strategy,
-                "repair_rounds": result.repair_rounds,
-                "degraded_mode": result.degraded_mode,
-            },
-            ensure_ascii=False,
-        )
-    )
+    prompt: str | None = typer.Option(None, help="Natural-language generation request."),
+    context: str | None = typer.Option(None, help="Workflow context as JSON."),
+    session_id: str | None = typer.Option(None, help="Existing session id to continue."),
+    answer: str | None = typer.Option(None, help="Answer to the open clarification question."),
+    feedback: str | None = typer.Option(None, help="Feedback for revising the previous result."),
+) -> None:
+    """Generate LocalScript code, or continue an existing session."""
+    if not prompt and not session_id:
+        raise typer.BadParameter("Provide --prompt for a new session or --session-id to continue.")
+    parsed_context = None
+    if context is not None:
+        try:
+            parsed_context = json.loads(context)
+        except json.JSONDecodeError as error:
+            raise typer.BadParameter("--context must be valid JSON") from error
 
-
-@cli.command()
-def interact(
-    prompt=typer.Option(None, help="Natural-language generation request."),
-    session_id=typer.Option(None, help="Existing session id for clarification/continuation."),
-    answer=typer.Option(None, help="Clarification answer for an existing session."),
-    feedback=typer.Option(None, help="Revision feedback for an existing session."),
-):
     engine = build_engine()
-    result = engine.generate_rich(
+    result = engine.generate(
         prompt=prompt,
+        context=parsed_context,
         session_id=session_id,
         clarification_answer=answer,
         feedback=feedback,
     )
+    workflow = result.workflow
     typer.echo(
         json.dumps(
             {
-                "status": result.status,
-                "code": result.code,
-                "question": result.question,
-                "trace_id": result.trace_id,
+                "status": workflow.status.value,
                 "session_id": result.session_id,
-                "strategy": result.strategy,
-                "repair_rounds": result.repair_rounds,
-                "degraded_mode": result.degraded_mode,
-                "assumptions": result.assumptions,
-                "session": result.session_summary,
+                "trace_id": result.trace_id,
+                "code": workflow.code,
+                "question": workflow.question,
+                "diagnostics": [
+                    diagnostic.model_dump(mode="json") for diagnostic in workflow.diagnostics
+                ],
+                "revision_count": workflow.revision_count,
             },
             ensure_ascii=False,
         )
     )
-
-
-@cli.command()
-def analyze(
-    prompt=typer.Option(..., help="Natural-language generation request to inspect."),
-):
-    engine = build_engine()
-    typer.echo(json.dumps(engine.analyze(prompt=prompt), ensure_ascii=False))
+    raise typer.Exit(code=0 if workflow.status is WorkflowStatus.COMPLETED else 1)
 
 
 @cli.command()
 def validate(
-    code=typer.Option(None, help="Inline LocalScript/Lua code."),
-    code_file=typer.Option(None, help="Path to a file with LocalScript/Lua code."),
-    context=typer.Option('{"wf":{"vars":{}}}', help="Workflow context as JSON."),
-    output_format=typer.Option("lua_block", help="lua_block or json_envelope."),
-    output_shape=typer.Option("scalar", help="scalar, array, or object."),
-    nullable=typer.Option(False, help="Allow a null result."),
-):
+    code: str | None = typer.Option(None, help="Inline LocalScript/Lua code."),
+    code_file: str | None = typer.Option(None, help="Path to a file with LocalScript/Lua code."),
+    context: str = typer.Option('{"wf":{"vars":{}}}', help="Workflow context as JSON."),
+    output_format: str = typer.Option("lua_block", help="lua_block or json_envelope."),
+    output_shape: str = typer.Option("scalar", help="scalar, array, or object."),
+    nullable: bool = typer.Option(False, help="Allow a null result."),
+) -> None:
     if not code and not code_file:
         raise typer.BadParameter("Provide --code or --code-file.")
 
-    content = code or Path(code_file).read_text(encoding="utf-8")
+    content = code or Path(str(code_file)).read_text(encoding="utf-8")
     try:
         parsed_context = json.loads(context)
     except json.JSONDecodeError as error:
@@ -175,7 +161,9 @@ def validate(
 
 
 @cli.command()
-def benchmark(dataset=typer.Option("evals/public/v1.jsonl", help="JSONL dataset path.")):
+def benchmark(
+    dataset: str = typer.Option("evals/public/v1.jsonl", help="JSONL dataset path."),
+) -> None:
     dataset_path = Path(dataset)
     packaged_dataset = dataset.replace("\\", "/")
     if not dataset_path.is_file() and not (
@@ -195,7 +183,7 @@ def benchmark(dataset=typer.Option("evals/public/v1.jsonl", help="JSONL dataset 
 
 
 @cli.command()
-def doctor(judge: bool = typer.Option(False, "--judge", help="Run judged-path checks.")):
+def doctor(judge: bool = typer.Option(False, "--judge", help="Run judged-path checks.")) -> None:
     profile = get_runtime_profile()
     backend = OllamaBackend(profile)
     report = {
@@ -285,7 +273,7 @@ def doctor(judge: bool = typer.Option(False, "--judge", help="Run judged-path ch
         raise typer.Exit(code=1)
 
 
-def run():
+def run() -> None:
     cli()
 
 

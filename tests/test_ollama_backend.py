@@ -29,7 +29,6 @@ def make_profile(**overrides):
         "batch": 1,
         "parallel": 1,
         "max_candidates": 2,
-        "max_repair_rounds": 2,
         "runtime_lua": "lua5.4_subprocess",
         "primary_launch": "./scripts/judge_up.sh",
         "request_timeout_seconds": 45,
@@ -413,7 +412,7 @@ def test_loopback_backend_ignores_broken_proxy_environment(monkeypatch):
     monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
     profile = make_profile(
-        ollama_host="http://127.0.0.1:{0}".format(server.server_port)
+        ollama_host=f"http://127.0.0.1:{server.server_port}"
     )
 
     try:

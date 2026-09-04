@@ -104,26 +104,10 @@ def test_rich_api_persists_and_resumes_one_clarification(tmp_path):
     assert continued.status_code == 200
     assert continued.json()["status"] == "completed"
     assert continued.json()["code"] == "return wf.vars.value"
-    session = client.get("/api/sessions/{0}".format(session_id)).json()
+    session = client.get(f"/api/sessions/{session_id}").json()
     assert session["clarification_history"] == [
         {
             "question": "Which workflow root should be used?",
             "answer": "Use wf.vars.",
         }
     ]
-
-
-def test_analyze_endpoint_returns_only_deterministic_inventory(tmp_path):
-    client = make_client(tmp_path)
-
-    response = client.post(
-        "/api/analyze",
-        json={
-            "prompt": "Return value.",
-            "context": {"wf": {"vars": {"value": 4}}},
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["available_paths"] == ["wf.vars", "wf.vars.value"]
-    assert response.json()["suggested_strategy"] == ""

@@ -4,10 +4,14 @@ import time
 
 from app.core.config import get_runtime_profile
 from app.core.traces import TraceStore
-from app.domain.outcomes import GenerationStatus
 from app.generation.backend_errors import BackendUnavailable
 from app.generation.engine import GenerationEngine
-from app.workflow.contracts import CheckStatus, ValidationCheck, ValidationResult
+from app.workflow.contracts import (
+    CheckStatus,
+    ValidationCheck,
+    ValidationResult,
+    WorkflowStatus,
+)
 
 
 class SequenceBackend:
@@ -76,10 +80,8 @@ def test_engine_runs_typed_workflow_and_writes_sanitized_trace(tmp_path):
         context={"wf": {"vars": {"value": 4, "secret": "do-not-store"}}},
     )
 
-    assert result.outcome is not None
-    assert result.outcome.status is GenerationStatus.COMPLETED
-    assert result.code == "return wf.vars.value"
-    assert result.strategy == ""
+    assert result.workflow.status is WorkflowStatus.COMPLETED
+    assert result.workflow.code == "return wf.vars.value"
     trace = store.read(result.trace_id)
     encoded = json.dumps(trace, ensure_ascii=False)
     assert "do-not-store" not in encoded
@@ -114,7 +116,7 @@ def test_engine_returns_typed_clarification_without_candidate(tmp_path):
         validator=PassingValidator(),
     )
 
-    result = engine.generate_rich(
+    result = engine.generate(
         prompt="Return value.",
         context={
             "wf": {
@@ -124,10 +126,9 @@ def test_engine_returns_typed_clarification_without_candidate(tmp_path):
         },
     )
 
-    assert result.outcome is not None
-    assert result.outcome.status is GenerationStatus.CLARIFICATION_REQUIRED
-    assert result.code == ""
-    assert result.question == "Which workflow root should be used?"
+    assert result.workflow.status is WorkflowStatus.CLARIFICATION_REQUIRED
+    assert result.workflow.code is None
+    assert result.workflow.question == "Which workflow root should be used?"
 
 
 def test_engine_converts_backend_outage_to_fail_closed_outcome(tmp_path):
@@ -140,10 +141,8 @@ def test_engine_converts_backend_outage_to_fail_closed_outcome(tmp_path):
 
     result = engine.generate(prompt="Return value.", context=None)
 
-    assert result.outcome is not None
-    assert result.outcome.status is GenerationStatus.BACKEND_UNAVAILABLE
-    assert result.outcome.code is None
-    assert result.code == ""
+    assert result.workflow.status is WorkflowStatus.BACKEND_UNAVAILABLE
+    assert result.workflow.code is None
 
 
 def test_engine_serializes_updates_for_the_same_session(tmp_path, monkeypatch):
@@ -160,17 +159,14 @@ def test_engine_serializes_updates_for_the_same_session(tmp_path, monkeypatch):
         time.sleep(0.01)
         session_state["count"] = current + 1
 
-    monkeypatch.setattr(engine, "_run_generation_locked", increment_session)
+    monkeypatch.setattr(engine, "_generate_locked", increment_session)
     threads = [
         threading.Thread(
-            target=engine._run_generation,
+            target=engine.generate,
             kwargs={
                 "prompt": "prompt",
                 "context": None,
                 "session_id": "shared-session",
-                "feedback": None,
-                "clarification_answer": None,
-                "rich_mode": False,
             },
         )
         for _ in range(8)

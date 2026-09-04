@@ -10,7 +10,6 @@ from app.api.schemas import (
     MAX_SCHEMA_PROMPT_CHARS,
     MAX_SCHEMA_SESSION_ID_CHARS,
     GenerateRequest,
-    GenerateRichRequest,
     ValidateRequest,
 )
 from app.core import config as config_module
@@ -42,7 +41,7 @@ def test_profile_rejects_unknown_keys_without_echoing_values(monkeypatch, tmp_pa
     _use_profile(
         monkeypatch,
         tmp_path,
-        "name: competition\nmodel: qwen\nfallback_model: fallback\nunknown_key: {0}\n".format(secret),
+        f"name: competition\nmodel: qwen\nfallback_model: fallback\nunknown_key: {secret}\n",
     )
 
     with pytest.raises(config_module.ConfigurationError) as raised:
@@ -66,7 +65,7 @@ def test_profile_enforces_positive_bounds_and_strict_yaml_types(
     profile_value,
     error_location,
 ):
-    _use_profile(monkeypatch, tmp_path, "name: competition\n{0}\n".format(profile_value))
+    _use_profile(monkeypatch, tmp_path, f"name: competition\n{profile_value}\n")
 
     with pytest.raises(config_module.ConfigurationError, match=error_location):
         config_module.get_runtime_profile()
@@ -150,7 +149,7 @@ def test_public_request_models_keep_extra_field_compatibility():
 def test_public_text_fields_publish_explicit_positive_schema_limits():
     limits = [
         (
-            GenerateRequest.model_json_schema()["properties"]["prompt"]["maxLength"],
+            GenerateRequest.model_json_schema()["properties"]["prompt"]["anyOf"][0]["maxLength"],
             MAX_SCHEMA_PROMPT_CHARS,
         ),
         (
@@ -158,11 +157,11 @@ def test_public_text_fields_publish_explicit_positive_schema_limits():
             MAX_SCHEMA_SESSION_ID_CHARS,
         ),
         (
-            GenerateRichRequest.model_json_schema()["properties"]["feedback"]["anyOf"][0]["maxLength"],
+            GenerateRequest.model_json_schema()["properties"]["feedback"]["anyOf"][0]["maxLength"],
             MAX_SCHEMA_FEEDBACK_CHARS,
         ),
         (
-            GenerateRichRequest.model_json_schema()["properties"]["clarification_answer"]["anyOf"][0]["maxLength"],
+            GenerateRequest.model_json_schema()["properties"]["clarification_answer"]["anyOf"][0]["maxLength"],
             MAX_SCHEMA_CLARIFICATION_ANSWER_CHARS,
         ),
         (

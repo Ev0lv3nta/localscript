@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -7,22 +10,27 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.middleware import RemoteBearerAuthMiddleware, RequestBodyLimitMiddleware
 from app.api.routes import router
-from app.core.config import get_runtime_profile
+from app.core.config import RuntimeProfile, get_runtime_profile
 from app.core.sessions import SessionStore
 from app.core.storage import InvalidIdentifierError
 from app.core.traces import TraceStore
-from app.generation.engine import GenerationEngine
+from app.generation.engine import CompletionBackend, GenerationEngine
 from app.generation.ollama import OllamaBackend
 
 
-def create_app(profile=None, trace_store=None, backend=None, session_store=None):
+def create_app(
+    profile: RuntimeProfile | None = None,
+    trace_store: TraceStore | None = None,
+    backend: CompletionBackend | None = None,
+    session_store: SessionStore | None = None,
+) -> FastAPI:
     runtime_profile = profile or get_runtime_profile()
     store = trace_store or TraceStore()
     sessions = session_store or SessionStore(root=store.root.parent / "sessions")
     model_backend = backend or OllamaBackend(runtime_profile)
 
     @asynccontextmanager
-    async def lifespan(_app):
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         try:
             yield
         finally:
@@ -61,7 +69,10 @@ def create_app(profile=None, trace_store=None, backend=None, session_store=None)
         app.add_middleware(RemoteBearerAuthMiddleware, token=remote_token)
 
     @app.exception_handler(InvalidIdentifierError)
-    async def invalid_identifier_handler(request: Request, exc: InvalidIdentifierError):
+    async def invalid_identifier_handler(
+        request: Request,
+        exc: InvalidIdentifierError,
+    ) -> JSONResponse:
         return JSONResponse(
             status_code=400,
             content={"detail": {"code": exc.code, "message": exc.message}},

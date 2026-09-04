@@ -1,4 +1,5 @@
 from functools import lru_cache
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -26,8 +27,8 @@ class ConfigurationError(RuntimeError):
     def __init__(self, code: str, details: tuple[str, ...] = ()):
         self.code = code
         self.details = details
-        suffix = "::{0}".format(",".join(details)) if details else ""
-        super().__init__("{0}{1}".format(code, suffix))
+        suffix = "::{}".format(",".join(details)) if details else ""
+        super().__init__(f"{code}{suffix}")
 
 
 def _strict_environment_bool(value: Any) -> bool:
@@ -67,7 +68,6 @@ class RuntimeProfile(BaseModel):
     parallel: PositiveInt = 1
     max_candidates: PositiveInt = 2
     model_chain_rounds: PositiveInt = 1
-    max_repair_rounds: PositiveInt = 2
     runtime_lua: str = Field(default="lua5.4_subprocess", min_length=1)
     primary_launch: str = Field(default="./scripts/judge_up.sh", min_length=1)
     ollama_host: str = Field(default="http://127.0.0.1:11434", min_length=1)
@@ -103,7 +103,6 @@ class _EnvironmentSettings(BaseSettings):
     parallel: PositiveInt | None = None
     max_candidates: PositiveInt | None = None
     model_chain_rounds: PositiveInt | None = None
-    max_repair_rounds: PositiveInt | None = None
     runtime_lua: str | None = None
     primary_launch: str | None = None
     ollama_host: str | None = None
@@ -126,7 +125,7 @@ class _RuntimeLockOverlay(BaseModel):
 
 def _validation_details(error: ValidationError) -> tuple[str, ...]:
     return tuple(
-        "{0}:{1}".format(
+        "{}:{}".format(
             ".".join(str(part) for part in item["loc"]),
             item["type"],
         )
@@ -144,16 +143,16 @@ def _load_environment() -> _EnvironmentSettings:
         ) from error
 
 
-def get_profile_path(profile_name=None):
+def get_profile_path(profile_name: str | None = None) -> Traversable:
     environment = _load_environment()
     selected = profile_name or environment.profile or DEFAULT_PROFILE
     try:
-        return get_resource("config/profiles/{0}.yaml".format(selected))
+        return get_resource(f"config/profiles/{selected}.yaml")
     except (FileNotFoundError, ModuleNotFoundError, ValueError) as error:
         raise ConfigurationError("configuration_profile_not_found") from error
 
 
-def _load_profile(profile_path: Path) -> RuntimeProfile:
+def _load_profile(profile_path: Traversable) -> RuntimeProfile:
     try:
         raw = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as error:
@@ -199,7 +198,7 @@ def _load_runtime_lock(profile: RuntimeProfile) -> dict[str, str]:
 
 
 @lru_cache(maxsize=4)
-def get_runtime_profile(profile_name=None):
+def get_runtime_profile(profile_name: str | None = None) -> RuntimeProfile:
     environment = _load_environment()
     profile_path = get_profile_path(profile_name or environment.profile)
     profile = _load_profile(profile_path)

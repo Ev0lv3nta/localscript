@@ -1,15 +1,19 @@
+from __future__ import annotations
+
 import json
+
+from pydantic import JsonValue
 
 
 class APIConstraintError(ValueError):
-    def __init__(self, status_code, code, message):
+    def __init__(self, status_code: int, code: str, message: str) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
 
 
-def validate_prompt(prompt, max_chars):
+def validate_prompt(prompt: str | None, max_chars: int) -> None:
     if prompt is None:
         return
     if len(prompt) > int(max_chars):
@@ -20,7 +24,12 @@ def validate_prompt(prompt, max_chars):
         )
 
 
-def validate_context(context, max_bytes, max_depth, max_nodes):
+def validate_context(
+    context: JsonValue,
+    max_bytes: int,
+    max_depth: int,
+    max_nodes: int,
+) -> dict[str, int]:
     if context is None:
         return {
             "serialized_bytes": 0,
@@ -56,7 +65,7 @@ def validate_context(context, max_bytes, max_depth, max_nodes):
     }
 
 
-def _measure_context(value, depth=1):
+def _measure_context(value: JsonValue, depth: int = 1) -> tuple[int, int]:
     if isinstance(value, dict):
         total_nodes = len(value)
         max_depth = depth
