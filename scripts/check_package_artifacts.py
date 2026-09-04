@@ -55,7 +55,7 @@ SDIST_REQUIRED_SUFFIXES = WHEEL_REQUIRED | {
     "scripts/bench_repeated.py",
     "scripts/release_gate.py",
     "tests/conftest.py",
-    "tests/contracts/test_outcomes_contract.py",
+    "tests/test_workflow_contracts.py",
     "tests/test_workflow_coordinator.py",
     "third_party/lua/lua-5.4.6.tar.gz",
 }
