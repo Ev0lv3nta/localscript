@@ -275,8 +275,7 @@ class DeterministicCandidateValidator:
                 self._failed(
                     "sandbox",
                     execution.error_code or "sandbox_execution_failed",
-                    execution.error_message
-                    or "The candidate failed in the restricted runtime.",
+                    execution.error_message or "The candidate failed in the restricted runtime.",
                 )
             )
             return ValidationResult(checks=tuple(checks))
@@ -484,8 +483,7 @@ class DeterministicCandidateValidator:
             return False
         if isinstance(actual, list) and isinstance(expected, list):
             return len(actual) == len(expected) and all(
-                cls._json_equal(left, right)
-                for left, right in zip(actual, expected, strict=True)
+                cls._json_equal(left, right) for left, right in zip(actual, expected, strict=True)
             )
         if isinstance(actual, dict) and isinstance(expected, dict):
             return actual.keys() == expected.keys() and all(

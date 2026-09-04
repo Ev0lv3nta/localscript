@@ -52,7 +52,9 @@ def test_context_width_limit_rejects_wide_context(tmp_path):
     client = _make_client(tmp_path, max_context_nodes=8)
     context = {"wf": {"vars": {"items": list(range(20))}}}
 
-    response = client.post("/api/generate", json={"prompt": "Return wf.vars.items[1]", "context": context})
+    response = client.post(
+        "/api/generate", json={"prompt": "Return wf.vars.items[1]", "context": context}
+    )
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "context_too_wide"

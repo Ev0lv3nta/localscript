@@ -1,6 +1,6 @@
 UV ?= uv
 
-.PHONY: install lua-bootstrap lock-check license-check dependency-audit eval-integrity lint type-check quality-check policy-check test test-unit \
+.PHONY: install lua-bootstrap lock-check license-check dependency-audit eval-integrity lint format-check type-check quality-check policy-check test test-unit \
 	build package-check build-check container-check check smoke run
 
 install:
@@ -27,10 +27,13 @@ eval-integrity:
 lint:
 	.venv/bin/ruff check .
 
+format-check:
+	.venv/bin/ruff format --check .
+
 type-check:
 	.venv/bin/mypy
 
-quality-check: lint type-check
+quality-check: lint format-check type-check
 
 policy-check: lock-check license-check
 

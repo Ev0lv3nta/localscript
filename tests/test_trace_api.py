@@ -13,6 +13,7 @@ def _make_client(tmp_path):
         trace_store=TraceStore(root=tmp_path / "traces"),
         backend=DeterministicTestBackend(),
     )
+
     class PassingValidator:
         def validate(self, **_kwargs):
             return ValidationResult(

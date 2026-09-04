@@ -177,7 +177,9 @@ def benchmark(
         )
         raise typer.Exit(code=1)
 
-    report = run_dataset_benchmark(dataset_path, profile=get_runtime_profile(), backend=OllamaBackend(get_runtime_profile()))
+    report = run_dataset_benchmark(
+        dataset_path, profile=get_runtime_profile(), backend=OllamaBackend(get_runtime_profile())
+    )
     typer.echo(json.dumps(report, ensure_ascii=False))
     raise typer.Exit(code=0 if report["ok"] else 1)
 
@@ -201,7 +203,11 @@ def doctor(judge: bool = typer.Option(False, "--judge", help="Run judged-path ch
         selected_model = profile.model
         selection_reason = "primary_selected"
 
-        if available_tags and profile.model not in available_tags and profile.fallback_model in available_tags:
+        if (
+            available_tags
+            and profile.model not in available_tags
+            and profile.fallback_model in available_tags
+        ):
             selected_model = profile.fallback_model
             selection_reason = "primary_tag_missing"
             fallback_vram_report = run_vram_probe(profile.fallback_model, profile.fallback_model)

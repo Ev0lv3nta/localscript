@@ -237,7 +237,5 @@ def test_stage_contract_violation_is_not_reported_as_a_bad_request():
     result = workflow.run(prompt="Return value", context={"wf": {"vars": {"value": 1}}})
 
     assert result.status is WorkflowStatus.VALIDATION_FAILED
-    assert [diagnostic.code for diagnostic in result.diagnostics] == [
-        "workflow_contract_violation"
-    ]
+    assert [diagnostic.code for diagnostic in result.diagnostics] == ["workflow_contract_violation"]
     assert result.code is None

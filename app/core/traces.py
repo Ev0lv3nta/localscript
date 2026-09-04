@@ -65,9 +65,7 @@ class TraceStore:
 
     def _trace_index_path(self, trace_id: str) -> Path:
         validate_identifier(trace_id, "invalid_trace_id")
-        return resolve_within_root(
-            self._trace_index, f"{trace_id}.idx", "invalid_trace_id"
-        )
+        return resolve_within_root(self._trace_index, f"{trace_id}.idx", "invalid_trace_id")
 
     def _session_index_dir(self, session_id: str) -> Path:
         validate_identifier(session_id, "invalid_session_id")
@@ -88,9 +86,7 @@ class TraceStore:
             date_dir = ensure_directory(
                 resolve_within_root(self.root, date_name, "invalid_trace_path")
             )
-            trace_path = resolve_within_root(
-                date_dir, f"{trace_id}.json", "invalid_trace_id"
-            )
+            trace_path = resolve_within_root(date_dir, f"{trace_id}.json", "invalid_trace_id")
             payload = redact_nested(deepcopy(trace), TRACE_PRIVATE_KEYS)
             if "code" in payload:
                 payload["code"] = REDACTED
@@ -137,9 +133,7 @@ class TraceStore:
             index_path = self._trace_index_path(trace_id)
             trace_path: Path | None
             if index_path.exists():
-                trace_path = self._path_from_pointer(
-                    read_json(index_path, expected_type=dict)
-                )
+                trace_path = self._path_from_pointer(read_json(index_path, expected_type=dict))
             else:
                 trace_path = self._find_legacy_path_unlocked(trace_id)
             if trace_path is None or not trace_path.exists():
@@ -179,9 +173,7 @@ class TraceStore:
                 try:
                     created_at = parse_utc(payload.get("created_at"))
                 except (TypeError, ValueError):
-                    created_at = datetime.fromtimestamp(
-                        trace_path.stat().st_mtime, UTC
-                    )
+                    created_at = datetime.fromtimestamp(trace_path.stat().st_mtime, UTC)
                 if latest is None or created_at > latest[0]:
                     latest = (created_at, payload)
             return latest[1] if latest else None

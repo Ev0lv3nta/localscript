@@ -78,9 +78,7 @@ class StructuredResponse(Generic[SchemaValue]):
         self.adapter = adapter
 
 
-PLANNING_RESPONSE: StructuredResponse[PlanningDecision] = StructuredResponse(
-    PLANNING_ADAPTER
-)
+PLANNING_RESPONSE: StructuredResponse[PlanningDecision] = StructuredResponse(PLANNING_ADAPTER)
 CODE_RESPONSE: StructuredResponse[CodeCandidate] = StructuredResponse(CODE_ADAPTER)
 REVIEW_RESPONSE: StructuredResponse[ReviewDecision] = StructuredResponse(REVIEW_ADAPTER)
 

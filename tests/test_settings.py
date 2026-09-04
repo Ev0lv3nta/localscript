@@ -153,7 +153,9 @@ def test_public_text_fields_publish_explicit_positive_schema_limits():
             MAX_SCHEMA_PROMPT_CHARS,
         ),
         (
-            GenerateRequest.model_json_schema()["properties"]["session_id"]["anyOf"][0]["maxLength"],
+            GenerateRequest.model_json_schema()["properties"]["session_id"]["anyOf"][0][
+                "maxLength"
+            ],
             MAX_SCHEMA_SESSION_ID_CHARS,
         ),
         (
@@ -161,7 +163,9 @@ def test_public_text_fields_publish_explicit_positive_schema_limits():
             MAX_SCHEMA_FEEDBACK_CHARS,
         ),
         (
-            GenerateRequest.model_json_schema()["properties"]["clarification_answer"]["anyOf"][0]["maxLength"],
+            GenerateRequest.model_json_schema()["properties"]["clarification_answer"]["anyOf"][0][
+                "maxLength"
+            ],
             MAX_SCHEMA_CLARIFICATION_ANSWER_CHARS,
         ),
         (

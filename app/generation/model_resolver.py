@@ -39,9 +39,7 @@ def parse_model_tags(payload: object) -> tuple[ModelTag, ...]:
                 tag=tag.strip(),
                 digest=digest.strip() if isinstance(digest, str) else "",
                 details=(
-                    dict(details)
-                    if isinstance(details := item.get("details"), Mapping)
-                    else {}
+                    dict(details) if isinstance(details := item.get("details"), Mapping) else {}
                 ),
             )
         )

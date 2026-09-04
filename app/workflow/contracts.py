@@ -91,9 +91,7 @@ class AcceptanceCase(StrictModel):
         if not isinstance(workflow, Mapping):
             raise ValueError("acceptance context must contain a wf object")
         if not any(root in workflow for root in ("vars", "initVariables")):
-            raise ValueError(
-                "acceptance context must contain wf.vars or wf.initVariables"
-            )
+            raise ValueError("acceptance context must contain wf.vars or wf.initVariables")
         return context
 
 
@@ -173,7 +171,9 @@ class ValidationCheck(StrictModel):
     def validate_failure_details(self) -> ValidationCheck:
         if self.status is CheckStatus.FAILED and (not self.code or not self.message):
             raise ValueError("failed validation check requires code and message")
-        if self.status is CheckStatus.PASSED and (self.code is not None or self.message is not None):
+        if self.status is CheckStatus.PASSED and (
+            self.code is not None or self.message is not None
+        ):
             raise ValueError("passed validation check must not contain failure details")
         return self
 
@@ -184,7 +184,9 @@ class ValidationResult(StrictModel):
 
     @property
     def ok(self) -> bool:
-        return bool(self.checks) and all(check.status is CheckStatus.PASSED for check in self.checks)
+        return bool(self.checks) and all(
+            check.status is CheckStatus.PASSED for check in self.checks
+        )
 
 
 class WorkflowStage(StrEnum):

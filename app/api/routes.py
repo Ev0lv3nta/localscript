@@ -46,7 +46,9 @@ UI_EXAMPLES = [
             "Если subscribers равен nil или пустой, верни пустой массив."
         ),
         context={
-            "wf": {"vars": {"subscribers": [{"email": "A@Example.com"}, {"email": "b@example.com"}]}}
+            "wf": {
+                "vars": {"subscribers": [{"email": "A@Example.com"}, {"email": "b@example.com"}]}
+            }
         },
         description="Задача, которую нельзя решить одним выражением: фильтрация, преобразование и дедупликация.",
     ),

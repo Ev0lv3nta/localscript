@@ -115,7 +115,7 @@ def test_runtime_scripts_default_to_loopback_and_compose_publishes_loopback():
     compose = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
 
-    assert 'LOCALSCRIPT_BIND_HOST:-127.0.0.1' in judge_up
+    assert "LOCALSCRIPT_BIND_HOST:-127.0.0.1" in judge_up
     assert "non-loopback bind requires LOCALSCRIPT_REMOTE_MODE=1" in judge_up
     assert '"127.0.0.1:${LOCALSCRIPT_PORT:-8080}' in compose
     assert "LOCALSCRIPT_OLLAMA_CONTAINER_ALIAS=ollama" in dockerfile

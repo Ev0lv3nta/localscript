@@ -229,9 +229,7 @@ def _quarantine_corrupt_file(path: Path | str) -> Path | None:
     source = Path(path)
     if not source.exists():
         return None
-    quarantine = source.with_name(
-        f".{source.name}.corrupt-{generate_identifier()}"
-    )
+    quarantine = source.with_name(f".{source.name}.corrupt-{generate_identifier()}")
     os.replace(source, quarantine)
     _fsync_directory(source.parent)
     return quarantine
@@ -252,9 +250,7 @@ def read_json(
         with os.fdopen(fd, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
         if expected_type is not None and not isinstance(payload, expected_type):
-            raise TypeError(
-                f"state JSON must contain {expected_type.__name__}"
-            )
+            raise TypeError(f"state JSON must contain {expected_type.__name__}")
         return payload
     except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as exc:
         quarantine_path = _quarantine_corrupt_file(source) if quarantine else None

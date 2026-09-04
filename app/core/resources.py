@@ -23,9 +23,7 @@ def _resource_parts(relative_path: Path | str) -> tuple[str, ...]:
 
 
 def get_resource(relative_path: Path | str) -> Traversable:
-    return importlib_resources.files(RESOURCE_PACKAGE).joinpath(
-        *_resource_parts(relative_path)
-    )
+    return importlib_resources.files(RESOURCE_PACKAGE).joinpath(*_resource_parts(relative_path))
 
 
 def resource_exists(relative_path: Path | str) -> bool:

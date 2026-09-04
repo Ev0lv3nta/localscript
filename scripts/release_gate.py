@@ -61,9 +61,7 @@ PRIVATE_HOLDOUT_SCALAR_METRICS = frozenset(
 )
 PRIVATE_HOLDOUT_NESTED_METRICS = {
     "model_call_latency_ms": frozenset({"p50", "p95"}),
-    "latency_ms": frozenset(
-        {"cold_first", "warm_p50", "warm_p95", "overall_p50", "overall_p95"}
-    ),
+    "latency_ms": frozenset({"cold_first", "warm_p50", "warm_p95", "overall_p50", "overall_p95"}),
 }
 
 
@@ -185,12 +183,7 @@ def private_holdout_validation_failures(benchmark_report, integrity_report):
     if benchmark_report.get("backend_type") != "live_ollama":
         failures.append("private_holdout_backend_not_live_ollama")
     valid_counts = all(type(value) is int for value in (total, passed, failed))
-    if (
-        not valid_counts
-        or passed + failed != total
-        or passed != expected_count
-        or failed != 0
-    ):
+    if not valid_counts or passed + failed != total or passed != expected_count or failed != 0:
         failures.append("private_holdout_result_counts_invalid")
     metrics = benchmark_report.get("metrics")
     invalid_success_count = (
@@ -241,8 +234,7 @@ def _private_holdout_metrics(metrics):
     public_metrics = {
         key: value
         for key, value in metrics.items()
-        if key in PRIVATE_HOLDOUT_SCALAR_METRICS
-        and (value is None or type(value) in {int, float})
+        if key in PRIVATE_HOLDOUT_SCALAR_METRICS and (value is None or type(value) in {int, float})
     }
     for section, allowed_fields in PRIVATE_HOLDOUT_NESTED_METRICS.items():
         values = metrics.get(section)
@@ -279,8 +271,7 @@ def evaluation_integrity_public_report(integrity_report):
     private_identity = integrity_report.get("private_holdout")
     if isinstance(private_identity, dict):
         private_identity = {
-            key: private_identity.get(key)
-            for key in ("name", "case_count", "sha256", "ok")
+            key: private_identity.get(key) for key in ("name", "case_count", "sha256", "ok")
         }
         error_category = _private_holdout_error_category(
             (integrity_report.get("private_holdout") or {}).get("error")
@@ -322,9 +313,7 @@ def evaluation_integrity_public_report(integrity_report):
                     else None
                 ),
                 "runner": (
-                    dataset.get("runner")
-                    if dataset.get("runner") in {"standard", "rich"}
-                    else None
+                    dataset.get("runner") if dataset.get("runner") in {"standard", "rich"} else None
                 ),
                 "gate": (
                     dataset.get("gate")
@@ -337,14 +326,11 @@ def evaluation_integrity_public_report(integrity_report):
                     else None
                 ),
                 "case_count": (
-                    dataset.get("case_count")
-                    if type(dataset.get("case_count")) is int
-                    else None
+                    dataset.get("case_count") if type(dataset.get("case_count")) is int else None
                 ),
                 "sha256": (
                     dataset.get("sha256")
-                    if isinstance(dataset.get("sha256"), str)
-                    and len(dataset.get("sha256")) == 64
+                    if isinstance(dataset.get("sha256"), str) and len(dataset.get("sha256")) == 64
                     else None
                 ),
             }
@@ -401,19 +387,13 @@ def private_holdout_public_report(benchmark_report, integrity_report):
         "sha256": identity.get("sha256"),
         "case_count": identity.get("case_count"),
         "backend_type": (
-            "live_ollama"
-            if benchmark_report.get("backend_type") == "live_ollama"
-            else "unexpected"
+            "live_ollama" if benchmark_report.get("backend_type") == "live_ollama" else "unexpected"
         ),
         "passed": (
-            benchmark_report.get("passed")
-            if type(benchmark_report.get("passed")) is int
-            else None
+            benchmark_report.get("passed") if type(benchmark_report.get("passed")) is int else None
         ),
         "failed": (
-            benchmark_report.get("failed")
-            if type(benchmark_report.get("failed")) is int
-            else None
+            benchmark_report.get("failed") if type(benchmark_report.get("failed")) is int else None
         ),
         "identity_verified": not {
             "private_holdout_integrity_not_verified",
@@ -804,10 +784,7 @@ def main(argv=None):
     if private_holdout_path is not None:
         if private_holdout is None:
             failures.append("private_holdout_not_run_due_to_public_failures")
-        elif (
-            private_holdout["returncode"] != 0
-            or private_holdout_report.get("ok") is not True
-        ):
+        elif private_holdout["returncode"] != 0 or private_holdout_report.get("ok") is not True:
             failures.append("private_holdout_failed")
     failures.extend(private_holdout_validation_errors)
     if repeat_stability["returncode"] != 0 or repeat_stability_report.get("ok") is not True:
@@ -898,9 +875,7 @@ def main(argv=None):
             "doctor": command_public_evidence(doctor),
             "smoke": command_public_evidence(smoke),
             "private_holdout": (
-                command_public_evidence(private_holdout)
-                if private_holdout is not None
-                else None
+                command_public_evidence(private_holdout) if private_holdout is not None else None
             ),
             "repeat_stability": command_public_evidence(repeat_stability),
         },

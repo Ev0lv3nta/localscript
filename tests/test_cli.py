@@ -44,7 +44,11 @@ def test_generate_command_returns_contract_json(tmp_path, monkeypatch):
 
     result = runner.invoke(
         cli,
-        ["generate", "--prompt", "Увеличь wf.vars.try_count_n ровно на единицу и верни новый счётчик."],
+        [
+            "generate",
+            "--prompt",
+            "Увеличь wf.vars.try_count_n ровно на единицу и верни новый счётчик.",
+        ],
     )
 
     assert result.exit_code == 0
@@ -98,18 +102,18 @@ def test_doctor_flag_parses_as_boolean(monkeypatch):
     monkeypatch.setattr(
         "app.cli.main.run_quality_benchmark",
         lambda profile=None, backend=None, mode="competition": {
-                "backend_type": "live_ollama",
-                "eval_manifest": [
-                    {
-                        "name": entry["name"],
-                        "path": entry["path"],
-                        "corpus": entry["corpus"],
-                        "gate": entry["gate"],
-                        "claim_scope": entry["claim_scope"],
-                    }
-                    for entry in QUALITY_EVAL_MANIFEST
-                ],
-                "public_v1": {"ok": True},
+            "backend_type": "live_ollama",
+            "eval_manifest": [
+                {
+                    "name": entry["name"],
+                    "path": entry["path"],
+                    "corpus": entry["corpus"],
+                    "gate": entry["gate"],
+                    "claim_scope": entry["claim_scope"],
+                }
+                for entry in QUALITY_EVAL_MANIFEST
+            ],
+            "public_v1": {"ok": True},
             "public_gold": {"ok": True},
             "stress_eval": {"ok": True},
             "showcase_eval": {"ok": True},
@@ -167,22 +171,23 @@ def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tm
         "list_tags",
         lambda self: ["qwen3:8b-q4_K_M", "qwen3:4b-instruct-2507-q4_K_M"],
     )
+
     def fake_quality_benchmark(profile=None, backend=None, mode="competition"):
         benchmark_models.append(profile.model)
         assert backend.profile.model == profile.model
         return {
-                "backend_type": "live_ollama",
-                "eval_manifest": [
-                    {
-                        "name": entry["name"],
-                        "path": entry["path"],
-                        "corpus": entry["corpus"],
-                        "gate": entry["gate"],
-                        "claim_scope": entry["claim_scope"],
-                    }
-                    for entry in QUALITY_EVAL_MANIFEST
-                ],
-                "public_v1": {"ok": True},
+            "backend_type": "live_ollama",
+            "eval_manifest": [
+                {
+                    "name": entry["name"],
+                    "path": entry["path"],
+                    "corpus": entry["corpus"],
+                    "gate": entry["gate"],
+                    "claim_scope": entry["claim_scope"],
+                }
+                for entry in QUALITY_EVAL_MANIFEST
+            ],
+            "public_v1": {"ok": True},
             "public_gold": {"ok": True},
             "stress_eval": {"ok": True},
             "showcase_eval": {"ok": True},
@@ -221,7 +226,10 @@ def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tm
     assert payload["selection_reason"] == "primary_over_vram_cap"
     assert payload["hard_gate_failures"] == []
     assert benchmark_models == ["qwen3:4b-instruct-2507-q4_K_M"]
-    assert json.loads(lock_path.read_text(encoding="utf-8"))["selected_model"] == "qwen3:4b-instruct-2507-q4_K_M"
+    assert (
+        json.loads(lock_path.read_text(encoding="utf-8"))["selected_model"]
+        == "qwen3:4b-instruct-2507-q4_K_M"
+    )
     config_module.get_runtime_profile.cache_clear()
 
 

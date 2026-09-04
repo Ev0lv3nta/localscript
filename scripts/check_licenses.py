@@ -130,7 +130,9 @@ def resolved_packages(lock_packages):
     for dependency in root.get("dependencies", []):
         pending.append((dependency, set(dependency.get("extra", []))))
     for dependencies in root.get("optional-dependencies", {}).values():
-        pending.extend((dependency, set(dependency.get("extra", []))) for dependency in dependencies)
+        pending.extend(
+            (dependency, set(dependency.get("extra", []))) for dependency in dependencies
+        )
 
     resolved = set()
     while pending:
@@ -143,7 +145,9 @@ def resolved_packages(lock_packages):
             continue
         resolved.add(name)
         package = lock_packages[name]
-        pending.extend((child, set(child.get("extra", []))) for child in package.get("dependencies", []))
+        pending.extend(
+            (child, set(child.get("extra", []))) for child in package.get("dependencies", [])
+        )
         for extra in extras:
             pending.extend(
                 (child, set(child.get("extra", [])))

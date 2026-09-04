@@ -175,9 +175,7 @@ def run_integrity_check(private_holdout_path: Path | str | None = None) -> dict[
             cases = load_cases(dataset_path)
             digest = _sha256_path(dataset_path)
         for case in cases:
-            schema_errors.extend(
-                _validate_case(case, spec.corpus, seen_ids, seen_inputs)
-            )
+            schema_errors.extend(_validate_case(case, spec.corpus, seen_ids, seen_inputs))
             record = {
                 "source": spec.name,
                 "id": str(case.get("id")),

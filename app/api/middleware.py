@@ -83,9 +83,7 @@ class RemoteBearerAuthMiddleware:
             return
 
         headers = dict(scope.get("headers", []))
-        authorization = headers.get(b"authorization", b"").decode(
-            "latin-1", errors="ignore"
-        )
+        authorization = headers.get(b"authorization", b"").decode("latin-1", errors="ignore")
         scheme, separator, supplied = authorization.partition(" ")
         authorized = (
             separator == " "

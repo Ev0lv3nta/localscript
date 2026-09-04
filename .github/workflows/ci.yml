@@ -105,7 +105,7 @@ jobs:
           cache-dependency-glob: uv.lock
       - name: Установить locked-окружение
         run: uv sync --frozen --all-extras
-      - name: Запустить Ruff и mypy
+      - name: Запустить Ruff, форматирование и mypy
         run: make quality-check
 
   eval-integrity:

@@ -105,9 +105,7 @@ def _serialize_to_lua(value: Any) -> str:
     if isinstance(value, dict):
         items = []
         for key, nested in value.items():
-            items.append(
-                f"[{_lua_string_literal(str(key))}] = {_serialize_to_lua(nested)}"
-            )
+            items.append(f"[{_lua_string_literal(str(key))}] = {_serialize_to_lua(nested)}")
         return "{%s}" % ", ".join(items)  # noqa: UP031
     return "nil"
 

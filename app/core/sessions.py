@@ -58,9 +58,7 @@ class SessionStore:
 
     def path_for(self, session_id: str) -> Path:
         validate_identifier(session_id, "invalid_session_id")
-        return resolve_within_root(
-            self.root, f"{session_id}.json", "invalid_session_id"
-        )
+        return resolve_within_root(self.root, f"{session_id}.json", "invalid_session_id")
 
     def _read_unlocked(self, session_id: str) -> dict[str, Any] | None:
         path = self.path_for(session_id)
@@ -88,9 +86,7 @@ class SessionStore:
             raise TypeError("session payload must be a mapping")
         persisted["session_id"] = session_id
         persisted["_state_created_at"] = (
-            current.get("_state_created_at", timestamp)
-            if isinstance(current, dict)
-            else timestamp
+            current.get("_state_created_at", timestamp) if isinstance(current, dict) else timestamp
         )
         persisted["_state_updated_at"] = timestamp
         atomic_write_json(path, persisted)

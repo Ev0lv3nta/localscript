@@ -44,9 +44,7 @@ class InstrumentedBackend:
         method = getattr(self.backend, "complete", None)
         try:
             if callable(method):
-                return str(
-                    method(prompt, response_format=response_format, model=model)
-                )
+                return str(method(prompt, response_format=response_format, model=model))
             return str(self.backend.generate(prompt))
         finally:
             self.calls.append(
@@ -140,17 +138,13 @@ def _aggregate_metrics(case_results: Sequence[dict[str, Any]]) -> dict[str, Any]
         for item in case_results
     )
     semantic_failures = sum(
-        any("semantic" in error for error in item["errors"])
-        for item in case_results
+        any("semantic" in error for error in item["errors"]) for item in case_results
     )
     invalid_successes = sum(
-        item["status"] == "completed" and not item["passed"]
-        for item in case_results
+        item["status"] == "completed" and not item["passed"] for item in case_results
     )
     revised_cases = sum(item["revision_count"] > 0 for item in case_results)
-    revision_rescues = sum(
-        item["revision_count"] > 0 and item["passed"] for item in case_results
-    )
+    revision_rescues = sum(item["revision_count"] > 0 and item["passed"] for item in case_results)
     durations = [item["duration_ms"] for item in case_results]
     warm_durations = durations[1:]
     stage_values: dict[str, list[float]] = {}
@@ -159,6 +153,7 @@ def _aggregate_metrics(case_results: Sequence[dict[str, Any]]) -> dict[str, Any]
         model_call_durations.extend(item["model_call_durations_ms"])
         for stage, duration in item["stage_durations_ms"].items():
             stage_values.setdefault(stage, []).append(duration)
+
     def rate(numerator: float) -> float:
         return round(float(numerator) / float(total), 4) if total else 0.0
 
@@ -171,15 +166,12 @@ def _aggregate_metrics(case_results: Sequence[dict[str, Any]]) -> dict[str, Any]
         "revision_count": revised_cases,
         "revision_rescue_count": revision_rescues,
         "revision_rescue_rate": (
-            round(float(revision_rescues) / float(revised_cases), 4)
-            if revised_cases
-            else None
+            round(float(revision_rescues) / float(revised_cases), 4) if revised_cases else None
         ),
         "backend_calls_total": sum(item["backend_calls"] for item in case_results),
         "backend_calls_mean": (
             round(
-                float(sum(item["backend_calls"] for item in case_results))
-                / float(total),
+                float(sum(item["backend_calls"] for item in case_results)) / float(total),
                 3,
             )
             if total
@@ -340,9 +332,7 @@ def run_dataset_benchmark(
                 if expected_final_status and result.workflow.status.value != expected_final_status:
                     errors.append(f"expected_final_status::{expected_final_status}")
 
-            errors.extend(
-                diagnostic.code for diagnostic in result.workflow.diagnostics
-            )
+            errors.extend(diagnostic.code for diagnostic in result.workflow.diagnostics)
             if result.workflow.code:
                 errors.extend(evaluate_case(result.workflow.code, case))
             elif "expected_result" in case and not expected_status:
@@ -443,15 +433,11 @@ def run_repeated_dataset_benchmark(
         "total_cases": total_cases,
         "stable_cases": stable_cases,
         "stable_case_rate": (
-            round(float(stable_cases) / float(total_cases), 4)
-            if total_cases
-            else 0.0
+            round(float(stable_cases) / float(total_cases), 4) if total_cases else 0.0
         ),
         "consistently_passed_cases": consistently_passed,
         "consistent_pass_rate": (
-            round(float(consistently_passed) / float(total_cases), 4)
-            if total_cases
-            else 0.0
+            round(float(consistently_passed) / float(total_cases), 4) if total_cases else 0.0
         ),
         "invalid_success_count": sum(
             report["metrics"]["invalid_success_count"] for report in reports
@@ -502,14 +488,10 @@ def run_quality_benchmark(
             for entry in QUALITY_EVAL_MANIFEST
         ],
         "mandatory_eval_sets": [
-            entry["name"]
-            for entry in QUALITY_EVAL_MANIFEST
-            if entry["gate"] == "required"
+            entry["name"] for entry in QUALITY_EVAL_MANIFEST if entry["gate"] == "required"
         ],
         "diagnostic_eval_sets": [
-            entry["name"]
-            for entry in QUALITY_EVAL_MANIFEST
-            if entry["gate"] == "diagnostic"
+            entry["name"] for entry in QUALITY_EVAL_MANIFEST if entry["gate"] == "diagnostic"
         ],
     }
     for entry in QUALITY_EVAL_MANIFEST:
@@ -525,8 +507,7 @@ def run_quality_benchmark(
         if name == "adversarial_eval" and mode != "competition":
             result = dict(result)
             result["ok"] = (
-                result["total"] == 0
-                or (float(result["passed"]) / float(result["total"])) >= 0.75
+                result["total"] == 0 or (float(result["passed"]) / float(result["total"])) >= 0.75
             )
         report[name] = result
 
@@ -536,8 +517,7 @@ def run_quality_benchmark(
         report["ok"] = not report["gate_failures"]
     else:
         report["ok"] = all(
-            isinstance(report.get(entry["name"]), dict)
-            and report[entry["name"]].get("ok") is True
+            isinstance(report.get(entry["name"]), dict) and report[entry["name"]].get("ok") is True
             for entry in QUALITY_EVAL_MANIFEST
         )
         report["gate_failures"] = []

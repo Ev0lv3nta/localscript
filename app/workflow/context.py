@@ -30,9 +30,7 @@ class ContextInspector:
             if "vars" in workflow:
                 roots.append((WorkflowRoot.VARS, workflow["vars"]))
             if "initVariables" in workflow:
-                roots.append(
-                    (WorkflowRoot.INIT_VARIABLES, workflow["initVariables"])
-                )
+                roots.append((WorkflowRoot.INIT_VARIABLES, workflow["initVariables"]))
         else:
             roots = []
 
@@ -68,7 +66,11 @@ class ContextInspector:
         return {
             "truncated": True,
             "paths": [
-                {"root": entry.path.root.value, "segments": list(entry.path.segments), "type": entry.value_type.value}
+                {
+                    "root": entry.path.root.value,
+                    "segments": list(entry.path.segments),
+                    "type": entry.value_type.value,
+                }
                 for entry in inventory.entries
             ],
         }

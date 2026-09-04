@@ -66,8 +66,7 @@ def test_session_update_has_no_lost_thread_updates(tmp_path):
 def test_session_update_has_no_lost_process_updates(tmp_path):
     root = tmp_path / "sessions"
     processes = [
-        multiprocessing.Process(target=_process_increment, args=(root, 20))
-        for _ in range(4)
+        multiprocessing.Process(target=_process_increment, args=(root, 20)) for _ in range(4)
     ]
     for process in processes:
         process.start()

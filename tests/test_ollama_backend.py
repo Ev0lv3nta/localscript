@@ -268,9 +268,7 @@ def test_parallel_profile_caps_all_backend_io(monkeypatch):
         ),
     ],
 )
-def test_transport_failures_are_typed_and_sanitized(
-    monkeypatch, failure, error_type, reason
-):
+def test_transport_failures_are_typed_and_sanitized(monkeypatch, failure, error_type, reason):
     fake = FakeClient([failure])
     install_fake_client(monkeypatch, fake)
     backend = OllamaBackend(make_profile())
@@ -411,9 +409,7 @@ def test_loopback_backend_ignores_broken_proxy_environment(monkeypatch):
     thread.start()
     monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
-    profile = make_profile(
-        ollama_host=f"http://127.0.0.1:{server.server_port}"
-    )
+    profile = make_profile(ollama_host=f"http://127.0.0.1:{server.server_port}")
 
     try:
         with OllamaBackend(profile) as backend:

@@ -48,7 +48,9 @@ def test_validate_endpoint_rejects_real_dangerous_call(tmp_path):
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is False
-    failed = [check["code"] for check in body["validation"]["checks"] if check["status"] == "failed"]
+    failed = [
+        check["code"] for check in body["validation"]["checks"] if check["status"] == "failed"
+    ]
     assert "dangerous_stdlib_os_forbidden" in failed
 
 

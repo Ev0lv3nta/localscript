@@ -155,9 +155,7 @@ class GenerationEngine:
                 "session_id": session_id,
                 "status": workflow.status.value,
                 "model": self.profile.model,
-                "diagnostic_codes": [
-                    diagnostic.code for diagnostic in workflow.diagnostics
-                ],
+                "diagnostic_codes": [diagnostic.code for diagnostic in workflow.diagnostics],
                 "revision_count": workflow.revision_count,
                 "stage_events": [event.model_dump(mode="json") for event in stage_events],
             }

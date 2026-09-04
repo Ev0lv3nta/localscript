@@ -255,7 +255,9 @@ class OllamaBackend:
             prompt or "",
         ]
         if context is not None:
-            sections.extend(["Context JSON:", json.dumps(context, ensure_ascii=False, sort_keys=True)])
+            sections.extend(
+                ["Context JSON:", json.dumps(context, ensure_ascii=False, sort_keys=True)]
+            )
         return "\n".join(sections)
 
 
