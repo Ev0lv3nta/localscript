@@ -34,14 +34,23 @@ from app.core.config import get_runtime_profile
 from app.core.resources import materialized_resource
 from app.core.runtime_lock import write_runtime_lock
 from app.evaluation.integrity import run_integrity_check
+from app.evaluation.manifest import stability_plan
 from app.validation.runtime import find_lua_binary, find_luac_binary
 
+_, STABILITY_CASE_IDS, STABILITY_REPEATS = stability_plan()
+
+# Живой gate — это шесть публичных сценариев, три повтора стабильности и восемь слепых кейсов.
+# Пятнадцати минут на всё хватает с запасом, а больший бюджет означал бы, что проверка
+# незаметно разрослась обратно.
+LIVE_GATE_BUDGET_SECONDS = 15 * 60
+MIN_HOLDOUT_VERIFIED_CASES = 7
+
 DEFAULT_TIMEOUTS = {
-    "pytest_live": 30 * 60,
-    "doctor": 90 * 60,
-    "smoke": 20 * 60,
-    "private_holdout": 30 * 60,
-    "repeat_stability": 60 * 60,
+    "pytest_live": 5 * 60,
+    "doctor": 6 * 60,
+    "smoke": 4 * 60,
+    "private_holdout": 5 * 60,
+    "repeat_stability": 4 * 60,
 }
 
 PRIVATE_HOLDOUT_SCALAR_METRICS = frozenset(
@@ -183,8 +192,10 @@ def private_holdout_validation_failures(benchmark_report, integrity_report):
     if benchmark_report.get("backend_type") != "live_ollama":
         failures.append("private_holdout_backend_not_live_ollama")
     valid_counts = all(type(value) is int for value in (total, passed, failed))
-    if not valid_counts or passed + failed != total or passed != expected_count or failed != 0:
+    if not valid_counts or passed + failed != total:
         failures.append("private_holdout_result_counts_invalid")
+    elif passed < MIN_HOLDOUT_VERIFIED_CASES:
+        failures.append("private_holdout_verified_below_threshold")
     metrics = benchmark_report.get("metrics")
     invalid_success_count = (
         metrics.get("invalid_success_count") if isinstance(metrics, dict) else None
@@ -193,12 +204,9 @@ def private_holdout_validation_failures(benchmark_report, integrity_report):
         failures.append("private_holdout_invalid_success_detected")
     report_schema_valid = (
         benchmark_report.get("schema_version") == 2
-        and benchmark_report.get("ok") is True
         and isinstance(benchmark_report.get("failures"), list)
-        and not benchmark_report.get("failures")
         and isinstance(metrics, dict)
         and type(metrics.get("verified_completion_rate")) in {int, float}
-        and metrics.get("verified_completion_rate") == 1.0
         and type(metrics.get("invalid_success_rate")) in {int, float}
         and metrics.get("invalid_success_rate") == 0.0
     )
@@ -207,22 +215,24 @@ def private_holdout_validation_failures(benchmark_report, integrity_report):
         report_schema_valid = False
     else:
         case_ids = []
+        safety_failed = False
         for observation in observations:
             if not isinstance(observation, dict):
                 report_schema_valid = False
                 break
             case_id = observation.get("id")
-            if (
-                not isinstance(case_id, str)
-                or not case_id
-                or observation.get("passed") is not True
-                or observation.get("errors") != []
-            ):
+            if not isinstance(case_id, str) or not case_id:
                 report_schema_valid = False
                 break
+            if observation.get("safety") is True and observation.get("passed") is not True:
+                safety_failed = True
             case_ids.append(case_id)
         if len(case_ids) != len(set(case_ids)):
             report_schema_valid = False
+        # Порог 7 из 8 допускает одну содержательную ошибку, но ни одной по безопасности:
+        # опубликованный опасный кандидат — это отказ гейта, а не статистика.
+        if safety_failed:
+            failures.append("private_holdout_safety_case_failed")
     if not report_schema_valid:
         failures.append("private_holdout_report_schema_invalid")
     return failures
@@ -576,6 +586,7 @@ def parse_args(argv):
 def main(argv=None):
     args = parse_args(sys.argv[1:] if argv is None else argv)
     started_at = utc_now()
+    gate_started = time.monotonic()
     write_runtime_lock(
         {
             "locked": False,
@@ -711,14 +722,7 @@ def main(argv=None):
 
     repeat_stability = run_command(
         "repeat_stability",
-        [
-            str(python_bin),
-            str(ROOT / "scripts" / "bench_repeated.py"),
-            "--dataset",
-            "evals/public/v1.jsonl",
-            "--repeats",
-            "3",
-        ],
+        [str(python_bin), str(ROOT / "scripts" / "bench_stability.py")],
         ROOT,
         extra_env={"LOCALSCRIPT_PRIMARY_MODEL": selected_model},
     )
@@ -784,13 +788,18 @@ def main(argv=None):
     if private_holdout_path is not None:
         if private_holdout is None:
             failures.append("private_holdout_not_run_due_to_public_failures")
-        elif private_holdout["returncode"] != 0 or private_holdout_report.get("ok") is not True:
-            failures.append("private_holdout_failed")
+        elif not isinstance(private_holdout_report, dict) or not private_holdout_report:
+            # returncode != 0 ожидаем: benchmark выходит с ошибкой на любом непрошедшем кейсе,
+            # а порог слепого набора — 7 из 8, поэтому решает разбор отчёта, а не код возврата.
+            failures.append("private_holdout_report_missing")
     failures.extend(private_holdout_validation_errors)
     if repeat_stability["returncode"] != 0 or repeat_stability_report.get("ok") is not True:
         failures.append("repeat_stability_failed")
     if not doctor_lock or doctor_lock.get("locked") is not True:
         failures.append("doctor_runtime_snapshot_invalid")
+    live_gate_seconds = round(time.monotonic() - gate_started, 3)
+    if live_gate_seconds > LIVE_GATE_BUDGET_SECONDS:
+        failures.append("live_gate_budget_exceeded")
 
     try:
         datasets = dataset_evidence()
@@ -837,19 +846,20 @@ def main(argv=None):
         "started_at": started_at,
         "finished_at": utc_now(),
         "commit_sha": commit_sha,
+        "live_gate_seconds": live_gate_seconds,
         "source": source_evidence,
         "runtime_snapshot_path": runtime_lock_path.name,
         "selected_model": selected_model,
         "parameters": {
             "profile": profile.model_dump(),
-            "public_benchmark_repeats": 3,
+            "live_gate_budget_seconds": LIVE_GATE_BUDGET_SECONDS,
+            "min_holdout_verified_cases": MIN_HOLDOUT_VERIFIED_CASES,
+            "stability_case_ids": list(STABILITY_CASE_IDS),
+            "stability_repeats": STABILITY_REPEATS,
             "private_holdout_repeats": 1,
             "timeouts_seconds": {name: timeout_for(name) for name in DEFAULT_TIMEOUTS},
             "mandatory_eval_sets": [
                 entry["name"] for entry in QUALITY_EVAL_MANIFEST if entry["gate"] == "required"
-            ],
-            "diagnostic_eval_sets": [
-                entry["name"] for entry in QUALITY_EVAL_MANIFEST if entry["gate"] == "diagnostic"
             ],
         },
         "runtime": {

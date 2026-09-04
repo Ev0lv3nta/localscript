@@ -113,19 +113,7 @@ def test_doctor_flag_parses_as_boolean(monkeypatch):
                 }
                 for entry in QUALITY_EVAL_MANIFEST
             ],
-            "public_v1": {"ok": True},
-            "public_gold": {"ok": True},
-            "stress_eval": {"ok": True},
-            "showcase_eval": {"ok": True},
-            "model_backed_eval": {"ok": True},
-            "multilingual_eval": {"ok": True},
-            "ambiguity_eval": {"ok": True},
-            "clarification_eval": {"ok": True},
-            "composition_eval": {"ok": True},
-            "regression_eval": {"ok": True},
-            "adversarial_eval": {"ok": True},
-            "large_context_eval": {"ok": True},
-            "adversarial_ok": True,
+            "live_v1": {"ok": True},
             "ok": True,
         },
     )
@@ -187,19 +175,7 @@ def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tm
                 }
                 for entry in QUALITY_EVAL_MANIFEST
             ],
-            "public_v1": {"ok": True},
-            "public_gold": {"ok": True},
-            "stress_eval": {"ok": True},
-            "showcase_eval": {"ok": True},
-            "model_backed_eval": {"ok": True},
-            "multilingual_eval": {"ok": True},
-            "ambiguity_eval": {"ok": True},
-            "clarification_eval": {"ok": True},
-            "composition_eval": {"ok": True},
-            "regression_eval": {"ok": True},
-            "large_context_eval": {"ok": True},
-            "adversarial_eval": {"ok": True},
-            "adversarial_ok": True,
+            "live_v1": {"ok": True},
             "ok": True,
         }
 
