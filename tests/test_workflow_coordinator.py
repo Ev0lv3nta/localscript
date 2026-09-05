@@ -66,8 +66,10 @@ class Generator:
         self.initial = CodeCandidate(code=initial)
         self.revised = CodeCandidate(code=revised)
         self.revisions = 0
+        self.calls = 0
 
     def run(self, **_kwargs):
+        self.calls += 1
         return self.initial
 
     def revise(self, **_kwargs):
@@ -239,3 +241,75 @@ def test_stage_contract_violation_is_not_reported_as_a_bad_request():
     assert result.status is WorkflowStatus.VALIDATION_FAILED
     assert [diagnostic.code for diagnostic in result.diagnostics] == ["workflow_contract_violation"]
     assert result.code is None
+
+
+class RePlanner:
+    """Возвращает сначала противоречивый план, потом исправленный."""
+
+    def __init__(self):
+        self.findings = None
+
+    def run(self, **kwargs):
+        self.findings = kwargs.get("rejected_plan_findings")
+        if not self.findings:
+            broken = plan()
+            return broken.model_copy(
+                update={
+                    "acceptance_cases": (
+                        AcceptanceCase(
+                            name="wrapped",
+                            context={"wf": {"vars": {"value": 4}}},
+                            expected={"result": 4},
+                        ),
+                    )
+                }
+            )
+        return plan()
+
+
+def test_self_contradictory_plan_gets_one_correction_before_failing():
+    planner = RePlanner()
+    workflow = WorkflowCoordinator(
+        planner=planner,
+        generator=Generator(),
+        reviewer=Reviewer([ReviewApproved()]),
+        validator=Validator([validation()]),
+    )
+
+    result = workflow.run(prompt="Return value", context={"wf": {"vars": {"value": 1}}})
+
+    assert result.status is WorkflowStatus.COMPLETED
+    assert planner.findings
+    assert any("acceptance_output_contract_mismatch" in item for item in planner.findings)
+
+
+def test_plan_that_stays_contradictory_fails_without_generating():
+    generator = Generator()
+
+    class AlwaysBroken:
+        def run(self, **_kwargs):
+            broken = plan()
+            return broken.model_copy(
+                update={
+                    "acceptance_cases": (
+                        AcceptanceCase(
+                            name="wrapped",
+                            context={"wf": {"vars": {"value": 4}}},
+                            expected={"result": 4},
+                        ),
+                    )
+                }
+            )
+
+    workflow = WorkflowCoordinator(
+        planner=AlwaysBroken(),
+        generator=generator,
+        reviewer=Reviewer([]),
+        validator=Validator([]),
+    )
+
+    result = workflow.run(prompt="Return value", context={"wf": {"vars": {"value": 1}}})
+
+    assert result.status is WorkflowStatus.VALIDATION_FAILED
+    assert result.code is None
+    assert generator.calls == 0

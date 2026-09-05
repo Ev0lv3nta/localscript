@@ -42,6 +42,19 @@ def test_supported_python_and_dependencies_are_explicit():
     assert "click" in locked_versions
 
 
+def test_structured_output_budget_fits_a_full_task_plan():
+    """Планировщик возвращает JSON-план целиком, а не первые несколько сотен токенов.
+
+    С прежним бюджетом в 256 токенов план обрывался на полуслове и приходил как невалидный
+    структурированный ответ, поэтому нижняя граница здесь — часть контракта, а не вкусовщина.
+    """
+    profile = config_module.get_runtime_profile()
+
+    assert profile.num_predict >= 1024
+    assert profile.num_ctx >= profile.num_predict * 2
+    config_module.get_runtime_profile.cache_clear()
+
+
 def test_runtime_profile_has_a_distinct_fallback(monkeypatch):
     monkeypatch.delenv("LOCALSCRIPT_PRIMARY_MODEL", raising=False)
     monkeypatch.delenv("LOCALSCRIPT_FALLBACK_MODEL", raising=False)

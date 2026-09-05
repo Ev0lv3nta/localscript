@@ -154,6 +154,10 @@ class OllamaBackend:
         raw_candidate = data.get("response")
         if not isinstance(raw_candidate, str):
             raise BackendProtocol(reason="invalid_response_text")
+        # Обрезанный по num_predict ответ — это не тот же отказ, что мусор от модели: он выглядит
+        # как валидный JSON без хвоста, и без отдельного кода отладка сводится к угадыванию.
+        if data.get("done_reason") == "length":
+            raise BackendProtocol(reason="response_truncated_by_num_predict")
         candidate = raw_candidate.strip()
         if not candidate:
             raise BackendProtocol(reason="empty_response")
