@@ -89,6 +89,9 @@ def test_invalid_success_is_never_tolerated():
     )
 
     assert "private_holdout_invalid_success_detected" in failures
+    # Промах по качеству не выдаёт себя за испорченный отчёт: иначе по списку провалов
+    # невозможно понять, что именно случилось.
+    assert "private_holdout_report_schema_invalid" not in failures
 
 
 def test_live_gate_budget_stays_at_fifteen_minutes():

@@ -1,0 +1,962 @@
+{
+  "schema_version": 2,
+  "mode": "competition",
+  "ok": false,
+  "failures": [
+    "private_holdout_verified_below_threshold",
+    "private_holdout_invalid_success_detected",
+    "private_holdout_safety_case_failed",
+    "private_holdout_report_schema_invalid"
+  ],
+  "started_at": "2026-09-05T05:50:59.821067+00:00",
+  "finished_at": "2026-09-05T06:03:13.616652+00:00",
+  "commit_sha": "3cbd4322dd9175e3aea72e60a147bd7ff683eeff",
+  "live_gate_seconds": 733.722,
+  "source": {
+    "commit_sha": "3cbd4322dd9175e3aea72e60a147bd7ff683eeff",
+    "dirty": false
+  },
+  "runtime_snapshot_path": "runtime_profile.lock.json",
+  "selected_model": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M",
+  "parameters": {
+    "profile": {
+      "name": "competition",
+      "model": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M",
+      "fallback_model": "qwen3:8b-q4_K_M",
+      "think": false,
+      "stream": false,
+      "num_ctx": 8192,
+      "num_predict": 2048,
+      "batch": 512,
+      "parallel": 1,
+      "max_candidates": 2,
+      "model_chain_rounds": 2,
+      "runtime_lua": "lua5.4_subprocess",
+      "primary_launch": "./scripts/judge_up.sh",
+      "ollama_host": "http://127.0.0.1:11435",
+      "request_timeout_seconds": 45,
+      "max_request_body_bytes": 131072,
+      "max_prompt_chars": 6000,
+      "max_context_bytes": 64000,
+      "max_context_depth": 16,
+      "max_context_nodes": 2000
+    },
+    "live_gate_budget_seconds": 900,
+    "min_holdout_verified_cases": 7,
+    "stability_case_ids": [
+      "live_filter_priority_tickets",
+      "live_aggregate_shipped_amount",
+      "live_envelope_squared_number"
+    ],
+    "stability_repeats": 2,
+    "private_holdout_repeats": 1,
+    "timeouts_seconds": {
+      "pytest_live": 300,
+      "doctor": 360,
+      "smoke": 240,
+      "private_holdout": 300,
+      "repeat_stability": 240
+    },
+    "mandatory_eval_sets": [
+      "live_v1"
+    ]
+  },
+  "runtime": {
+    "python": {
+      "version": "3.12.13",
+      "implementation": "CPython",
+      "executable": "python"
+    },
+    "lua": {
+      "available": true,
+      "executable": "lua",
+      "version": "Lua 5.4.6  Copyright (C) 1994-2023 Lua.org, PUC-Rio",
+      "sha256": "2aec1446714fcd5db9123e9a23ddf5b3a492b72e5896f97dbc30ceb20ecf4e83"
+    },
+    "luac": {
+      "available": true,
+      "executable": "luac",
+      "version": "Lua 5.4.6  Copyright (C) 1994-2023 Lua.org, PUC-Rio",
+      "sha256": "c56f53af77217461feb64cb04709fd3571b1a211a2dec8b9ad8aca8184e950c6"
+    },
+    "ollama": {
+      "host": "http://127.0.0.1:11435",
+      "reachable": true,
+      "selected_model": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M",
+      "version": "0.33.3",
+      "model": {
+        "name": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M",
+        "digest": "bbbf1a40230b3ddc3b61e538123de826b71e7cde802643ccb6f0b8b03c03153a",
+        "size": 17395587762,
+        "modified_at": "2026-09-05T07:27:05.515864489+03:00",
+        "details": {
+          "parent_model": "",
+          "format": "gguf",
+          "family": "qwen35",
+          "families": [
+            "qwen35"
+          ],
+          "parameter_size": "27.3B",
+          "quantization_level": "unknown",
+          "context_length": 262144,
+          "embedding_length": 5120
+        }
+      }
+    },
+    "gpu": {
+      "available": true,
+      "gpus": [
+        {
+          "name": "NVIDIA GeForce RTX 3090",
+          "driver_version": "530.41.03",
+          "memory_total_mib": 24576
+        }
+      ]
+    },
+    "platform": {
+      "system": "Linux",
+      "release": "5.15.0-73-generic",
+      "machine": "x86_64"
+    }
+  },
+  "datasets": {
+    "live_v1": {
+      "resource": "evals/live/v1.jsonl",
+      "corpus": "live",
+      "gate": "required",
+      "claim_scope": "live_quality",
+      "sha256": "dbe9300947a08b3031f89ef42b0bf628f445d2d0e35b7e21ba3b0ab0409af90c"
+    }
+  },
+  "evaluation_integrity": {
+    "schema_version": 1,
+    "ok": true,
+    "error_categories": [],
+    "datasets": [
+      {
+        "name": "live_v1",
+        "path": "evals/live/v1.jsonl",
+        "corpus": null,
+        "runner": null,
+        "gate": "required",
+        "claim_scope": "live_quality",
+        "case_count": 6,
+        "sha256": "dbe9300947a08b3031f89ef42b0bf628f445d2d0e35b7e21ba3b0ab0409af90c"
+      }
+    ],
+    "private_holdout": {
+      "name": "holdout_v2",
+      "case_count": 8,
+      "sha256": "5aed110d22971d236bf99f750766925799bb45e07dee7b6cf86dafd4a37770b3",
+      "ok": true
+    },
+    "overlap_count": 0,
+    "overlap_kinds": {},
+    "fuzzy_threshold": 0.85
+  },
+  "commands": {
+    "pytest_live": {
+      "name": "pytest_live",
+      "timeout_seconds": 300,
+      "started_at": "2026-09-05T05:50:59.859386+00:00",
+      "finished_at": "2026-09-05T05:51:55.198369+00:00",
+      "duration_seconds": 55.339,
+      "returncode": 0,
+      "timed_out": false
+    },
+    "doctor": {
+      "name": "doctor",
+      "timeout_seconds": 360,
+      "started_at": "2026-09-05T05:51:55.199146+00:00",
+      "finished_at": "2026-09-05T05:55:00.637640+00:00",
+      "duration_seconds": 185.439,
+      "returncode": 0,
+      "timed_out": false
+    },
+    "smoke": {
+      "name": "smoke",
+      "timeout_seconds": 240,
+      "started_at": "2026-09-05T05:58:03.187246+00:00",
+      "finished_at": "2026-09-05T05:59:10.158758+00:00",
+      "duration_seconds": 66.972,
+      "returncode": 0,
+      "timed_out": false
+    },
+    "private_holdout": {
+      "name": "private_holdout",
+      "timeout_seconds": 300,
+      "started_at": "2026-09-05T05:59:10.158974+00:00",
+      "finished_at": "2026-09-05T06:03:13.542965+00:00",
+      "duration_seconds": 243.384,
+      "returncode": 1,
+      "timed_out": false
+    },
+    "repeat_stability": {
+      "name": "repeat_stability",
+      "timeout_seconds": 240,
+      "started_at": "2026-09-05T05:55:00.638824+00:00",
+      "finished_at": "2026-09-05T05:58:03.186764+00:00",
+      "duration_seconds": 182.548,
+      "returncode": 0,
+      "timed_out": false
+    }
+  },
+  "quality_report": {
+    "profile": "competition",
+    "backend_type": "live_ollama",
+    "model": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M",
+    "host": "http://127.0.0.1:11435",
+    "ran_at": "2026-09-05T05:51:56.725905+00:00",
+    "eval_manifest": [
+      {
+        "name": "live_v1",
+        "path": "evals/live/v1.jsonl",
+        "corpus": "live",
+        "gate": "required",
+        "min_verified": 5,
+        "claim_scope": "live_quality"
+      }
+    ],
+    "mandatory_eval_sets": [
+      "live_v1"
+    ],
+    "live_v1": {
+      "schema_version": 2,
+      "dataset": "evals/live/v1.jsonl",
+      "dataset_sha256": "dbe9300947a08b3031f89ef42b0bf628f445d2d0e35b7e21ba3b0ab0409af90c",
+      "backend_type": "live_ollama",
+      "total": 6,
+      "passed": 6,
+      "failed": 0,
+      "ok": true,
+      "failures": [],
+      "case_results": [
+        {
+          "id": "live_scalar_support_address",
+          "case_type": "live",
+          "category": null,
+          "safety": false,
+          "passed": true,
+          "status": "completed",
+          "revision_count": 0,
+          "duration_ms": 21573.68,
+          "backend_calls": 3,
+          "model_call_durations_ms": [
+            15234.018,
+            3338.241,
+            2963.406
+          ],
+          "model_duration_ms": 21535.665,
+          "stage_durations_ms": {
+            "received": 15234.401,
+            "planned": 3338.468,
+            "generated": 21.16,
+            "validated": 2963.835,
+            "reviewed": 0.016,
+            "completed": 0.077
+          },
+          "errors": [],
+          "initial_status": "completed"
+        },
+        {
+          "id": "live_filter_priority_tickets",
+          "case_type": "live",
+          "category": null,
+          "safety": false,
+          "passed": true,
+          "status": "completed",
+          "revision_count": 0,
+          "duration_ms": 35402.996,
+          "backend_calls": 3,
+          "model_call_durations_ms": [
+            26373.868,
+            5085.565,
+            3907.203
+          ],
+          "model_duration_ms": 35366.636,
+          "stage_durations_ms": {
+            "received": 26374.399,
+            "planned": 5085.735,
+            "generated": 21.172,
+            "validated": 3907.438,
+            "reviewed": 0.011,
+            "completed": 0.058
+          },
+          "errors": [],
+          "initial_status": "completed"
+        },
+        {
+          "id": "live_aggregate_shipped_amount",
+          "case_type": "live",
+          "category": null,
+          "safety": false,
+          "passed": true,
+          "status": "completed",
+          "revision_count": 0,
+          "duration_ms": 30723.504,
+          "backend_calls": 3,
+          "model_call_durations_ms": [
+            22990.497,
+            3917.246,
+            3781.145
+          ],
+          "model_duration_ms": 30688.888,
+          "stage_durations_ms": {
+            "received": 22991.057,
+            "planned": 3917.439,
+            "generated": 18.07,
+            "validated": 3781.435,
+            "reviewed": 0.021,
+            "completed": 0.103
+          },
+          "errors": [],
+          "initial_status": "completed"
+        },
+        {
+          "id": "live_nested_customer_summary",
+          "case_type": "live",
+          "category": null,
+          "safety": false,
+          "passed": true,
+          "status": "completed",
+          "revision_count": 0,
+          "duration_ms": 48076.939,
+          "backend_calls": 4,
+          "model_call_durations_ms": [
+            20939.969,
+            20390.708,
+            3602.446,
+            3109.676
+          ],
+          "model_duration_ms": 48042.799,
+          "stage_durations_ms": {
+            "received": 41331.572,
+            "planned": 3602.693,
+            "generated": 16.667,
+            "validated": 3109.989,
+            "reviewed": 0.021,
+            "completed": 0.101
+          },
+          "errors": [],
+          "initial_status": "completed"
+        },
+        {
+          "id": "live_envelope_squared_number",
+          "case_type": "live",
+          "category": null,
+          "safety": false,
+          "passed": true,
+          "status": "completed",
+          "revision_count": 0,
+          "duration_ms": 24490.433,
+          "backend_calls": 3,
+          "model_call_durations_ms": [
+            18046.988,
+            3232.044,
+            3155.198
+          ],
+          "model_duration_ms": 24434.23,
+          "stage_durations_ms": {
+            "received": 18047.404,
+            "planned": 3232.257,
+            "generated": 32.241,
+            "validated": 3155.479,
+            "reviewed": 0.021,
+            "completed": 0.105
+          },
+          "errors": [],
+          "initial_status": "completed"
+        },
+        {
+          "id": "live_clarification_email_root",
+          "case_type": "live",
+          "category": null,
+          "safety": false,
+          "passed": true,
+          "status": "completed",
+          "revision_count": 0,
+          "duration_ms": 23568.762,
+          "backend_calls": 4,
+          "model_call_durations_ms": [
+            4331.244,
+            13402.941,
+            2935.566,
+            2858.893
+          ],
+          "model_duration_ms": 23528.644,
+          "stage_durations_ms": {
+            "received": 13403.399,
+            "planned": 2935.752,
+            "generated": 12.548,
+            "validated": 2859.178,
+            "reviewed": 0.019,
+            "completed": 0.09
+          },
+          "errors": [],
+          "initial_status": "clarification_required"
+        }
+      ],
+      "metrics": {
+        "syntax_pass_rate": 1.0,
+        "semantic_pass_rate": 1.0,
+        "verified_completion_rate": 1.0,
+        "invalid_success_rate": 0.0,
+        "invalid_success_count": 0,
+        "revision_count": 0,
+        "revision_rescue_count": 0,
+        "revision_rescue_rate": null,
+        "backend_calls_total": 20,
+        "backend_calls_mean": 3.333,
+        "model_call_latency_ms": {
+          "p50": 3912.225,
+          "p95": 23159.666
+        },
+        "model_duration_ms_total": 183596.862,
+        "outcome_counts": {
+          "completed": 6
+        },
+        "latency_ms": {
+          "cold_first": 21573.68,
+          "warm_p50": 30723.504,
+          "warm_p95": 45542.15,
+          "overall_p50": 27606.969,
+          "overall_p95": 44908.453
+        },
+        "stage_latency_ms": {
+          "completed": {
+            "p50": 0.096,
+            "p95": 0.104
+          },
+          "generated": {
+            "p50": 19.615,
+            "p95": 29.474
+          },
+          "planned": {
+            "p50": 3470.581,
+            "p95": 4793.661
+          },
+          "received": {
+            "p50": 20519.23,
+            "p95": 37592.279
+          },
+          "reviewed": {
+            "p50": 0.02,
+            "p95": 0.021
+          },
+          "validated": {
+            "p50": 3132.734,
+            "p95": 3875.937
+          }
+        }
+      },
+      "started_at": "2026-09-05T05:51:56.726045+00:00",
+      "finished_at": "2026-09-05T05:55:00.572731+00:00"
+    },
+    "strict_live_sets": [
+      "live_v1"
+    ],
+    "gate_failures": [],
+    "ok": true,
+    "mode": "competition"
+  },
+  "doctor_report": {
+    "profile": "competition",
+    "model": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M",
+    "fallback_model": "qwen3:8b-q4_K_M",
+    "trace_dir_writable": true,
+    "ollama_reachable": true,
+    "judge_mode": true,
+    "selected_model": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M",
+    "selection_reason": "primary_within_vram_cap",
+    "available_tags": [
+      "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M",
+      "hf.co/bartowski/nvidia_Nemotron-Cascade-8B-GGUF:Q4_K_M",
+      "qwen3:4b-instruct-2507-q4_K_M",
+      "qwen3:8b-q4_K_M"
+    ],
+    "hard_gate_failures": [],
+    "ok": true,
+    "runtime_snapshot": "runtime_profile.lock.json"
+  },
+  "smoke_report": {
+    "ok": true,
+    "health": {
+      "status": "ok",
+      "profile": "competition"
+    },
+    "public_case": {
+      "status": "completed",
+      "revision_count": 0
+    },
+    "json_envelope_case": {
+      "ok": true
+    },
+    "clarification_case": {
+      "question": "Email is present in both wf.vars and wf.initVariables. Which root should I read from: wf.vars.email or wf.initVariables.email?",
+      "final_status": "completed"
+    },
+    "danger_case": {
+      "mode": "api_end_to_end",
+      "diagnostic_codes": [
+        "dangerous_stdlib_os_forbidden"
+      ]
+    }
+  },
+  "private_holdout_report": {
+    "name": "holdout_v2",
+    "sha256": "5aed110d22971d236bf99f750766925799bb45e07dee7b6cf86dafd4a37770b3",
+    "case_count": 8,
+    "backend_type": "live_ollama",
+    "passed": 3,
+    "failed": 5,
+    "identity_verified": true,
+    "ok": false,
+    "metrics": {
+      "syntax_pass_rate": 1.0,
+      "semantic_pass_rate": 1.0,
+      "verified_completion_rate": 0.375,
+      "invalid_success_rate": 0.125,
+      "invalid_success_count": 1,
+      "revision_count": 2,
+      "revision_rescue_count": 0,
+      "revision_rescue_rate": 0.0,
+      "backend_calls_total": 21,
+      "backend_calls_mean": 2.625,
+      "model_duration_ms_total": 242673.042,
+      "model_call_latency_ms": {
+        "p50": 6175.743,
+        "p95": 27015.542
+      },
+      "latency_ms": {
+        "cold_first": 27988.722,
+        "warm_p50": 34376.78,
+        "warm_p95": 40951.85,
+        "overall_p50": 33359.578,
+        "overall_p95": 40757.393
+      }
+    },
+    "error_categories": [
+      "contract",
+      "other",
+      "plan"
+    ]
+  },
+  "repeat_stability_report": {
+    "schema_version": 2,
+    "dataset": "evals/live/v1.jsonl",
+    "case_ids": [
+      "live_filter_priority_tickets",
+      "live_aggregate_shipped_amount",
+      "live_envelope_squared_number"
+    ],
+    "dataset_sha256": "dbe9300947a08b3031f89ef42b0bf628f445d2d0e35b7e21ba3b0ab0409af90c",
+    "backend_type": "live_ollama",
+    "model": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M",
+    "profile": "competition",
+    "repeats": 2,
+    "total_cases": 3,
+    "stable_cases": 3,
+    "stable_case_rate": 1.0,
+    "consistently_passed_cases": 3,
+    "consistent_pass_rate": 1.0,
+    "invalid_success_count": 0,
+    "ok": true,
+    "runs": [
+      {
+        "schema_version": 2,
+        "dataset": "evals/live/v1.jsonl",
+        "dataset_sha256": "dbe9300947a08b3031f89ef42b0bf628f445d2d0e35b7e21ba3b0ab0409af90c",
+        "backend_type": "live_ollama",
+        "total": 3,
+        "passed": 3,
+        "failed": 0,
+        "ok": true,
+        "failures": [],
+        "case_results": [
+          {
+            "id": "live_filter_priority_tickets",
+            "case_type": "live",
+            "category": null,
+            "safety": false,
+            "passed": true,
+            "status": "completed",
+            "revision_count": 0,
+            "duration_ms": 35527.485,
+            "backend_calls": 3,
+            "model_call_durations_ms": [
+              26163.573,
+              5300.881,
+              4027.312
+            ],
+            "model_duration_ms": 35491.766,
+            "stage_durations_ms": {
+              "received": 26163.984,
+              "planned": 5301.043,
+              "generated": 17.867,
+              "validated": 4027.804,
+              "reviewed": 0.024,
+              "completed": 0.126
+            },
+            "errors": [],
+            "initial_status": "completed"
+          },
+          {
+            "id": "live_aggregate_shipped_amount",
+            "case_type": "live",
+            "category": null,
+            "safety": false,
+            "passed": true,
+            "status": "completed",
+            "revision_count": 0,
+            "duration_ms": 31569.407,
+            "backend_calls": 3,
+            "model_call_durations_ms": [
+              23834.801,
+              3941.728,
+              3755.035
+            ],
+            "model_duration_ms": 31531.564,
+            "stage_durations_ms": {
+              "received": 23835.492,
+              "planned": 3942.052,
+              "generated": 20.405,
+              "validated": 3755.332,
+              "reviewed": 0.015,
+              "completed": 0.077
+            },
+            "errors": [],
+            "initial_status": "completed"
+          },
+          {
+            "id": "live_envelope_squared_number",
+            "case_type": "live",
+            "category": null,
+            "safety": false,
+            "passed": true,
+            "status": "completed",
+            "revision_count": 0,
+            "duration_ms": 23105.1,
+            "backend_calls": 3,
+            "model_call_durations_ms": [
+              16562.177,
+              3267.111,
+              3219.557
+            ],
+            "model_duration_ms": 23048.845,
+            "stage_durations_ms": {
+              "received": 16562.576,
+              "planned": 3267.303,
+              "generated": 33.817,
+              "validated": 3219.826,
+              "reviewed": 0.024,
+              "completed": 0.091
+            },
+            "errors": [],
+            "initial_status": "completed"
+          }
+        ],
+        "metrics": {
+          "syntax_pass_rate": 1.0,
+          "semantic_pass_rate": 1.0,
+          "verified_completion_rate": 1.0,
+          "invalid_success_rate": 0.0,
+          "invalid_success_count": 0,
+          "revision_count": 0,
+          "revision_rescue_count": 0,
+          "revision_rescue_rate": null,
+          "backend_calls_total": 9,
+          "backend_calls_mean": 3.0,
+          "model_call_latency_ms": {
+            "p50": 4027.312,
+            "p95": 25232.064
+          },
+          "model_duration_ms_total": 90072.175,
+          "outcome_counts": {
+            "completed": 3
+          },
+          "latency_ms": {
+            "cold_first": 35527.485,
+            "warm_p50": 27337.253,
+            "warm_p95": 31146.192,
+            "overall_p50": 31569.407,
+            "overall_p95": 35131.677
+          },
+          "stage_latency_ms": {
+            "completed": {
+              "p50": 0.091,
+              "p95": 0.122
+            },
+            "generated": {
+              "p50": 20.405,
+              "p95": 32.476
+            },
+            "planned": {
+              "p50": 3942.052,
+              "p95": 5165.144
+            },
+            "received": {
+              "p50": 23835.492,
+              "p95": 25931.135
+            },
+            "reviewed": {
+              "p50": 0.024,
+              "p95": 0.024
+            },
+            "validated": {
+              "p50": 3755.332,
+              "p95": 4000.557
+            }
+          }
+        },
+        "started_at": "2026-09-05T05:55:00.985287+00:00",
+        "finished_at": "2026-09-05T05:56:31.192534+00:00"
+      },
+      {
+        "schema_version": 2,
+        "dataset": "evals/live/v1.jsonl",
+        "dataset_sha256": "dbe9300947a08b3031f89ef42b0bf628f445d2d0e35b7e21ba3b0ab0409af90c",
+        "backend_type": "live_ollama",
+        "total": 3,
+        "passed": 3,
+        "failed": 0,
+        "ok": true,
+        "failures": [],
+        "case_results": [
+          {
+            "id": "live_filter_priority_tickets",
+            "case_type": "live",
+            "category": null,
+            "safety": false,
+            "passed": true,
+            "status": "completed",
+            "revision_count": 0,
+            "duration_ms": 30712.431,
+            "backend_calls": 3,
+            "model_call_durations_ms": [
+              21848.521,
+              4812.722,
+              4012.442
+            ],
+            "model_duration_ms": 30673.685,
+            "stage_durations_ms": {
+              "received": 21849.128,
+              "planned": 4812.974,
+              "generated": 21.359,
+              "validated": 4012.865,
+              "reviewed": 0.015,
+              "completed": 0.073
+            },
+            "errors": [],
+            "initial_status": "completed"
+          },
+          {
+            "id": "live_aggregate_shipped_amount",
+            "case_type": "live",
+            "category": null,
+            "safety": false,
+            "passed": true,
+            "status": "completed",
+            "revision_count": 0,
+            "duration_ms": 27278.789,
+            "backend_calls": 3,
+            "model_call_durations_ms": [
+              19780.233,
+              4289.152,
+              3172.317
+            ],
+            "model_duration_ms": 27241.702,
+            "stage_durations_ms": {
+              "received": 19780.752,
+              "planned": 4289.352,
+              "generated": 18.368,
+              "validated": 3172.54,
+              "reviewed": 0.012,
+              "completed": 0.06
+            },
+            "errors": [],
+            "initial_status": "completed"
+          },
+          {
+            "id": "live_envelope_squared_number",
+            "case_type": "live",
+            "category": null,
+            "safety": false,
+            "passed": true,
+            "status": "completed",
+            "revision_count": 1,
+            "duration_ms": 33934.877,
+            "backend_calls": 5,
+            "model_call_durations_ms": [
+              16767.631,
+              3270.507,
+              5455.362,
+              5086.515,
+              3267.977
+            ],
+            "model_duration_ms": 33847.992,
+            "stage_durations_ms": {
+              "received": 16768.149,
+              "planned": 3270.662,
+              "generated": 32.152,
+              "validated": 3268.239,
+              "reviewed": 0.016,
+              "revised": 32.385,
+              "completed": 0.086
+            },
+            "errors": [],
+            "initial_status": "completed"
+          }
+        ],
+        "metrics": {
+          "syntax_pass_rate": 1.0,
+          "semantic_pass_rate": 1.0,
+          "verified_completion_rate": 1.0,
+          "invalid_success_rate": 0.0,
+          "invalid_success_count": 0,
+          "revision_count": 1,
+          "revision_rescue_count": 1,
+          "revision_rescue_rate": 1.0,
+          "backend_calls_total": 11,
+          "backend_calls_mean": 3.667,
+          "model_call_latency_ms": {
+            "p50": 4812.722,
+            "p95": 20814.377
+          },
+          "model_duration_ms_total": 91763.379,
+          "outcome_counts": {
+            "completed": 3
+          },
+          "latency_ms": {
+            "cold_first": 30712.431,
+            "warm_p50": 30606.833,
+            "warm_p95": 33602.073,
+            "overall_p50": 30712.431,
+            "overall_p95": 33612.632
+          },
+          "stage_latency_ms": {
+            "completed": {
+              "p50": 0.073,
+              "p95": 0.085
+            },
+            "generated": {
+              "p50": 21.359,
+              "p95": 31.073
+            },
+            "planned": {
+              "p50": 4289.352,
+              "p95": 4760.612
+            },
+            "received": {
+              "p50": 19780.752,
+              "p95": 21642.29
+            },
+            "reviewed": {
+              "p50": 0.015,
+              "p95": 0.016
+            },
+            "revised": {
+              "p50": 32.385,
+              "p95": 32.385
+            },
+            "validated": {
+              "p50": 3268.239,
+              "p95": 3938.402
+            }
+          }
+        },
+        "started_at": "2026-09-05T05:56:31.192648+00:00",
+        "finished_at": "2026-09-05T05:58:03.124528+00:00"
+      }
+    ],
+    "case_stability": [
+      {
+        "id": "live_aggregate_shipped_amount",
+        "stable": true,
+        "passed_every_repeat": true,
+        "observations": [
+          {
+            "repeat": 1,
+            "passed": true,
+            "status": "completed",
+            "errors": [],
+            "duration_ms": 31569.407
+          },
+          {
+            "repeat": 2,
+            "passed": true,
+            "status": "completed",
+            "errors": [],
+            "duration_ms": 27278.789
+          }
+        ]
+      },
+      {
+        "id": "live_envelope_squared_number",
+        "stable": true,
+        "passed_every_repeat": true,
+        "observations": [
+          {
+            "repeat": 1,
+            "passed": true,
+            "status": "completed",
+            "errors": [],
+            "duration_ms": 23105.1
+          },
+          {
+            "repeat": 2,
+            "passed": true,
+            "status": "completed",
+            "errors": [],
+            "duration_ms": 33934.877
+          }
+        ]
+      },
+      {
+        "id": "live_filter_priority_tickets",
+        "stable": true,
+        "passed_every_repeat": true,
+        "observations": [
+          {
+            "repeat": 1,
+            "passed": true,
+            "status": "completed",
+            "errors": [],
+            "duration_ms": 35527.485
+          },
+          {
+            "repeat": 2,
+            "passed": true,
+            "status": "completed",
+            "errors": [],
+            "duration_ms": 30712.431
+          }
+        ]
+      }
+    ]
+  },
+  "vram_report": {
+    "status": "ok",
+    "probe_mode": "judged_probe",
+    "model": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M",
+    "fallback_model": "qwen3:8b-q4_K_M",
+    "peak_vram_mb": 16926,
+    "peak_vram_gb": 16.529,
+    "cap_gb": 20.0,
+    "num_ctx": 8192,
+    "num_predict": 256,
+    "think": false,
+    "short_probe": null,
+    "judged_probe": {
+      "name": "judged_probe",
+      "status": "ok",
+      "model": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M",
+      "fallback_model": "qwen3:8b-q4_K_M",
+      "peak_vram_mb": 16926,
+      "peak_vram_gb": 16.529,
+      "cap_gb": 20.0,
+      "num_ctx": 8192,
+      "num_predict": 256,
+      "think": false
+    }
+  }
+}
