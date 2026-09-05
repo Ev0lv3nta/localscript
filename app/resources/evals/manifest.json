@@ -6,7 +6,8 @@
       "path": "evals/live/v1.jsonl",
       "corpus": "live",
       "gate": "required",
-      "claim_scope": "live_quality"
+      "claim_scope": "live_quality",
+      "min_verified": 5
     }
   ],
   "stability": {

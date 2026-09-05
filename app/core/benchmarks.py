@@ -217,6 +217,7 @@ def quality_gate_failures(report: dict[str, Any]) -> list[str]:
             "corpus": entry["corpus"],
             "gate": entry["gate"],
             "claim_scope": entry["claim_scope"],
+            "min_verified": entry["min_verified"],
         }
         for entry in QUALITY_EVAL_MANIFEST
     ]
@@ -228,8 +229,18 @@ def quality_gate_failures(report: dict[str, Any]) -> list[str]:
             continue
         name = entry["name"]
         result = report.get(name)
-        if not isinstance(result, dict) or result.get("ok") is not True:
-            failures.append(f"{name}_failed")
+        if not isinstance(result, dict):
+            failures.append(f"{name}_missing")
+            continue
+        # Порог объявлен в манифесте, а не выведен из результата: планка должна меняться
+        # через ревью, а не подстраиваться под то, что модель показала сегодня.
+        passed = result.get("passed")
+        if not isinstance(passed, int) or passed < entry["min_verified"]:
+            failures.append(f"{name}_below_min_verified")
+        metrics = result.get("metrics")
+        invalid = metrics.get("invalid_success_count") if isinstance(metrics, dict) else None
+        if invalid != 0:
+            failures.append(f"{name}_invalid_success_detected")
     return failures
 
 

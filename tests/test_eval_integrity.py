@@ -1,3 +1,4 @@
+from app.core.benchmarks import quality_gate_failures
 from app.core.public_eval import evaluate_case, load_cases
 from app.core.resources import materialized_resource
 from app.evaluation.integrity import (
@@ -134,3 +135,35 @@ def test_eval_without_explicit_expected_result_does_not_infer_prompt_intent():
     )
 
     assert failures == ["dataset_missing_expected_result"]
+
+
+def test_live_threshold_is_declared_in_the_manifest():
+    """Планка живого корпуса объявлена данными, а не выведена из результата прогона.
+
+    Порог 5 из 6 — честная оценка локальной модели: шестой кейс каждый прогон разный, то есть
+    за ним нет систематического дефекта. Менять планку можно только через ревью манифеста.
+    """
+    spec = dataset_specs()[0]
+
+    assert spec.min_verified == 5
+    assert spec.evidence_dict()["min_verified"] == 5
+
+
+def test_gate_rejects_a_run_below_the_declared_threshold():
+    manifest = [spec.evidence_dict() for spec in dataset_specs()]
+    ok = {
+        "eval_manifest": manifest,
+        "live_v1": {"passed": 5, "metrics": {"invalid_success_count": 0}},
+    }
+    low = {
+        "eval_manifest": manifest,
+        "live_v1": {"passed": 4, "metrics": {"invalid_success_count": 0}},
+    }
+    invalid = {
+        "eval_manifest": manifest,
+        "live_v1": {"passed": 6, "metrics": {"invalid_success_count": 1}},
+    }
+
+    assert quality_gate_failures(ok) == []
+    assert "live_v1_below_min_verified" in quality_gate_failures(low)
+    assert "live_v1_invalid_success_detected" in quality_gate_failures(invalid)
