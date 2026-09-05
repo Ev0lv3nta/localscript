@@ -110,10 +110,15 @@ def test_doctor_flag_parses_as_boolean(monkeypatch):
                     "corpus": entry["corpus"],
                     "gate": entry["gate"],
                     "claim_scope": entry["claim_scope"],
+                    "min_verified": entry["min_verified"],
                 }
                 for entry in QUALITY_EVAL_MANIFEST
             ],
-            "live_v1": {"ok": True},
+            "live_v1": {
+                "ok": True,
+                "passed": 6,
+                "metrics": {"invalid_success_count": 0},
+            },
             "ok": True,
         },
     )
@@ -132,7 +137,7 @@ def test_doctor_flag_parses_as_boolean(monkeypatch):
     monkeypatch.setattr(
         OllamaBackend,
         "list_tags",
-        lambda self: ["qwen3:8b-q4_K_M", "qwen3:4b-instruct-2507-q4_K_M"],
+        lambda self: ["hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M", "qwen3:8b-q4_K_M"],
     )
 
     judge_result = runner.invoke(cli, ["doctor", "--judge"])
@@ -157,7 +162,7 @@ def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tm
     monkeypatch.setattr(
         OllamaBackend,
         "list_tags",
-        lambda self: ["qwen3:8b-q4_K_M", "qwen3:4b-instruct-2507-q4_K_M"],
+        lambda self: ["hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M", "qwen3:8b-q4_K_M"],
     )
 
     def fake_quality_benchmark(profile=None, backend=None, mode="competition"):
@@ -172,10 +177,15 @@ def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tm
                     "corpus": entry["corpus"],
                     "gate": entry["gate"],
                     "claim_scope": entry["claim_scope"],
+                    "min_verified": entry["min_verified"],
                 }
                 for entry in QUALITY_EVAL_MANIFEST
             ],
-            "live_v1": {"ok": True},
+            "live_v1": {
+                "ok": True,
+                "passed": 6,
+                "metrics": {"invalid_success_count": 0},
+            },
             "ok": True,
         }
 
@@ -189,7 +199,7 @@ def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tm
     def fake_run(args, capture_output=None, text=None):
         assert args[0] == "bash"
         model = args[2]
-        status = "over_cap" if model == "qwen3:8b-q4_K_M" else "ok"
+        status = "over_cap" if model == "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M" else "ok"
         return Completed(json.dumps({"status": status, "model": model}))
 
     monkeypatch.setattr("app.cli.main.subprocess.run", fake_run)
@@ -198,14 +208,11 @@ def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tm
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["selected_model"] == "qwen3:4b-instruct-2507-q4_K_M"
+    assert payload["selected_model"] == "qwen3:8b-q4_K_M"
     assert payload["selection_reason"] == "primary_over_vram_cap"
     assert payload["hard_gate_failures"] == []
-    assert benchmark_models == ["qwen3:4b-instruct-2507-q4_K_M"]
-    assert (
-        json.loads(lock_path.read_text(encoding="utf-8"))["selected_model"]
-        == "qwen3:4b-instruct-2507-q4_K_M"
-    )
+    assert benchmark_models == ["qwen3:8b-q4_K_M"]
+    assert json.loads(lock_path.read_text(encoding="utf-8"))["selected_model"] == "qwen3:8b-q4_K_M"
     config_module.get_runtime_profile.cache_clear()
 
 

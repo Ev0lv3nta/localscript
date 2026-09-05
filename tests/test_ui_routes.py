@@ -37,7 +37,10 @@ def test_ui_support_endpoints_expose_profile_and_examples(tmp_path, monkeypatch)
 
     assert profile.status_code == 200
     assert profile.json()["ui_enabled"] is True
-    assert profile.json()["model"] in {"qwen3:8b-q4_K_M", "qwen3:4b-instruct-2507-q4_K_M"}
+    assert profile.json()["model"] in {
+        "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M",
+        "qwen3:8b-q4_K_M",
+    }
     assert examples.status_code == 200
     assert len(examples.json()["examples"]) >= 3
     assert all(

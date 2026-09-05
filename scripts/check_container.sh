@@ -25,8 +25,8 @@ docker run --detach \
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 MODELS = [
+    {"name": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M"},
     {"name": "qwen3:8b-q4_K_M"},
-    {"name": "qwen3:4b-instruct-2507-q4_K_M"},
 ]
 
 class Handler(BaseHTTPRequestHandler):

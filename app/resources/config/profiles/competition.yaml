@@ -1,6 +1,6 @@
 name: competition
-model: qwen3:8b-q4_K_M
-fallback_model: qwen3:4b-instruct-2507-q4_K_M
+model: hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M
+fallback_model: qwen3:8b-q4_K_M
 think: false
 stream: false
 num_ctx: 8192

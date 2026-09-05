@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL="${1:-qwen3:8b-q4_K_M}"
-FALLBACK_MODEL="${2:-qwen3:4b-instruct-2507-q4_K_M}"
+MODEL="${1:-hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M}"
+FALLBACK_MODEL="${2:-qwen3:8b-q4_K_M}"
 MODE="${3:-both}"
 OLLAMA_HOST="${LOCALSCRIPT_OLLAMA_HOST:-http://127.0.0.1:11434}"
 PROMPT="${LOCALSCRIPT_VRAM_PROMPT:-Return Lua code only: return 1}"
 THINK="${LOCALSCRIPT_OLLAMA_THINK:-false}"
-NUM_CTX=4096
+NUM_CTX=8192
+# Порог подбирается под карту, а не под модель: 20 ГБ оставляют запас на 24-гигабайтной.
+CAP_GB="${LOCALSCRIPT_VRAM_CAP_GB:-20}"
 SHORT_NUM_PREDICT=64
 JUDGED_NUM_PREDICT=256
 
@@ -61,7 +63,7 @@ print(json.dumps({
     "num_ctx": ${NUM_CTX},
     "num_predict": ${num_predict},
     "think": ${THINK},
-    "cap_gb": 8.0,
+    "cap_gb": float(${CAP_GB}),
 }))
 PY
     return
@@ -69,7 +71,7 @@ PY
 
   PEAK_MB="$(awk 'BEGIN{m=0} {if ($1>m) m=$1} END{print m+0}' "$sample_file")"
   STATUS="ok"
-  if [ "$PEAK_MB" -gt 8192 ]; then
+  if [ "$PEAK_MB" -gt "$(( CAP_GB * 1024 ))" ]; then
     STATUS="over_cap"
   fi
 
@@ -83,7 +85,7 @@ print(json.dumps({
     "fallback_model": "${FALLBACK_MODEL}",
     "peak_vram_mb": peak_mb,
     "peak_vram_gb": round(peak_mb / 1024.0, 3),
-    "cap_gb": 8.0,
+    "cap_gb": float(${CAP_GB}),
     "num_ctx": ${NUM_CTX},
     "num_predict": ${num_predict},
     "think": ${THINK@Q} == "true",

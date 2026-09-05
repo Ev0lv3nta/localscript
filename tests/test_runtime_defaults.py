@@ -5,8 +5,8 @@ from app.core import config as config_module
 from app.core.resources import read_resource_text
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PRIMARY_MODEL = "qwen3:8b-q4_K_M"
-FALLBACK_MODEL = "qwen3:4b-instruct-2507-q4_K_M"
+PRIMARY_MODEL = "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M"
+FALLBACK_MODEL = "qwen3:8b-q4_K_M"
 
 
 def test_supported_python_and_dependencies_are_explicit():

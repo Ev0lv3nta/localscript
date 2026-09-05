@@ -59,9 +59,7 @@ class _TagsHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
-        payload = (
-            b'{"models":[{"name":"qwen3:8b-q4_K_M"},{"name":"qwen3:4b-instruct-2507-q4_K_M"}]}'
-        )
+        payload = b'{"models":[{"name":"hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M"},{"name":"qwen3:8b-q4_K_M"}]}'
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))

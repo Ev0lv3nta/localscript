@@ -18,18 +18,20 @@ class EvaluationDataset:
     path: str
     corpus: str
     gate: str
+    min_verified: int
     claim_scope: str
 
     @property
     def required(self) -> bool:
         return self.gate == "required"
 
-    def evidence_dict(self) -> dict[str, str]:
+    def evidence_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "path": self.path,
             "corpus": self.corpus,
             "gate": self.gate,
+            "min_verified": self.min_verified,
             "claim_scope": self.claim_scope,
         }
 
@@ -74,6 +76,7 @@ def dataset_specs() -> tuple[EvaluationDataset, ...]:
                 path=str(raw["path"]),
                 corpus=str(raw["corpus"]),
                 gate=str(raw["gate"]),
+                min_verified=int(raw["min_verified"]),
                 claim_scope=str(raw["claim_scope"]),
             )
         except KeyError as error:
@@ -86,6 +89,8 @@ def dataset_specs() -> tuple[EvaluationDataset, ...]:
             raise ValueError("evaluation_manifest_corpus_invalid")
         if spec.gate not in ALLOWED_GATES:
             raise ValueError("evaluation_manifest_gate_invalid")
+        if spec.min_verified < 1:
+            raise ValueError("evaluation_manifest_min_verified_invalid")
         names.add(spec.name)
         paths.add(spec.path)
         specs.append(spec)
