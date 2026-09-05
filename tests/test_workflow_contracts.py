@@ -156,3 +156,17 @@ def test_context_inventory_skips_keys_the_path_contract_cannot_represent():
         for entry in inventory.entries
     )
     assert inventory.truncated is True
+
+
+def test_paths_under_both_roots_are_reported_as_ambiguous():
+    """Выбор между wf.vars и wf.initVariables — единственная неоднозначность, о которой
+    продукт обещает спрашивать, и она определяется контекстом, а не формулировкой."""
+    inspector = ContextInspector()
+
+    both = inspector.inventory(
+        {"wf": {"vars": {"email": "a", "only_here": 1}, "initVariables": {"email": "b"}}}
+    )
+    single = inspector.inventory({"wf": {"vars": {"email": "a"}}})
+
+    assert ContextInspector.ambiguous_paths(both) == ("email",)
+    assert ContextInspector.ambiguous_paths(single) == ()

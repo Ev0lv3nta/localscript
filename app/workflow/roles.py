@@ -7,6 +7,7 @@ from typing import Any, Generic, TypeVar
 from pydantic import TypeAdapter, ValidationError
 
 from app.generation.backend_errors import BackendProtocol
+from app.workflow.context import ContextInspector
 from app.workflow.contracts import (
     CodeCandidate,
     ContextInventory,
@@ -168,6 +169,7 @@ class PlannerRole:
             "request": prompt,
             "context_sample": context_sample,
             "context_inventory": inventory.model_dump(mode="json"),
+            "paths_present_under_both_roots": list(ContextInspector.ambiguous_paths(inventory)),
             "clarification_answer": clarification_answer,
             "feedback": feedback,
             "rejected_plan_findings": list(rejected_plan_findings),
@@ -189,6 +191,10 @@ lower-cased address has `expected` equal to "user@example.com".
 
 When `rejected_plan_findings` is not empty, your previous plan was rejected for exactly those
 reasons. Fix them; do not repeat the same plan and do not fall back to a clarification.
+
+`paths_present_under_both_roots` lists paths that exist under wf.vars and wf.initVariables at the
+same time. If the request needs one of them and does not itself name the root, that is the
+ambiguity you must ask about: choosing a root yourself produces confidently wrong code.
 
 Return a clarification only when the request leaves you choosing between two concrete alternatives
 that are both present in the context, most often wf.vars versus wf.initVariables. A request that
