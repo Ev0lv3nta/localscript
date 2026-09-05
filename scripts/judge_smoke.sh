@@ -91,7 +91,9 @@ def post_json(path, payload):
         method="POST",
     )
     with urllib.request.urlopen(request) as response:
-        return json.load(response), dict(response.headers)
+        # response.headers сравнивает имена без учёта регистра; dict() это теряет, а uvicorn
+        # отдаёт их в нижнем регистре, и проверка X-Trace-Id молча не находила заголовок.
+        return json.load(response), response.headers
 
 
 def fail(reason, detail):
@@ -145,7 +147,7 @@ public_body, public_headers = post_json(
 if public_body.get("status") != "completed":
     fail("public_generation_failed", public_body)
 if not public_headers.get("X-Trace-Id") or not public_headers.get("X-Session-Id"):
-    fail("public_headers_missing", dict(public_headers))
+    fail("public_headers_missing", dict(public_headers.items()))
 
 envelope_body, _ = post_json(
     "/api/validate",

@@ -210,17 +210,10 @@ def _aggregate_metrics(case_results: Sequence[dict[str, Any]]) -> dict[str, Any]
 def quality_gate_failures(report: dict[str, Any]) -> list[str]:
     manifest = report.get("eval_manifest")
     failures: list[str] = []
-    expected_manifest = [
-        {
-            "name": entry["name"],
-            "path": entry["path"],
-            "corpus": entry["corpus"],
-            "gate": entry["gate"],
-            "claim_scope": entry["claim_scope"],
-            "min_verified": entry["min_verified"],
-        }
-        for entry in QUALITY_EVAL_MANIFEST
-    ]
+    # Ожидание и публикуемое свидетельство берутся из одного источника. Пока это были два
+    # рукописных списка ключей, они разошлись: отчёт не печатал min_verified, и гейт падал на
+    # собственном сравнении раньше, чем успевал оценить результат прогона.
+    expected_manifest = [dict(entry) for entry in QUALITY_EVAL_MANIFEST]
     if manifest != expected_manifest:
         failures.append("quality_manifest_mismatch")
 
@@ -508,16 +501,7 @@ def run_quality_benchmark(
         "model": metadata["model"],
         "host": metadata.get("host"),
         "ran_at": metadata["ran_at"],
-        "eval_manifest": [
-            {
-                "name": entry["name"],
-                "path": entry["path"],
-                "corpus": entry["corpus"],
-                "gate": entry["gate"],
-                "claim_scope": entry["claim_scope"],
-            }
-            for entry in QUALITY_EVAL_MANIFEST
-        ],
+        "eval_manifest": [dict(entry) for entry in QUALITY_EVAL_MANIFEST],
         "mandatory_eval_sets": [
             entry["name"] for entry in QUALITY_EVAL_MANIFEST if entry["gate"] == "required"
         ],

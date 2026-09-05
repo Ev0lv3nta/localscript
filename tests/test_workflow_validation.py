@@ -76,7 +76,7 @@ def test_validator_runs_ast_luac_and_acceptance_case(monkeypatch):
         "luac",
         "acceptance:value",
     ]
-    assert result.observations == ({"case": "value", "actual": 4},)
+    assert result.observations == ({"case": "value", "actual": 4, "expected": 4},)
 
 
 def test_validator_never_executes_candidate_rejected_by_ast():

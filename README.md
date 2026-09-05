@@ -1,5 +1,9 @@
 # LocalScript
 
+[![CI](https://github.com/Ev0lv3nta/localscript/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Ev0lv3nta/localscript/actions/workflows/ci.yml)
+[![Python 3.11 | 3.12](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 Локальный сервис, который генерирует небольшие Lua-скрипты через Ollama, проверяет их и явно отделяет успешный результат от уточнения или ошибки.
 
 ![Интерфейс LocalScript](docs/assets/localscript-ui.jpg)
@@ -56,6 +60,7 @@ docker compose down
 ```bash
 uv sync --frozen --all-extras --python 3.12
 ./scripts/bootstrap_lua54.sh
+ollama pull hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M
 ollama pull qwen3:8b-q4_K_M
 make run
 ```

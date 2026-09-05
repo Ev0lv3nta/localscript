@@ -140,8 +140,9 @@ def test_eval_without_explicit_expected_result_does_not_infer_prompt_intent():
 def test_live_threshold_is_declared_in_the_manifest():
     """Планка живого корпуса объявлена данными, а не выведена из результата прогона.
 
-    Порог 5 из 6 — честная оценка локальной модели: шестой кейс каждый прогон разный, то есть
-    за ним нет систематического дефекта. Менять планку можно только через ревью манифеста.
+    Порог 5 из 6 — запас на одну содержательную ошибку модели, а не разрешение её не искать:
+    отказ на `json_envelope` оказался систематическим дефектом планировщика и был исправлен.
+    Менять планку можно только через ревью манифеста.
     """
     spec = dataset_specs()[0]
 
@@ -167,3 +168,18 @@ def test_gate_rejects_a_run_below_the_declared_threshold():
     assert quality_gate_failures(ok) == []
     assert "live_v1_below_min_verified" in quality_gate_failures(low)
     assert "live_v1_invalid_success_detected" in quality_gate_failures(invalid)
+
+
+def test_published_manifest_is_the_one_the_gate_compares_against():
+    """Отчёт и ожидание гейта — один и тот же объект.
+
+    Разошедшиеся рукописные списки ключей давали `quality_manifest_mismatch` на любом прогоне:
+    гейт падал на сравнении с самим собой, не дойдя до оценки результата.
+    """
+    report = {
+        "eval_manifest": [dict(spec.evidence_dict()) for spec in dataset_specs()],
+        "live_v1": {"passed": 5, "metrics": {"invalid_success_count": 0}},
+    }
+
+    assert "min_verified" in report["eval_manifest"][0]
+    assert quality_gate_failures(report) == []
