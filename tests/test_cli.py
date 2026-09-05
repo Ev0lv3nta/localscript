@@ -74,7 +74,7 @@ def test_validate_command_requires_explicit_contract(monkeypatch):
     )
     monkeypatch.setattr(
         "app.workflow.validation._default_runtime_executor",
-        lambda _code, _context, _style: Execution(),
+        lambda _code, _context, _style, _shape=None: Execution(),
     )
     monkeypatch.setattr(
         "app.workflow.validation._default_luac_locator",

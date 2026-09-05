@@ -42,7 +42,7 @@ class RuntimeResult(Protocol):
 
 
 PolicyAnalyzer = Callable[[str, str], PolicyResult]
-RuntimeExecutor = Callable[[str, object, str], RuntimeResult]
+RuntimeExecutor = Callable[..., RuntimeResult]
 LuacLocator = Callable[[], str | None]
 JSON_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
@@ -59,10 +59,16 @@ def _default_runtime_executor(
     code: str,
     context: object,
     output_style: str,
+    output_shape: str | None = None,
 ) -> RuntimeResult:
     module = importlib.import_module("app.validation.runtime_executor")
     executor = cast(Callable[..., RuntimeResult], module.execute_output)
-    return executor(code=code, context=context, output_style=output_style)
+    return executor(
+        code=code,
+        context=context,
+        output_style=output_style,
+        output_shape=output_shape,
+    )
 
 
 def _default_luac_locator() -> str | None:
@@ -138,6 +144,7 @@ class DeterministicCandidateValidator:
                     candidate.code,
                     case.context,
                     plan.output.format.value,
+                    plan.output.shape.value,
                 )
             except Exception:
                 checks.append(
@@ -251,6 +258,7 @@ class DeterministicCandidateValidator:
                 candidate.code,
                 context,
                 output.format.value,
+                output.shape.value,
             )
         except Exception:
             checks.append(

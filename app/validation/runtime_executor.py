@@ -110,8 +110,9 @@ def _serialize_to_lua(value: Any) -> str:
     return "nil"
 
 
-def _build_runner(chunk: str, context: Any) -> str:
+def _build_runner(chunk: str, context: Any, output_shape: str | None = None) -> str:
     serialized_context = _serialize_to_lua(context or {})
+    declared_array = "true" if output_shape == "array" else "false"
     serialized_chunk = _lua_string_literal(chunk)
     return f"""
 local wf_container = {serialized_context}
@@ -335,6 +336,13 @@ if not ok then
   return
 end
 
+-- Lua не различает пустой массив и пустой объект: и то и другое — таблица без ключей.
+-- Когда контракт объявляет массив, пустой результат обязан приехать как [], иначе требование
+-- «на пустом входе верни пустой массив» невыполнимо в принципе.
+if {declared_array} and type(result) == "table" and next(result) == nil then
+  result = _ls_array(result)
+end
+
 local serialization_ok, serialized_result = pcall(_ls_to_json, result)
 if not serialization_ok then
   io.write('{{"ok":false,"error_code":"lua_result_serialization_error","error_message":"' .. _ls_escape_string(tostring(serialized_result)) .. '"}}')
@@ -359,7 +367,11 @@ def _subprocess_limits() -> Callable[[], None]:
     return _apply_limits
 
 
-def _run_chunk(chunk: str, context: Any) -> RuntimeExecutionResult:
+def _run_chunk(
+    chunk: str,
+    context: Any,
+    output_shape: str | None = None,
+) -> RuntimeExecutionResult:
     policy_result = analyze_lua_chunk(chunk)
     if not policy_result.ok:
         finding = policy_result.findings[0]
@@ -378,7 +390,7 @@ def _run_chunk(chunk: str, context: Any) -> RuntimeExecutionResult:
             degraded=True,
         )
 
-    runner = _build_runner(chunk, context)
+    runner = _build_runner(chunk, context, output_shape)
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".lua", delete=False) as handle:
         handle.write(runner)
         temp_path = handle.name
@@ -449,6 +461,7 @@ def execute_output(
     code: object,
     context: Any = None,
     output_style: str = "lua_block",
+    output_shape: str | None = None,
 ) -> RuntimeExecutionResult:
     if not isinstance(code, str):
         return RuntimeExecutionResult(
@@ -509,7 +522,7 @@ def execute_output(
                 error_message="No executable Lua chunk could be extracted.",
             )
         for (key, _), chunk in zip(payload.items(), chunks, strict=True):
-            chunk_result = _run_chunk(chunk, context)
+            chunk_result = _run_chunk(chunk, context, output_shape)
             if not chunk_result.ok:
                 return chunk_result
             result[key] = chunk_result.value
@@ -522,4 +535,4 @@ def execute_output(
             error_code="lua_chunk_missing",
             error_message="No executable Lua chunk could be extracted.",
         )
-    return _run_chunk(chunks[0], context)
+    return _run_chunk(chunks[0], context, output_shape)

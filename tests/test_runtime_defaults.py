@@ -118,3 +118,15 @@ def test_primary_install_paths_consume_the_lock():
     assert "$(UV) sync --frozen --all-extras" in makefile
     assert "uv sync --frozen --no-editable" in dockerfile
     assert "pip install ." not in dockerfile
+
+
+def test_batch_size_admits_a_whole_prompt():
+    """`num_batch: 1` означает промпт в один токен и валит свежий llama.cpp жёстким assert'ом.
+
+    Старый рантайм это молча переживал, поэтому настройка дожила до сюда из архитектуры,
+    где модель получала короткий сниппет.
+    """
+    profile = config_module.get_runtime_profile()
+
+    assert profile.batch >= 512
+    config_module.get_runtime_profile.cache_clear()
