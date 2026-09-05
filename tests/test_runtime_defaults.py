@@ -15,21 +15,31 @@ def test_supported_python_and_dependencies_are_explicit():
     lock = tomllib.loads((PROJECT_ROOT / "uv.lock").read_text(encoding="utf-8"))
     locked_versions = {package["name"]: package["version"] for package in lock["package"]}
 
+    # Инвариант здесь — «всё закреплено точной версией и совпадает с локом», а не конкретные
+    # номера: дублировать их в тесте значило бы править его при каждом обновлении зависимостей.
+    build_requires = pyproject["build-system"]["requires"]
+    assert {requirement.split("==")[0] for requirement in build_requires} == {
+        "setuptools",
+        "wheel",
+    }
+    assert all("==" in requirement for requirement in build_requires)
+
     assert project["requires-python"] == ">=3.11,<3.13"
-    assert pyproject["build-system"]["requires"] == ["setuptools==83.0.0", "wheel==0.47.0"]
-    assert "typer==0.27.1" in project["dependencies"]
-    assert "fastapi==0.141.1" in project["dependencies"]
-    assert "starlette==1.4.1" in project["dependencies"]
-    assert "pydantic==2.13.4" in project["dependencies"]
-    assert "pydantic-settings==2.14.2" in project["dependencies"]
-    assert not any(dependency.lower().startswith("click") for dependency in project["dependencies"])
     assert lock["requires-python"] == ">=3.11, <3.13"
-    assert locked_versions["typer"] == "0.27.1"
-    assert locked_versions["click"] == "8.4.2"
-    assert locked_versions["fastapi"] == "0.141.1"
-    assert locked_versions["starlette"] == "1.4.1"
-    assert locked_versions["pydantic"] == "2.13.4"
-    assert locked_versions["pydantic-settings"] == "2.14.2"
+
+    pinned = {}
+    for requirement in project["dependencies"]:
+        assert "==" in requirement, requirement
+        name, version = requirement.split("==", 1)
+        pinned[name.split("[")[0].lower()] = version
+    for name in ("typer", "fastapi", "starlette", "pydantic", "pydantic-settings"):
+        assert name in pinned
+        assert locked_versions[name] == pinned[name]
+
+    # Typer тянет click транзитивно; прямой зависимостью он быть не должен, иначе две
+    # несогласованные версии CLI-слоя разъедутся молча.
+    assert "click" not in pinned
+    assert "click" in locked_versions
 
 
 def test_runtime_profile_has_a_distinct_fallback(monkeypatch):
