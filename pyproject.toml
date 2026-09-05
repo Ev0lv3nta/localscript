@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "localscript"
-version = "0.2.0"
+version = "0.3.0"
 description = "Локальная генерация и fail-closed проверка LocalScript/Lua через Ollama"
 readme = "README.md"
 license = "MIT"
