@@ -202,13 +202,15 @@ def private_holdout_validation_failures(benchmark_report, integrity_report):
     )
     if type(invalid_success_count) is not int or invalid_success_count != 0:
         failures.append("private_holdout_invalid_success_detected")
+    # Форма отчёта и его содержание — разные вопросы. Пока условие
+    # `invalid_success_rate == 0.0` стояло здесь, промах по качеству отчитывался как
+    # «отчёт невалиден», и по списку провалов нельзя было понять, что произошло.
     report_schema_valid = (
         benchmark_report.get("schema_version") == 2
         and isinstance(benchmark_report.get("failures"), list)
         and isinstance(metrics, dict)
         and type(metrics.get("verified_completion_rate")) in {int, float}
         and type(metrics.get("invalid_success_rate")) in {int, float}
-        and metrics.get("invalid_success_rate") == 0.0
     )
     observations = benchmark_report.get("case_results")
     if not isinstance(observations, list) or not valid_counts or len(observations) != total:

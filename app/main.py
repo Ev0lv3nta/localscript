@@ -40,7 +40,7 @@ def create_app(
 
     app = FastAPI(
         title="LocalScript API",
-        version="0.2.0",
+        version="0.3.0",
         description="Локальная генерация и fail-closed проверка LocalScript/Lua через Ollama.",
         lifespan=lifespan,
     )
