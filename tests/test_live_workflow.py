@@ -29,7 +29,7 @@ def engine(live_ollama_backend, tmp_path):
 def test_planner_schema_survives_the_sampling_grammar(live_ollama_backend):
     """The model must be able to emit every branch the planner schema declares."""
     context = {"wf": {"vars": {"emails": ["a@example.com", "b@example.com"]}}}
-    inspector = ContextInspector(get_runtime_profile())
+    inspector = ContextInspector()
     inventory = inspector.inventory(context)
     planner = PlannerRole(StructuredModelClient(live_ollama_backend.complete))
 
