@@ -63,7 +63,7 @@ def test_validator_runs_ast_luac_and_acceptance_case(monkeypatch):
     )
     validator = DeterministicCandidateValidator(
         policy_analyzer=lambda _code, _style: Policy(),
-        runtime_executor=lambda _code, _context, _style: Execution(ok=True, value=4),
+        runtime_executor=lambda _code, _context, _style, _shape=None: Execution(ok=True, value=4),
         luac_locator=lambda: "/usr/bin/luac",
     )
 
@@ -82,7 +82,7 @@ def test_validator_runs_ast_luac_and_acceptance_case(monkeypatch):
 def test_validator_never_executes_candidate_rejected_by_ast():
     executed = False
 
-    def runtime(_code, _context, _style):
+    def runtime(_code, _context, _style, _shape=None):
         nonlocal executed
         executed = True
         return Execution(ok=True, value=4)
@@ -108,7 +108,7 @@ def test_validator_never_executes_candidate_rejected_by_ast():
 def test_validator_fails_closed_when_luac_is_unavailable():
     validator = DeterministicCandidateValidator(
         policy_analyzer=lambda _code, _style: Policy(),
-        runtime_executor=lambda _code, _context, _style: Execution(ok=True, value=4),
+        runtime_executor=lambda _code, _context, _style, _shape=None: Execution(ok=True, value=4),
         luac_locator=lambda: None,
     )
 
@@ -126,7 +126,7 @@ def test_validator_compares_json_results_structurally(monkeypatch):
     )
     validator = DeterministicCandidateValidator(
         policy_analyzer=lambda _code, _style: Policy(),
-        runtime_executor=lambda _code, _context, _style: Execution(
+        runtime_executor=lambda _code, _context, _style, _shape=None: Execution(
             ok=True,
             value={"result": [1, 2]},
         ),
@@ -154,7 +154,9 @@ def test_existing_code_validation_executes_without_semantic_oracle(monkeypatch):
     )
     validator = DeterministicCandidateValidator(
         policy_analyzer=lambda _code, _style: Policy(),
-        runtime_executor=lambda _code, _context, _style: Execution(ok=True, value=[1, 2]),
+        runtime_executor=lambda _code, _context, _style, _shape=None: Execution(
+            ok=True, value=[1, 2]
+        ),
         luac_locator=lambda: "/usr/bin/luac",
     )
 
@@ -169,3 +171,18 @@ def test_existing_code_validation_executes_without_semantic_oracle(monkeypatch):
 
     assert result.ok is True
     assert result.observations == ({"actual": [1, 2]},)
+
+
+def test_empty_array_result_keeps_the_declared_array_shape():
+    """Пустая таблица Lua неотличима от пустого объекта, и это ломало контракт массива.
+
+    Требование «на пустом входе верни пустой массив» иначе невыполнимо в принципе: код
+    возвращает `{}`, сериализатор видит объект, и проверка формы отвергает верный кандидат.
+    """
+    from app.validation.runtime_executor import execute_output
+
+    as_array = execute_output("return {}", {"wf": {"vars": {}}}, "lua_block", "array")
+    as_object = execute_output("return {}", {"wf": {"vars": {}}}, "lua_block", "object")
+
+    assert as_array.ok and as_array.value == []
+    assert as_object.ok and as_object.value == {}

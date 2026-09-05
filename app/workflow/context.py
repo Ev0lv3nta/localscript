@@ -58,6 +58,24 @@ class ContextInspector:
             walk(value, WorkflowPath(root=root))
         return ContextInventory(entries=tuple(entries), truncated=truncated)
 
+    @staticmethod
+    def ambiguous_paths(inventory: ContextInventory) -> tuple[str, ...]:
+        """Return the paths that exist under both workflow roots.
+
+        Whether a request means wf.vars or wf.initVariables is the one ambiguity the product
+        promises to ask about, and it is a fact about the context rather than about the wording.
+        Computing it here keeps the planner from having to notice it on its own.
+        """
+        by_root: dict[WorkflowRoot, set[str]] = {}
+        for entry in inventory.entries:
+            if not entry.path.segments:
+                continue
+            by_root.setdefault(entry.path.root, set()).add(".".join(entry.path.segments))
+        if len(by_root) < 2:
+            return ()
+        shared = set.intersection(*by_root.values())
+        return tuple(sorted(shared))
+
     def sample(self, context: JsonValue) -> JsonValue:
         encoded = json.dumps(context, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         if len(encoded) <= self.sample_chars:

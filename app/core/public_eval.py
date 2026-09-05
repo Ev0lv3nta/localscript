@@ -29,10 +29,12 @@ def evaluate_case(code: str, case: EvalCase) -> list[str]:
     if output_format not in {"lua_block", "json_envelope"}:
         return ["dataset_output_format_invalid"]
 
+    expected = case["expected_result"]
     execution = execute_output(
         code,
         case.get("context"),
         str(output_format),
+        "array" if isinstance(expected, list) else None,
     )
     if execution.degraded:
         return [execution.error_code or "semantic_degraded"]
