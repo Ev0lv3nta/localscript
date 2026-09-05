@@ -167,3 +167,18 @@ def test_gate_rejects_a_run_below_the_declared_threshold():
     assert quality_gate_failures(ok) == []
     assert "live_v1_below_min_verified" in quality_gate_failures(low)
     assert "live_v1_invalid_success_detected" in quality_gate_failures(invalid)
+
+
+def test_published_manifest_is_the_one_the_gate_compares_against():
+    """Отчёт и ожидание гейта — один и тот же объект.
+
+    Разошедшиеся рукописные списки ключей давали `quality_manifest_mismatch` на любом прогоне:
+    гейт падал на сравнении с самим собой, не дойдя до оценки результата.
+    """
+    report = {
+        "eval_manifest": [dict(spec.evidence_dict()) for spec in dataset_specs()],
+        "live_v1": {"passed": 5, "metrics": {"invalid_success_count": 0}},
+    }
+
+    assert "min_verified" in report["eval_manifest"][0]
+    assert quality_gate_failures(report) == []

@@ -189,6 +189,15 @@ that context, and it must match the declared output shape: `scalar` is a bare nu
 boolean or null; `array` is a JSON array; `object` is a JSON object. A request that returns a
 lower-cased address has `expected` equal to "user@example.com".
 
+This holds for `json_envelope` too: `expected` is the object the envelope evaluates to, never the
+Lua sources it is written from. An envelope returning a number and its square has `expected` equal
+to {{"num": 5, "squared": 25}}, not {{"num": "return 5", "squared": "return 5 * 5"}}.
+
+`nullable` describes the same contract from the other side: set it to true whenever the request
+names a case that yields nothing, and whenever any acceptance case has `expected` equal to null.
+A plan that declares `nullable` false and then expects null for the empty input contradicts
+itself and is rejected before any code is written.
+
 When `rejected_plan_findings` is not empty, your previous plan was rejected for exactly those
 reasons. Fix them; do not repeat the same plan and do not fall back to a clarification.
 
