@@ -96,7 +96,29 @@ class WorkflowCoordinator:
             self._observe(observe, state.stage)
             plan_check = self._validate_plan(plan)
             if not plan_check.ok:
-                return self._failure(plan_check, WorkflowStage.PLANNED)
+                # Противоречивый план восстановим ровно так же, как невалидный код: планировщик
+                # получает свои же замечания и одну попытку. Отказывать сразу было асимметрично —
+                # коду правка полагалась, а плану нет.
+                decision = self.planner.run(
+                    prompt=prompt,
+                    context_sample=context_sample,
+                    inventory=inventory,
+                    clarification_answer=clarification_answer,
+                    feedback=feedback,
+                    rejected_plan_findings=tuple(
+                        f"{check.code}: {check.message}"
+                        for check in plan_check.checks
+                        if check.status is CheckStatus.FAILED and check.code and check.message
+                    ),
+                )
+                if isinstance(decision, ClarificationRequest):
+                    return self._failure(plan_check, WorkflowStage.PLANNED)
+                plan = decision
+                state = WorkflowState(stage=WorkflowStage.PLANNED, plan=plan)
+                self._observe(observe, state.stage)
+                plan_check = self._validate_plan(plan)
+                if not plan_check.ok:
+                    return self._failure(plan_check, WorkflowStage.PLANNED)
 
             candidate = self.generator.run(prompt=prompt, plan=plan)
             state = WorkflowState(

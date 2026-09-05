@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from app.generation.backend_errors import BackendProtocol
 from app.workflow.contracts import (
@@ -9,7 +10,12 @@ from app.workflow.contracts import (
     ValidationCheck,
     ValidationResult,
 )
-from app.workflow.roles import CODE_RESPONSE, StructuredModelClient
+from app.workflow.roles import (
+    CODE_RESPONSE,
+    PLANNING_RESPONSE,
+    REVIEW_RESPONSE,
+    StructuredModelClient,
+)
 
 
 class SequenceBackend:
@@ -65,3 +71,52 @@ def test_validation_result_requires_every_check_to_pass():
     )
 
     assert result.ok is False
+
+
+def test_model_facing_schema_requires_the_union_discriminator():
+    """Модель пропускает поле, которое схема не требует, и union перестаёт разрешаться.
+
+    Pydantic помечает дискриминатор со значением по умолчанию как необязательный, поэтому схему
+    для модели приходится чинить явно: без этого каждый ответ planner'а приходил без `kind` и
+    отвергался как невалидный, а сообщение об ошибке ни на что не указывало.
+    """
+    for response in (PLANNING_RESPONSE, REVIEW_RESPONSE):
+        definitions = response.schema["$defs"]
+        tagged = [
+            definition
+            for definition in definitions.values()
+            if "kind" in (definition.get("properties") or {})
+        ]
+        assert tagged
+        for definition in tagged:
+            assert "kind" in definition["required"]
+
+
+def test_model_facing_schema_drops_unbuildable_string_bounds():
+    """Верхняя граница длины строки превращается в грамматику по всему словарю.
+
+    Для поля кода с лимитом в 131072 символа Ollama просто не собирает грамматику и отвечает
+    HTTP 500. Ограничение остаётся в контракте Pydantic и проверяется после генерации.
+    """
+    assert "maxLength" not in json.dumps(CODE_RESPONSE.schema)
+    assert "maxLength" not in json.dumps(PLANNING_RESPONSE.schema)
+    assert CODE_RESPONSE.schema["properties"]["code"]["minLength"] == 1
+    with pytest.raises(ValidationError):
+        CODE_RESPONSE.adapter.validate_python({"code": "x" * 200_000})
+
+
+def test_model_facing_schema_gives_json_values_a_real_grammar():
+    """Пустая схема `{}` не ограничивает грамматику, и модель заполняла её объектом.
+
+    Из-за этого скалярный ожидаемый результат приезжал завёрнутым в объект, и план противоречил
+    собственному output-контракту. Явное перечисление вариантов со скалярами впереди это снимает.
+    """
+    json_value = PLANNING_RESPONSE.schema["$defs"]["JsonValue"]
+
+    assert json_value != {}
+    assert [variant.get("type") for variant in json_value["anyOf"][:4]] == [
+        "string",
+        "number",
+        "boolean",
+        "null",
+    ]

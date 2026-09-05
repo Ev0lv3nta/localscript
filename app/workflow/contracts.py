@@ -79,7 +79,13 @@ class PlanStep(StrictModel):
 class AcceptanceCase(StrictModel):
     name: str = Field(min_length=1, max_length=80)
     context: dict[str, JsonValue]
-    expected: JsonValue
+    expected: JsonValue = Field(
+        description=(
+            "The exact JSON value the generated Lua returns for this context, matching the "
+            "declared output shape: a bare number, string, boolean or null for a scalar shape, "
+            "a JSON array for an array shape, a JSON object for an object shape."
+        )
+    )
 
     @field_validator("context")
     @classmethod

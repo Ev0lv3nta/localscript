@@ -24,8 +24,8 @@ def make_profile(**overrides):
         "fallback_model": "qwen3:4b-instruct-2507-q4_K_M",
         "think": False,
         "stream": False,
-        "num_ctx": 4096,
-        "num_predict": 256,
+        "num_ctx": 8192,
+        "num_predict": 2048,
         "batch": 1,
         "parallel": 1,
         "max_candidates": 2,
@@ -327,6 +327,29 @@ def test_empty_generation_is_protocol_error(monkeypatch):
 
     assert str(exc_info.value) == "Backend returned an invalid response."
     assert exc_info.value.reason == "empty_response"
+    backend.close()
+
+
+def test_truncated_generation_is_reported_as_truncation(monkeypatch):
+    fake = FakeClient(
+        [
+            FakeResponse(tags_payload()),
+            FakeResponse(
+                {
+                    "model": "qwen3:8b-q4_K_M",
+                    "response": '{"kind": "plan", "objective": "Norm',
+                    "done_reason": "length",
+                }
+            ),
+        ]
+    )
+    install_fake_client(monkeypatch, fake)
+    backend = OllamaBackend(make_profile())
+
+    with pytest.raises(BackendProtocol) as exc_info:
+        backend.complete("prompt")
+
+    assert exc_info.value.reason == "response_truncated_by_num_predict"
     backend.close()
 
 
