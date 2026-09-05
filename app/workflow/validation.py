@@ -188,7 +188,9 @@ class DeterministicCandidateValidator:
                     )
                 )
                 continue
-            observations.append({"case": case.name, "actual": actual})
+            # Наблюдение несёт и ожидание: без него ни ревизия, ни человек в трассе не видят,
+            # чем именно ответ разошёлся с планом.
+            observations.append({"case": case.name, "actual": actual, "expected": case.expected})
             shape_error = self._shape_error(
                 actual,
                 expected=plan.output.shape,
