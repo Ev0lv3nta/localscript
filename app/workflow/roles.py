@@ -25,7 +25,11 @@ REVIEW_ADAPTER: TypeAdapter[ReviewDecision] = TypeAdapter(ReviewDecision)
 
 DOMAIN_SPECIFICATION = """LocalScript generates small Lua 5.4 transformations for a workflow runtime.
 The only workflow data roots are wf.vars and wf.initVariables. Treat both as read-only.
-Return either one raw Lua block or a JSON object whose values are lua{...}lua chunks.
+Two output formats exist and they are not interchangeable. `lua_block` is one raw Lua chunk that
+returns the result, and it is the default: choose it unless the request itself asks for several
+named workflow variables at once. `json_envelope` is a JSON object whose every value is a
+lua{...}lua chunk, and it belongs only to that multi-variable case. One returned value is a
+`lua_block`, whatever the shape of that value.
 Do not use operating-system, file, network, package, debug, dynamic-loading, or process APIs.
 Prefer a direct returned value over workflow mutation. Ask one concrete question when the requested
 source, result shape, or mutate-versus-return intent cannot be determined safely.

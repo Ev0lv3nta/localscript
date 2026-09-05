@@ -120,3 +120,16 @@ def test_model_facing_schema_gives_json_values_a_real_grammar():
         "boolean",
         "null",
     ]
+
+
+def test_domain_specification_names_the_default_output_format():
+    """Спецификация перечисляла оба формата, не говоря, когда какой.
+
+    Планировщик из-за этого выбирал json_envelope для обычной задачи с одним результатом, и
+    кандидат отвергался как невалидный конверт ещё до выполнения.
+    """
+    from app.workflow.roles import DOMAIN_SPECIFICATION
+
+    assert "it is the default" in DOMAIN_SPECIFICATION
+    assert "json_envelope" in DOMAIN_SPECIFICATION
+    assert "lua_block" in DOMAIN_SPECIFICATION
