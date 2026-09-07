@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Final
 
 import tree_sitter_lua
 from tree_sitter import Language, Node, Parser
+
+from app.validation.output import OutputParseError, parse_output
 
 ALLOWED_GLOBALS: Final[frozenset[str]] = frozenset(
     {
@@ -111,34 +112,14 @@ def _parser() -> Parser:
     return Parser(language)
 
 
-def extract_lua_chunks(code: str, output_style: str) -> tuple[str, ...]:
-    if output_style != "json_envelope":
-        if not isinstance(code, str) or not code.strip():
-            return ()
-        return (_strip_lua_wrapper(code),)
-
-    if not isinstance(code, str):
-        return ()
-    try:
-        payload = json.loads(code)
-    except (ValueError, TypeError, RecursionError):
-        return ()
-    if not isinstance(payload, dict) or not payload:
-        return ()
-
-    chunks: list[str] = []
-    for value in payload.values():
-        if not isinstance(value, str) or not value.startswith("lua{") or not value.endswith("}lua"):
-            return ()
-        chunks.append(_strip_lua_wrapper(value))
-    return tuple(chunks)
-
-
 def analyze_lua_output(code: str, output_style: str) -> LuaPolicyResult:
+    try:
+        parsed = parse_output(code, output_style)
+    except OutputParseError as error:
+        return LuaPolicyResult((LuaPolicyFinding(error.code, str(error), 1, 1),))
     findings: list[LuaPolicyFinding] = []
-    for chunk_index, chunk in enumerate(extract_lua_chunks(code, output_style), start=1):
-        result = analyze_lua_chunk(chunk, chunk_index=chunk_index)
-        findings.extend(result.findings)
+    for chunk_index, chunk in enumerate(parsed.chunks, start=1):
+        findings.extend(analyze_lua_chunk(chunk, chunk_index=chunk_index).findings)
     return LuaPolicyResult(tuple(findings))
 
 
@@ -151,13 +132,6 @@ def analyze_lua_chunk(chunk: str, *, chunk_index: int = 1) -> LuaPolicyResult:
     else:
         analyzer.visit_sequence(tree.root_node, _Scope())
     return LuaPolicyResult(tuple(analyzer.findings))
-
-
-def _strip_lua_wrapper(code: str) -> str:
-    stripped = code.strip()
-    if stripped.startswith("lua{") and stripped.endswith("}lua"):
-        return stripped[4:-4]
-    return stripped
 
 
 class _Analyzer:

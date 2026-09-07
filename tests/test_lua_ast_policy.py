@@ -215,7 +215,7 @@ def test_runtime_timeout_is_a_stable_fail_closed_result(monkeypatch):
     def time_out(*args, **kwargs):
         raise subprocess.TimeoutExpired(args[0], timeout=5)
 
-    monkeypatch.setattr("app.validation.runtime_executor.subprocess.run", time_out)
+    monkeypatch.setattr("app.validation.runtime_executor._execute_process", time_out)
 
     execution = execute_output("return true")
 
@@ -234,9 +234,10 @@ def test_non_utf8_lua_stdout_is_a_stable_fail_closed_result():
 
 def test_non_utf8_lua_stderr_is_a_stable_fail_closed_result(monkeypatch):
     def invalid_stderr(*args, **kwargs):
-        return subprocess.CompletedProcess(args=args[0], returncode=1, stdout=b"", stderr=b"\xff")
+        args[2].write(b"\xff")
+        return subprocess.CompletedProcess(args=args[0], returncode=1)
 
-    monkeypatch.setattr("app.validation.runtime_executor.subprocess.run", invalid_stderr)
+    monkeypatch.setattr("app.validation.runtime_executor._execute_process", invalid_stderr)
 
     execution = execute_output("return true")
 
@@ -245,11 +246,11 @@ def test_non_utf8_lua_stderr_is_a_stable_fail_closed_result(monkeypatch):
     assert execution.error_message == "Lua subprocess stderr is not valid UTF-8."
 
 
-def test_mixed_numeric_and_string_result_keys_preserve_their_values():
+def test_mixed_numeric_and_string_result_keys_are_explicitly_rejected():
     execution = execute_output('return {[2] = "two", label = "ok"}')
 
-    assert execution.ok is True
-    assert execution.value == {"2": "two", "label": "ok"}
+    assert execution.ok is False
+    assert execution.error_code == "lua_result_serialization_error"
 
 
 def test_unsupported_result_key_shape_has_stable_runtime_diagnostic():
@@ -257,4 +258,4 @@ def test_unsupported_result_key_shape_has_stable_runtime_diagnostic():
 
     assert execution.ok is False
     assert execution.error_code == "lua_result_serialization_error"
-    assert "JSON object keys must be strings or numbers" in execution.error_message
+    assert "JSON object keys must be strings" in execution.error_message

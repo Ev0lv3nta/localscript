@@ -4,15 +4,17 @@ import contextlib
 import json
 import math
 import os
-import resource
 import subprocess
+import sys
 import tempfile
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from time import monotonic
+from typing import BinaryIO
 
 from app.validation.lua_ast import analyze_lua_chunk
-from app.validation.runtime import find_lua_binary
+from app.validation.output import OutputParseError, parse_output
+from app.validation.runtime import find_lua_binary, runtime_version
 
 
 @dataclass
@@ -24,42 +26,9 @@ class RuntimeExecutionResult:
     degraded: bool = False
 
 
-def _strip_lua_wrapper(code: object) -> str:
-    if not isinstance(code, str):
-        return ""
-    stripped = code.strip()
-    if stripped.startswith("lua{") and stripped.endswith("}lua"):
-        return stripped[4:-4]
-    return stripped
-
-
-def _extract_lua_chunks(code: object, output_style: str) -> list[str]:
-    if output_style != "json_envelope":
-        if not isinstance(code, str) or not code.strip():
-            return []
-        return [_strip_lua_wrapper(code)]
-
-    if not isinstance(code, str):
-        return []
-
-    try:
-        payload = json.loads(code)
-    except (ValueError, TypeError, RecursionError):
-        return []
-
-    if not isinstance(payload, dict) or not payload:
-        return []
-
-    chunks = []
-    for value in payload.values():
-        if not (isinstance(value, str) and value.startswith("lua{") and value.endswith("}lua")):
-            return []
-        chunks.append(_strip_lua_wrapper(value))
-    return chunks
-
-
 def _find_lua_binary() -> str | None:
-    return find_lua_binary()
+    binary = find_lua_binary()
+    return binary if binary and runtime_version(binary) else None
 
 
 def _lua_string_literal(value: str) -> str:
@@ -81,17 +50,23 @@ def _lua_number_literal(value: float) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):
+        if abs(value) > 2**53 - 1:
+            raise ValueError("integer_out_of_range")
         return str(value)
     if isinstance(value, float):
         if math.isnan(value) or math.isinf(value):
-            return "nil"
+            raise ValueError("non_finite_number")
+        if abs(value) > 2**53 - 1:
+            raise ValueError("number_out_of_range")
         return repr(value)
     return "nil"
 
 
-def _serialize_to_lua(value: Any) -> str:
+def _serialize_to_lua(value: object, path: str = "$", depth: int = 0) -> str:
+    if depth > 16:
+        raise ValueError(f"context_too_deep: {path}")
     if value is None:
-        return "nil"
+        raise ValueError(f"nested_null_unsupported: {path}")
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (int, float)):
@@ -99,18 +74,24 @@ def _serialize_to_lua(value: Any) -> str:
     if isinstance(value, str):
         return _lua_string_literal(value)
     if isinstance(value, list):
-        inner = ", ".join(_serialize_to_lua(item) for item in value)
+        inner = ", ".join(
+            _serialize_to_lua(item, f"{path}[{i}]", depth + 1) for i, item in enumerate(value)
+        )
         # Процентный формат: шаблон сам состоит из фигурных скобок Lua.
         return "setmetatable({%s}, { __localscript_array = true })" % inner  # noqa: UP031
     if isinstance(value, dict):
         items = []
         for key, nested in value.items():
-            items.append(f"[{_lua_string_literal(str(key))}] = {_serialize_to_lua(nested)}")
-        return "{%s}" % ", ".join(items)  # noqa: UP031
-    return "nil"
+            if not isinstance(key, str):
+                raise ValueError(f"object_key_not_string: {path}")
+            items.append(
+                f"[{_lua_string_literal(key)}] = {_serialize_to_lua(nested, f'{path}[{key!r}]', depth + 1)}"
+            )
+        return "setmetatable({%s}, { __localscript_object = true })" % ", ".join(items)  # noqa: UP031
+    raise ValueError(f"unsupported_json_value: {path}")
 
 
-def _build_runner(chunk: str, context: Any, output_shape: str | None = None) -> str:
+def _build_runner(chunk: str, context: object, output_shape: str | None = None) -> str:
     serialized_context = _serialize_to_lua(context or {})
     declared_array = "true" if output_shape == "array" else "false"
     serialized_chunk = _lua_string_literal(chunk)
@@ -157,6 +138,7 @@ local function _ls_readonly(value, cache)
       return iterate, proxy, nil
     end,
     __localscript_array = source_mt and source_mt.__localscript_array or nil,
+    __localscript_object = source_mt and source_mt.__localscript_object or nil,
     __localscript_readonly = true,
   }}
   return setmetatable(proxy, mt)
@@ -169,8 +151,8 @@ local function _ls_is_array(tbl)
     return false
   end
   local mt = getmetatable(tbl)
-  if mt and mt.__localscript_array then
-    return true
+  if mt and mt.__localscript_object then
+    return false
   end
   local max_index = 0
   local count = 0
@@ -184,7 +166,7 @@ local function _ls_is_array(tbl)
     count = count + 1
   end
   if count == 0 then
-    return false
+    return mt and mt.__localscript_array or false
   end
   return max_index == count
 end
@@ -213,7 +195,7 @@ local _utils = {{
         local source = arg2 or {{}}
         for _, item in ipairs(source) do
           local produced = arg1(item)
-          if produced ~= nil and produced ~= false then
+          if produced ~= nil then
             table.insert(result, produced)
           end
         end
@@ -243,10 +225,10 @@ local safe_table = {{
 
 local safe_env = {{
   wf = wf,
-  _utils = _utils,
-  math = math,
-  string = string,
-  table = safe_table,
+  _utils = _ls_readonly(_utils),
+  math = _ls_readonly(math),
+  string = _ls_readonly(string),
+  table = _ls_readonly(safe_table),
   tonumber = tonumber,
   tostring = tostring,
   type = type,
@@ -257,7 +239,7 @@ local safe_env = {{
   error = error,
   pcall = pcall,
   xpcall = xpcall,
-  utf8 = utf8,
+  utf8 = _ls_readonly(utf8),
 }}
 
 local function _ls_escape_string(value)
@@ -274,7 +256,10 @@ local function _ls_escape_string(value)
   return value
 end
 
-local function _ls_to_json(value)
+local active_tables = {{}}
+local function _ls_to_json(value, depth)
+  depth = depth or 0
+  if depth > 16 then error("result_too_deep") end
   local value_type = type(value)
   if value == nil then
     return "null"
@@ -283,19 +268,26 @@ local function _ls_to_json(value)
     return value and "true" or "false"
   end
   if value_type == "number" then
+    if value ~= value or value == math.huge or value == -math.huge or math.abs(value) > 9007199254740991 then
+      error("unsupported_json_number")
+    end
+    if math.type(value) == "float" then return string.format("%.17g", value) end
     return tostring(value)
   end
   if value_type == "string" then
     return '"' .. _ls_escape_string(value) .. '"'
   end
   if value_type ~= "table" then
-    return '"' .. _ls_escape_string(tostring(value)) .. '"'
+    error("unsupported_json_result_type")
   end
+  if active_tables[value] then error("cyclic_result") end
+  active_tables[value] = true
   if _ls_is_array(value) then
     local parts = {{}}
     for index = 1, #value do
-      parts[#parts + 1] = _ls_to_json(value[index])
+      parts[#parts + 1] = _ls_to_json(value[index], depth + 1)
     end
+    active_tables[value] = nil
     return "[" .. table.concat(parts, ",") .. "]"
   end
 
@@ -303,8 +295,8 @@ local function _ls_to_json(value)
   local labels = {{}}
   for key, _ in pairs(value) do
     local key_type = type(key)
-    if key_type ~= "string" and key_type ~= "number" then
-      error("JSON object keys must be strings or numbers")
+    if key_type ~= "string" then
+      error("JSON object keys must be strings; sparse/mixed arrays are unsupported")
     end
     local label = tostring(key)
     if labels[label] then
@@ -319,8 +311,9 @@ local function _ls_to_json(value)
 
   local parts = {{}}
   for _, entry in ipairs(entries) do
-    parts[#parts + 1] = '"' .. _ls_escape_string(entry.label) .. '":' .. _ls_to_json(value[entry.key])
+    parts[#parts + 1] = '"' .. _ls_escape_string(entry.label) .. '":' .. _ls_to_json(value[entry.key], depth + 1)
   end
+  active_tables[value] = nil
   return "{{" .. table.concat(parts, ",") .. "}}"
 end
 
@@ -339,7 +332,9 @@ end
 -- Lua не различает пустой массив и пустой объект: и то и другое — таблица без ключей.
 -- Когда контракт объявляет массив, пустой результат обязан приехать как [], иначе требование
 -- «на пустом входе верни пустой массив» невыполнимо в принципе.
-if {declared_array} and type(result) == "table" and next(result) == nil then
+local result_mt = type(result) == "table" and getmetatable(result)
+local result_empty = type(result) == "table" and pairs(result)(result) == nil
+if {declared_array} and result_empty and not (result_mt and result_mt.__localscript_object) then
   result = _ls_array(result)
 end
 
@@ -349,28 +344,64 @@ if not serialization_ok then
   return
 end
 
+if #serialized_result > 65536 then
+  io.write('{{"ok":false,"error_code":"lua_result_too_large","error_message":"Result exceeds 64 KiB."}}')
+  return
+end
+
 io.write('{{"ok":true,"value":' .. serialized_result .. '}}')
 """
 
 
-def _subprocess_limits() -> Callable[[], None]:
-    def _apply_limits() -> None:
-        with contextlib.suppress(Exception):
-            resource.setrlimit(resource.RLIMIT_CPU, (2, 2))
-        with contextlib.suppress(Exception):
-            resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
-        with contextlib.suppress(Exception):
-            resource.setrlimit(resource.RLIMIT_FSIZE, (1024 * 1024, 1024 * 1024))
-        with contextlib.suppress(Exception):
-            resource.setrlimit(resource.RLIMIT_NOFILE, (16, 16))
-
-    return _apply_limits
+def _execute_process(
+    command: list[str], stdout: BinaryIO, stderr: BinaryIO, timeout: float
+) -> subprocess.CompletedProcess[bytes]:
+    if sys.platform != "darwin":
+        return subprocess.run(
+            command,
+            stdout=stdout,
+            stderr=stderr,
+            timeout=timeout,
+            close_fds=True,
+            env={"LC_ALL": "C.UTF-8"},
+        )
+    # Development on macOS: RSS monitoring is not Linux's hard address-space limit.
+    # Failure to measure an active child also stops execution rather than removing the cap.
+    with subprocess.Popen(
+        command, stdout=stdout, stderr=stderr, close_fds=True, env={"LC_ALL": "C.UTF-8"}
+    ) as child:
+        deadline = monotonic() + timeout
+        try:
+            while True:
+                try:
+                    child.wait(timeout=min(0.025, max(0.001, deadline - monotonic())))
+                    break
+                except subprocess.TimeoutExpired:
+                    if monotonic() >= deadline:
+                        raise subprocess.TimeoutExpired(command, timeout) from None
+                    sample = subprocess.run(
+                        ["/bin/ps", "-o", "rss=", "-p", str(child.pid)],
+                        capture_output=True,
+                        timeout=0.5,
+                    )
+                    if child.poll() is not None:
+                        break
+                    if sample.returncode or not sample.stdout.strip().isdigit():
+                        raise OSError("lua_memory_monitor_unavailable") from None
+                    if int(sample.stdout) > 256 * 1024:
+                        raise OSError("lua_memory_limit_exceeded") from None
+        except BaseException:
+            child.kill()
+            child.wait()
+            raise
+        return subprocess.CompletedProcess(command, child.returncode)
 
 
 def _run_chunk(
     chunk: str,
-    context: Any,
+    context: object,
     output_shape: str | None = None,
+    deadline: float | None = None,
 ) -> RuntimeExecutionResult:
     policy_result = analyze_lua_chunk(chunk)
     if not policy_result.ok:
@@ -390,26 +421,47 @@ def _run_chunk(
             degraded=True,
         )
 
-    runner = _build_runner(chunk, context, output_shape)
+    try:
+        runner = _build_runner(chunk, context, output_shape)
+    except (ValueError, RecursionError) as error:
+        return RuntimeExecutionResult(
+            ok=False, error_code="unsupported_json_context", error_message=str(error)
+        )
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".lua", delete=False) as handle:
         handle.write(runner)
         temp_path = handle.name
 
     try:
         try:
-            completed = subprocess.run(
-                [lua_binary, temp_path],
-                capture_output=True,
-                timeout=5,
-                close_fds=True,
-                env={"LC_ALL": "C.UTF-8"},
-                preexec_fn=_subprocess_limits(),
-            )
+            remaining = min(5.0, deadline - monotonic()) if deadline is not None else 5.0
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(lua_binary, 0)
+            with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+                completed = _execute_process(
+                    [
+                        sys.executable,
+                        "-I",
+                        str(Path(__file__).with_name("worker.py")),
+                        lua_binary,
+                        temp_path,
+                    ],
+                    stdout_file,
+                    stderr_file,
+                    remaining,
+                )
+                stdout_file.seek(0)
+                stderr_file.seek(0)
+                completed.stdout = stdout_file.read(65536 + 4097)
+                completed.stderr = stderr_file.read(4096)
         except subprocess.TimeoutExpired:
             return RuntimeExecutionResult(
                 ok=False,
                 error_code="lua_runtime_timeout",
                 error_message="Lua execution exceeded the 5 second timeout.",
+            )
+        except OSError as error:
+            return RuntimeExecutionResult(
+                ok=False, error_code="lua_process_failed", error_message=str(error)
             )
     finally:
         with contextlib.suppress(OSError):
@@ -459,80 +511,25 @@ def _run_chunk(
 
 def execute_output(
     code: object,
-    context: Any = None,
+    context: object = None,
     output_style: str = "lua_block",
     output_shape: str | None = None,
 ) -> RuntimeExecutionResult:
-    if not isinstance(code, str):
+    deadline = monotonic() + 20.0
+    try:
+        parsed = parse_output(code, output_style)
+    except OutputParseError as error:
+        return RuntimeExecutionResult(ok=False, error_code=error.code, error_message=str(error))
+    if not parsed.keys:
+        return _run_chunk(parsed.chunks[0], context, output_shape, deadline)
+    result: dict[str, object] = {}
+    for key, chunk in zip(parsed.keys, parsed.chunks, strict=True):
+        execution = _run_chunk(chunk, context, deadline=deadline)
+        if not execution.ok:
+            return execution
+        result[key] = execution.value
+    if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > 65536:
         return RuntimeExecutionResult(
-            ok=False,
-            error_code="contract_not_string",
-            error_message="Generated output must be a string.",
+            ok=False, error_code="lua_result_too_large", error_message="Result exceeds 64 KiB."
         )
-
-    if output_style == "json_envelope":
-        try:
-            payload = json.loads(code)
-        except (ValueError, TypeError, RecursionError) as exc:
-            return RuntimeExecutionResult(
-                ok=False,
-                error_code="json_envelope_invalid",
-                error_message=str(exc),
-            )
-
-        if not isinstance(payload, dict):
-            return RuntimeExecutionResult(
-                ok=False,
-                error_code="json_envelope_not_object",
-                error_message="Envelope must be a JSON object.",
-            )
-        if not payload:
-            return RuntimeExecutionResult(
-                ok=False,
-                error_code="json_envelope_empty",
-                error_message="Envelope must contain at least one Lua value.",
-            )
-
-        for key, chunk in payload.items():
-            if not isinstance(chunk, str):
-                return RuntimeExecutionResult(
-                    ok=False,
-                    error_code="json_envelope_value_not_string",
-                    error_message=f"Envelope value for `{key}` must be a string.",
-                )
-            if not chunk.startswith("lua{") or not chunk.endswith("}lua"):
-                return RuntimeExecutionResult(
-                    ok=False,
-                    error_code="json_envelope_value_not_lua_wrapper",
-                    error_message=f"Envelope value for `{key}` must use `lua{{...}}lua`.",
-                )
-
-        result = {}
-        chunks = _extract_lua_chunks(code, "json_envelope")
-        if not chunks:
-            return RuntimeExecutionResult(
-                ok=False,
-                error_code="lua_chunk_missing",
-                error_message="No executable Lua chunk could be extracted.",
-            )
-        if any(not chunk.strip() for chunk in chunks):
-            return RuntimeExecutionResult(
-                ok=False,
-                error_code="lua_chunk_missing",
-                error_message="No executable Lua chunk could be extracted.",
-            )
-        for (key, _), chunk in zip(payload.items(), chunks, strict=True):
-            chunk_result = _run_chunk(chunk, context, output_shape)
-            if not chunk_result.ok:
-                return chunk_result
-            result[key] = chunk_result.value
-        return RuntimeExecutionResult(ok=True, value=result)
-
-    chunks = _extract_lua_chunks(code, output_style)
-    if not chunks:
-        return RuntimeExecutionResult(
-            ok=False,
-            error_code="lua_chunk_missing",
-            error_message="No executable Lua chunk could be extracted.",
-        )
-    return _run_chunk(chunks[0], context, output_shape)
+    return RuntimeExecutionResult(ok=True, value=result)
