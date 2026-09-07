@@ -19,6 +19,7 @@ from app.workflow.contracts import (
     ReviewDecision,
     TaskPlan,
     ValidationResult,
+    WorkflowRoot,
 )
 
 SchemaValue = TypeVar("SchemaValue")
@@ -175,6 +176,7 @@ class PlannerRole:
         feedback: str | None = None,
         output: OutputContract | None = None,
         examples: tuple[AcceptanceCase, ...] = (),
+        source_roots: tuple[WorkflowRoot, ...] | None = None,
         rejected_plan_findings: tuple[str, ...] = (),
     ) -> PlanningDecision:
         payload = {
@@ -186,6 +188,9 @@ class PlannerRole:
             "feedback": feedback,
             "caller_output": output.model_dump(mode="json") if output else None,
             "caller_examples": [case.model_dump(mode="json") for case in examples],
+            "caller_source_roots": (
+                [root.value for root in source_roots] if source_roots is not None else None
+            ),
             "rejected_plan_findings": list(rejected_plan_findings),
         }
         role_prompt = f"""You are the planner in a local code-generation workflow.
@@ -197,7 +202,7 @@ For a plan:
 - preserve the requested output format and shape;
 - provide 1 to 3 small executable acceptance cases with complete workflow contexts;
 - acceptance cases must test the requested behavior, not a preferred source-code spelling.
-- caller_output and caller_examples are requirements; never rewrite their expected values.
+- caller_output, caller_examples, and caller_source_roots are requirements; never rewrite them.
 
 Each acceptance case field `expected` holds the exact JSON value the generated code returns for
 that context, and it must match the declared output shape: `scalar` is a bare number, string,

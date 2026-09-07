@@ -202,6 +202,7 @@ def generate(
             "clarification_answer": payload.clarification_answer,
             "output": payload.output,
             "examples": payload.examples,
+            "source_roots": payload.source_roots,
         }
         if "context" in payload.model_fields_set:
             generation_kwargs["context"] = payload.context
@@ -233,6 +234,7 @@ def generate(
         diagnostics=workflow.diagnostics,
         validation=workflow.validation,
         output=workflow.output,
+        source_choices=workflow.source_choices,
         revision_count=workflow.revision_count,
     )
 

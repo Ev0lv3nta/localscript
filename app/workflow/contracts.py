@@ -292,6 +292,7 @@ class WorkflowResult(StrictModel):
     diagnostics: tuple[WorkflowDiagnostic, ...] = ()
     validation: ValidationResult | None = None
     output: OutputContract | None = None
+    source_choices: tuple[WorkflowRoot, ...] = Field(default=(), max_length=2)
     revision_count: int = 0
 
     @model_validator(mode="after")
@@ -306,6 +307,10 @@ class WorkflowResult(StrictModel):
                 raise ValueError("clarification requires a question")
         elif self.question is not None:
             raise ValueError("only clarification may contain a question")
+        if len(self.source_choices) != len(set(self.source_choices)):
+            raise ValueError("source choices must be distinct")
+        if self.source_choices and self.status is not WorkflowStatus.CLARIFICATION_REQUIRED:
+            raise ValueError("source choices require a clarification")
         return self
 
 

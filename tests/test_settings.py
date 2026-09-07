@@ -200,6 +200,20 @@ def test_generate_request_accepts_explicit_output_and_bounded_user_examples():
     assert request.examples[0].expected == 1
 
 
+def test_generate_request_accepts_only_bounded_distinct_source_roots():
+    request = GenerateRequest.model_validate(
+        {"prompt": "return the value", "source_roots": ["wf.vars"]}
+    )
+
+    assert [root.value for root in request.source_roots or ()] == ["wf.vars"]
+    with pytest.raises(ValidationError):
+        GenerateRequest.model_validate(
+            {"prompt": "return the value", "source_roots": ["wf.vars", "wf.vars"]}
+        )
+    with pytest.raises(ValidationError):
+        GenerateRequest.model_validate({"prompt": "return the value", "source_roots": []})
+
+
 def test_public_text_fields_publish_explicit_positive_schema_limits():
     limits = [
         (
