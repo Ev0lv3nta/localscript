@@ -130,6 +130,21 @@ def test_completed_result_requires_successful_validation():
     assert result.code == "return 1"
 
 
+def test_source_choices_are_only_exposed_for_clarification():
+    clarification = WorkflowResult(
+        status=WorkflowStatus.CLARIFICATION_REQUIRED,
+        question="Which source?",
+        source_choices=(WorkflowRoot.VARS, WorkflowRoot.INIT_VARIABLES),
+    )
+
+    assert clarification.source_choices == (WorkflowRoot.VARS, WorkflowRoot.INIT_VARIABLES)
+    with pytest.raises(ValidationError):
+        WorkflowResult(
+            status=WorkflowStatus.VALIDATION_FAILED,
+            source_choices=(WorkflowRoot.VARS,),
+        )
+
+
 def test_discriminated_decisions_have_consistent_shapes():
     assert (
         ClarificationRequest(question="Which root?", reason="Two roots are present.").kind

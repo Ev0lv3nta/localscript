@@ -19,6 +19,7 @@ from app.workflow.contracts import (
     ReviewDecision,
     TaskPlan,
     ValidationResult,
+    WorkflowRoot,
 )
 
 SchemaValue = TypeVar("SchemaValue")
@@ -175,6 +176,7 @@ class PlannerRole:
         feedback: str | None = None,
         output: OutputContract | None = None,
         examples: tuple[AcceptanceCase, ...] = (),
+        source_roots: tuple[WorkflowRoot, ...] | None = None,
         rejected_plan_findings: tuple[str, ...] = (),
     ) -> PlanningDecision:
         payload = {
@@ -186,10 +188,18 @@ class PlannerRole:
             "feedback": feedback,
             "caller_output": output.model_dump(mode="json") if output else None,
             "caller_examples": [case.model_dump(mode="json") for case in examples],
+            "caller_source_roots": (
+                [root.value for root in source_roots] if source_roots is not None else None
+            ),
             "rejected_plan_findings": list(rejected_plan_findings),
         }
         role_prompt = f"""You are the planner in a local code-generation workflow.
 Interpret the request; do not write Lua. Return exactly one JSON PlanningDecision.
+
+Refuse requests that require forbidden effects (workflow mutation, filesystem, operating system,
+network, package loading) or cannot be implemented in this restricted Lua runtime. Return
+kind="refused" with a short concrete reason, rather than generating unsafe code or silently
+substituting a different task. Questions and refusal reasons should use the user's language.
 
 For a plan:
 - express workflow paths as a root enum plus path segments, never as an invented dotted string;
@@ -197,7 +207,7 @@ For a plan:
 - preserve the requested output format and shape;
 - provide 1 to 3 small executable acceptance cases with complete workflow contexts;
 - acceptance cases must test the requested behavior, not a preferred source-code spelling.
-- caller_output and caller_examples are requirements; never rewrite their expected values.
+- caller_output, caller_examples, and caller_source_roots are requirements; never rewrite them.
 
 Each acceptance case field `expected` holds the exact JSON value the generated code returns for
 that context, and it must match the declared output shape: `scalar` is a bare number, string,
@@ -219,6 +229,8 @@ reasons. Fix them; do not repeat the same plan and do not fall back to a clarifi
 `paths_present_under_both_roots` lists paths that exist under wf.vars and wf.initVariables at the
 same time. If the request needs one of them and does not itself name the root, that is the
 ambiguity you must ask about: choosing a root yourself produces confidently wrong code.
+When asking the user to choose roots, populate source_choices with the possible root enum values.
+For other questions leave source_choices empty. Honor caller_source_roots when already selected.
 
 Ask a concrete clarification when necessary input data or a required choice is missing.
 Two roots may be used together when requested. A missing optional field with an explicitly

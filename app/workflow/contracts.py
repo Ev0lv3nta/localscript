@@ -128,10 +128,23 @@ class ClarificationRequest(StrictModel):
     kind: Literal["clarification"] = "clarification"
     question: str = Field(min_length=1, max_length=500)
     reason: str = Field(min_length=1, max_length=500)
+    source_choices: tuple[WorkflowRoot, ...] = Field(default=(), max_length=2)
+
+    @field_validator("source_choices")
+    @classmethod
+    def distinct_choices(cls, choices: tuple[WorkflowRoot, ...]) -> tuple[WorkflowRoot, ...]:
+        if len(choices) != len(set(choices)):
+            raise ValueError("source choices must be distinct")
+        return choices
+
+
+class PlanningRefusal(StrictModel):
+    kind: Literal["refused"] = "refused"
+    reason: str = Field(min_length=1, max_length=500)
 
 
 PlanningDecision: TypeAlias = Annotated[
-    TaskPlan | ClarificationRequest,
+    TaskPlan | ClarificationRequest | PlanningRefusal,
     Field(discriminator="kind"),
 ]
 
@@ -292,6 +305,7 @@ class WorkflowResult(StrictModel):
     diagnostics: tuple[WorkflowDiagnostic, ...] = ()
     validation: ValidationResult | None = None
     output: OutputContract | None = None
+    source_choices: tuple[WorkflowRoot, ...] = Field(default=(), max_length=2)
     revision_count: int = 0
 
     @model_validator(mode="after")
@@ -306,6 +320,10 @@ class WorkflowResult(StrictModel):
                 raise ValueError("clarification requires a question")
         elif self.question is not None:
             raise ValueError("only clarification may contain a question")
+        if len(self.source_choices) != len(set(self.source_choices)):
+            raise ValueError("source choices must be distinct")
+        if self.source_choices and self.status is not WorkflowStatus.CLARIFICATION_REQUIRED:
+            raise ValueError("source choices require a clarification")
         return self
 
 
@@ -324,6 +342,7 @@ __all__ = [
     "OutputShape",
     "PlanStep",
     "PlanningDecision",
+    "PlanningRefusal",
     "ReviewApproved",
     "ReviewDecision",
     "ReviewFinding",

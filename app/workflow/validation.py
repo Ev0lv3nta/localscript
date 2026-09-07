@@ -25,6 +25,7 @@ from app.workflow.contracts import (
     TaskPlan,
     ValidationCheck,
     ValidationResult,
+    WorkflowRoot,
 )
 
 
@@ -47,6 +48,7 @@ class RuntimeResult(Protocol):
     error_code: str
     error_message: str
     degraded: bool
+    read_roots: tuple[str, ...]
 
 
 PolicyAnalyzer = Callable[[str, str], PolicyResult]
@@ -108,10 +110,15 @@ class DeterministicCandidateValidator:
         plan: TaskPlan,
         context: dict[str, JsonValue],
         examples: tuple[AcceptanceCase, ...] = (),
+        source_roots: tuple[WorkflowRoot, ...] | None = None,
     ) -> ValidationResult:
         with workflow_budget(20):
             return self._validate_all(
-                candidate=candidate, plan=plan, context=context, examples=examples
+                candidate=candidate,
+                plan=plan,
+                context=context,
+                examples=examples,
+                source_roots=source_roots,
             )
 
     def _validate_all(
@@ -121,13 +128,17 @@ class DeterministicCandidateValidator:
         plan: TaskPlan,
         context: dict[str, JsonValue],
         examples: tuple[AcceptanceCase, ...],
+        source_roots: tuple[WorkflowRoot, ...] | None,
     ) -> ValidationResult:
         request_result = self.validate_existing(
-            candidate=candidate, output=plan.output, context=context
+            candidate=candidate,
+            output=plan.output,
+            context=context,
+            source_roots=source_roots,
         )
         checks = list(request_result.checks)
         observations: list[JsonValue] = [
-            {"source": "request", "actual": observation.get("actual")}
+            {"source": "request", **observation}
             for observation in request_result.observations
             if isinstance(observation, dict)
         ]
@@ -178,6 +189,14 @@ class DeterministicCandidateValidator:
                 )
                 continue
 
+            read_roots = self._execution_read_roots(execution)
+            source_check = self._source_root_check(
+                f"{source}:{case.name}", read_roots, source_roots
+            )
+            if source_check is not None:
+                checks.append(source_check)
+                continue
+
             try:
                 actual = JSON_ADAPTER.validate_python(execution.value, strict=True)
             except ValidationError:
@@ -191,9 +210,15 @@ class DeterministicCandidateValidator:
                 continue
             # Наблюдение несёт и ожидание: без него ни ревизия, ни человек в трассе не видят,
             # чем именно ответ разошёлся с планом.
-            observations.append(
-                {"source": source, "case": case.name, "actual": actual, "expected": case.expected}
-            )
+            observation: dict[str, JsonValue] = {
+                "source": source,
+                "case": case.name,
+                "actual": actual,
+                "expected": case.expected,
+            }
+            if read_roots:
+                observation["read_roots"] = list(read_roots)
+            observations.append(observation)
             shape_error = self._shape_error(
                 actual,
                 expected=plan.output.shape,
@@ -226,9 +251,15 @@ class DeterministicCandidateValidator:
         candidate: CodeCandidate,
         output: OutputContract,
         context: dict[str, JsonValue],
+        source_roots: tuple[WorkflowRoot, ...] | None = None,
     ) -> ValidationResult:
         with workflow_budget(20):
-            return self._validate_existing(candidate=candidate, output=output, context=context)
+            return self._validate_existing(
+                candidate=candidate,
+                output=output,
+                context=context,
+                source_roots=source_roots,
+            )
 
     def _validate_existing(
         self,
@@ -236,6 +267,7 @@ class DeterministicCandidateValidator:
         candidate: CodeCandidate,
         output: OutputContract,
         context: dict[str, JsonValue],
+        source_roots: tuple[WorkflowRoot, ...] | None,
     ) -> ValidationResult:
         """Validate and execute caller-supplied code without inventing expected semantics."""
         checks: list[ValidationCheck] = []
@@ -307,6 +339,15 @@ class DeterministicCandidateValidator:
             )
             return ValidationResult(checks=tuple(checks))
 
+        read_roots = self._execution_read_roots(execution)
+        source_check = self._source_root_check("source_roots", read_roots, source_roots)
+        if source_check is not None:
+            checks.append(source_check)
+            return ValidationResult(
+                checks=tuple(checks),
+                observations=({"read_roots": list(read_roots)},),
+            )
+
         try:
             actual = JSON_ADAPTER.validate_python(execution.value, strict=True)
         except ValidationError:
@@ -333,9 +374,36 @@ class DeterministicCandidateValidator:
             )
         else:
             checks.append(self._passed("sandbox"))
-        return ValidationResult(
-            checks=tuple(checks),
-            observations=({"actual": actual},),
+        observation: dict[str, JsonValue] = {"actual": actual}
+        if read_roots:
+            observation["read_roots"] = list(read_roots)
+        return ValidationResult(checks=tuple(checks), observations=(observation,))
+
+    @staticmethod
+    def _execution_read_roots(execution: RuntimeResult) -> tuple[str, ...]:
+        raw_roots = getattr(execution, "read_roots", ())
+        return tuple(
+            root
+            for root in (WorkflowRoot.VARS.value, WorkflowRoot.INIT_VARIABLES.value)
+            if root in raw_roots
+        )
+
+    @staticmethod
+    def _source_root_check(
+        name: str,
+        read_roots: tuple[str, ...],
+        source_roots: tuple[WorkflowRoot, ...] | None,
+    ) -> ValidationCheck | None:
+        if source_roots is None:
+            return None
+        selected = {root.value for root in source_roots}
+        outside = [root for root in read_roots if root not in selected]
+        if not outside:
+            return None
+        return DeterministicCandidateValidator._failed(
+            name,
+            "source_root_not_selected",
+            "Candidate read an unselected workflow root: " + ", ".join(outside),
         )
 
     @staticmethod
