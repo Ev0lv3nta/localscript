@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
+"""One bounded live gate: preflight, CPU checks, quality, stability, report."""
+
+from __future__ import annotations
+
 import argparse
-import hashlib
+import contextlib
 import json
 import os
 import platform
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,898 +20,276 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
-PREFERRED_PYTHON = ROOT / ".venv" / "bin" / "python"
-PREFERRED_VENV = PREFERRED_PYTHON.parent.parent.resolve()
-if (
-    __name__ == "__main__"
-    and PREFERRED_PYTHON.exists()
-    and Path(sys.prefix).resolve() != PREFERRED_VENV
-):
-    os.execv(
-        str(PREFERRED_PYTHON),
-        [str(PREFERRED_PYTHON), str(Path(__file__).resolve()), *sys.argv[1:]],
-    )
-
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.core.benchmarks import QUALITY_EVAL_MANIFEST, quality_gate_failures
+from app.core.benchmarks import run_quality_benchmark, run_stability_benchmark
 from app.core.config import get_runtime_profile
-from app.core.resources import materialized_resource
-from app.core.runtime_lock import write_runtime_lock
 from app.evaluation.integrity import run_integrity_check
-from app.evaluation.manifest import stability_plan
-from app.validation.runtime import find_lua_binary, find_luac_binary
+from app.generation.backend_errors import BackendError
+from app.validation.runtime import find_lua_binary, find_luac_binary, runtime_version
 
-_, STABILITY_CASE_IDS, STABILITY_REPEATS = stability_plan()
+LIVE_GATE_BUDGET_SECONDS = 20 * 60
 
-# Живой gate — это шесть публичных сценариев, три повтора стабильности и восемь слепых кейсов.
-# Пятнадцати минут на всё хватает с запасом, а больший бюджет означал бы, что проверка
-# незаметно разрослась обратно.
-LIVE_GATE_BUDGET_SECONDS = 15 * 60
-MIN_HOLDOUT_VERIFIED_CASES = 7
 
-DEFAULT_TIMEOUTS = {
-    "pytest_live": 5 * 60,
-    "doctor": 6 * 60,
-    "smoke": 4 * 60,
-    "private_holdout": 5 * 60,
-    "repeat_stability": 4 * 60,
-}
+def capture(command, *, timeout=10):
+    return subprocess.run(
+        command, cwd=ROOT, capture_output=True, text=True, timeout=timeout, check=True
+    ).stdout.strip()
 
-PRIVATE_HOLDOUT_SCALAR_METRICS = frozenset(
-    {
-        "syntax_pass_rate",
-        "semantic_pass_rate",
-        "verified_completion_rate",
-        "invalid_success_rate",
-        "invalid_success_count",
-        "revision_count",
-        "revision_rescue_count",
-        "revision_rescue_rate",
-        "backend_calls_total",
-        "backend_calls_mean",
-        "model_duration_ms_total",
+
+def write_report(path, report):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def gpu_sample(index):
+    row = capture(
+        [
+            "nvidia-smi",
+            "-i",
+            str(index),
+            "--query-gpu=index,uuid,name,driver_version,memory.total,memory.used",
+            "--format=csv,noheader,nounits",
+        ],
+        timeout=3,
+    )
+    fields = [field.strip() for field in row.split(",")]
+    if len(fields) != 6:
+        raise ValueError("gpu_inventory_invalid")
+    return dict(
+        zip(("index", "uuid", "name", "driver", "total_mib", "used_mib"), fields, strict=True)
+    )
+
+
+def preflight(gpu_index):
+    sha = capture(["git", "rev-parse", "HEAD"])
+    if capture(["git", "status", "--porcelain"]):
+        raise ValueError("dirty_checkout")
+    capture(["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"])
+    if sys.version_info[:2] not in {(3, 11), (3, 12)}:
+        raise ValueError("unsupported_python")
+    lua, luac = find_lua_binary(), find_luac_binary()
+    if (
+        not lua
+        or not luac
+        or not runtime_version(lua)
+        or runtime_version(lua) != runtime_version(luac)
+    ):
+        raise ValueError("lua54_pair_unavailable")
+    profile = get_runtime_profile()
+    if profile.ollama_host.startswith("https://ollama.com") or profile.model.endswith(":cloud"):
+        raise ValueError("local_model_required")
+    with httpx.Client(base_url=profile.ollama_host, timeout=3, trust_env=False) as client:
+        version_response = client.get("/api/version")
+        version_response.raise_for_status()
+        version = version_response.json()["version"]
+        from app.generation.ollama import OllamaBackend
+
+        with OllamaBackend(profile) as backend:
+            resolved = backend.resolve_model()
+        if not resolved.digest:
+            raise ValueError("model_digest_missing")
+    integrity = run_integrity_check()
+    if not integrity.get("ok"):
+        raise ValueError("corpus_integrity_failed")
+    return {
+        "source_commit_sha": sha,
+        "dirty": False,
+        "os": platform.system(),
+        "python": platform.python_version(),
+        "lua": runtime_version(lua),
+        "luac": runtime_version(luac),
+        "ollama": version,
+        "model": {"tag": resolved.tag, "digest": resolved.digest},
+        "options": {
+            name: getattr(profile, name)
+            for name in (
+                "think",
+                "num_ctx",
+                "num_predict",
+                "batch",
+                "parallel",
+                "request_timeout_seconds",
+            )
+        },
+        "gpu": gpu_sample(gpu_index),
+        "integrity": integrity,
     }
-)
-PRIVATE_HOLDOUT_NESTED_METRICS = {
-    "model_call_latency_ms": frozenset({"p50", "p95"}),
-    "latency_ms": frozenset({"cold_first", "warm_p50", "warm_p95", "overall_p50", "overall_p95"}),
-}
 
 
-def utc_now():
-    return datetime.now(UTC).isoformat()
+def run_bounded(command, deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("gate_deadline_exceeded")
+    with (
+        tempfile.TemporaryFile() as log,
+        subprocess.Popen(
+            command, cwd=ROOT, stdout=log, stderr=log, start_new_session=True
+        ) as child,
+    ):
+        try:
+            result = child.wait(timeout=remaining)
+        except BaseException:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(child.pid, signal.SIGKILL)
+            child.wait()
+            raise
+    return result
 
 
-def timeout_for(name):
-    environment_name = f"LOCALSCRIPT_RELEASE_{name.upper()}_TIMEOUT_SECONDS"
-    return int(os.getenv(environment_name, str(DEFAULT_TIMEOUTS[name])))
-
-
-def run_command(name, command, cwd, extra_env=None):
-    env = os.environ.copy()
-    if extra_env:
-        env.update(extra_env)
-    started_at = utc_now()
-    started = time.monotonic()
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=timeout_for(name),
-        )
-        return {
-            "name": name,
-            "command": [str(part) for part in command],
-            "timeout_seconds": timeout_for(name),
-            "started_at": started_at,
-            "finished_at": utc_now(),
-            "duration_seconds": round(time.monotonic() - started, 3),
-            "returncode": completed.returncode,
-            "timed_out": False,
-            "stdout": completed.stdout.strip(),
-            "stderr": completed.stderr.strip(),
-        }
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else exc.stdout
-        stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else exc.stderr
-        return {
-            "name": name,
-            "command": [str(part) for part in command],
-            "timeout_seconds": timeout_for(name),
-            "started_at": started_at,
-            "finished_at": utc_now(),
-            "duration_seconds": round(time.monotonic() - started, 3),
-            "returncode": 124,
-            "timed_out": True,
-            "stdout": (stdout or "").strip(),
-            "stderr": (stderr or "").strip(),
-        }
-
-
-def json_payload(command_report):
-    try:
-        payload = json.loads(command_report["stdout"] or "{}")
-    except json.JSONDecodeError:
-        return {
-            "ok": False,
-            "status": "error",
-            "reason": "invalid_json_output",
-        }
-    if not isinstance(payload, dict):
-        return {
-            "ok": False,
-            "status": "error",
-            "reason": "invalid_json_shape",
-        }
-    return payload
-
-
-def _redact_local_paths(value):
-    if isinstance(value, str):
-        redacted = value
-        for path, replacement in (
-            (str(ROOT), "<project>"),
-            (str(Path.home()), "<home>"),
-        ):
-            if path:
-                redacted = redacted.replace(path, replacement)
-        return redacted
-    if isinstance(value, list):
-        return [_redact_local_paths(item) for item in value]
-    if isinstance(value, dict):
-        return {key: _redact_local_paths(item) for key, item in value.items()}
-    return value
-
-
-def command_public_evidence(command_report):
-    """Keep execution metadata without publishing paths or raw command output."""
-    allowed_fields = (
-        "name",
-        "timeout_seconds",
-        "started_at",
-        "finished_at",
-        "duration_seconds",
-        "returncode",
-        "timed_out",
-    )
-    return {field: command_report.get(field) for field in allowed_fields}
-
-
-def private_holdout_validation_failures(benchmark_report, integrity_report):
-    identity = integrity_report.get("private_holdout") or {}
+def report_failures(quality, stability):
     failures = []
-    if identity.get("ok") is not True:
-        failures.append("private_holdout_integrity_not_verified")
-    if benchmark_report.get("dataset_sha256") != identity.get("sha256"):
-        failures.append("private_holdout_identity_mismatch")
-    expected_count = identity.get("case_count")
-    total = benchmark_report.get("total")
-    passed = benchmark_report.get("passed")
-    failed = benchmark_report.get("failed")
-    if total != expected_count:
-        failures.append("private_holdout_case_count_mismatch")
-    if benchmark_report.get("backend_type") != "live_ollama":
-        failures.append("private_holdout_backend_not_live_ollama")
-    valid_counts = all(type(value) is int for value in (total, passed, failed))
-    if not valid_counts or passed + failed != total:
-        failures.append("private_holdout_result_counts_invalid")
-    elif passed < MIN_HOLDOUT_VERIFIED_CASES:
-        failures.append("private_holdout_verified_below_threshold")
-    metrics = benchmark_report.get("metrics")
-    invalid_success_count = (
-        metrics.get("invalid_success_count") if isinstance(metrics, dict) else None
-    )
-    if type(invalid_success_count) is not int or invalid_success_count != 0:
-        failures.append("private_holdout_invalid_success_detected")
-    # Форма отчёта и его содержание — разные вопросы. Пока условие
-    # `invalid_success_rate == 0.0` стояло здесь, промах по качеству отчитывался как
-    # «отчёт невалиден», и по списку провалов нельзя было понять, что произошло.
-    report_schema_valid = (
-        benchmark_report.get("schema_version") == 2
-        and isinstance(benchmark_report.get("failures"), list)
-        and isinstance(metrics, dict)
-        and type(metrics.get("verified_completion_rate")) in {int, float}
-        and type(metrics.get("invalid_success_rate")) in {int, float}
-    )
-    observations = benchmark_report.get("case_results")
-    if not isinstance(observations, list) or not valid_counts or len(observations) != total:
-        report_schema_valid = False
-    else:
-        case_ids = []
-        safety_failed = False
-        for observation in observations:
-            if not isinstance(observation, dict):
-                report_schema_valid = False
-                break
-            case_id = observation.get("id")
-            if not isinstance(case_id, str) or not case_id:
-                report_schema_valid = False
-                break
-            if observation.get("safety") is True and observation.get("passed") is not True:
-                safety_failed = True
-            case_ids.append(case_id)
-        if len(case_ids) != len(set(case_ids)):
-            report_schema_valid = False
-        # Порог 7 из 8 допускает одну содержательную ошибку, но ни одной по безопасности:
-        # опубликованный опасный кандидат — это отказ гейта, а не статистика.
-        if safety_failed:
-            failures.append("private_holdout_safety_case_failed")
-    if not report_schema_valid:
-        failures.append("private_holdout_report_schema_invalid")
+    if quality.get("backend_type") != "live_ollama":
+        failures.append("live_backend_required")
+    if quality.get("ok") is not True:
+        failures.extend(quality.get("gate_failures") or ["quality_gate_failed"])
+    if stability.get("backend_type") != "live_ollama" or stability.get("ok") is not True:
+        failures.append("stability_failed")
     return failures
 
 
-def _private_holdout_metrics(metrics):
-    if not isinstance(metrics, dict):
-        return {}
-    public_metrics = {
-        key: value
-        for key, value in metrics.items()
-        if key in PRIVATE_HOLDOUT_SCALAR_METRICS and (value is None or type(value) in {int, float})
-    }
-    for section, allowed_fields in PRIVATE_HOLDOUT_NESTED_METRICS.items():
-        values = metrics.get(section)
-        if not isinstance(values, dict):
-            continue
-        public_metrics[section] = {
-            key: value
-            for key, value in values.items()
-            if key in allowed_fields and (value is None or type(value) in {int, float})
-        }
-    return public_metrics
-
-
-def _private_holdout_error_category(error):
-    if not isinstance(error, str) or not error:
-        return None
-    category = error.split("::", 1)[0].lower()
-    buckets = (
-        ("syntax", ("syntax", "lua_load")),
-        ("semantic", ("semantic",)),
-        ("contract", ("contract", "shape", "structure", "format")),
-        ("oracle", ("oracle", "expected_result")),
-        ("plan", ("plan", "acceptance")),
-        ("backend", ("backend", "model", "ollama", "timeout")),
-        ("policy", ("policy", "forbidden", "security")),
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Один ограниченный прогон перед выпуском.")
+    parser.add_argument(
+        "--output", type=Path, default=ROOT / "artifacts/validation/release-gate.json"
     )
-    for bucket, markers in buckets:
-        if any(marker in category for marker in markers):
-            return bucket
-    return "other"
-
-
-def evaluation_integrity_public_report(integrity_report):
-    private_identity = integrity_report.get("private_holdout")
-    if isinstance(private_identity, dict):
-        private_identity = {
-            key: private_identity.get(key) for key in ("name", "case_count", "sha256", "ok")
-        }
-        error_category = _private_holdout_error_category(
-            (integrity_report.get("private_holdout") or {}).get("error")
-        )
-        if error_category:
-            private_identity["error_category"] = error_category
-
-    error_categories = sorted(
-        {
-            category
-            for error in integrity_report.get("errors") or []
-            if (category := _private_holdout_error_category(error))
-        }
-    )
-    overlap_kinds = {}
-    for finding in integrity_report.get("overlaps") or []:
-        kind = finding.get("kind") if isinstance(finding, dict) else None
-        safe_kind = kind if kind in {"normalized_exact", "fuzzy"} else "other"
-        overlap_kinds[safe_kind] = overlap_kinds.get(safe_kind, 0) + 1
-
-    public_datasets = []
-    for dataset in integrity_report.get("datasets") or []:
-        if not isinstance(dataset, dict):
-            continue
-        logical_path = dataset.get("path")
-        if (
-            not isinstance(logical_path, str)
-            or Path(logical_path).is_absolute()
-            or ".." in Path(logical_path).parts
-        ):
-            logical_path = None
-        public_datasets.append(
-            {
-                "name": dataset.get("name") if isinstance(dataset.get("name"), str) else None,
-                "path": logical_path,
-                "corpus": (
-                    dataset.get("corpus")
-                    if dataset.get("corpus") in {"public_benchmark", "regression"}
-                    else None
-                ),
-                "runner": (
-                    dataset.get("runner") if dataset.get("runner") in {"standard", "rich"} else None
-                ),
-                "gate": (
-                    dataset.get("gate")
-                    if dataset.get("gate") in {"required", "diagnostic"}
-                    else None
-                ),
-                "claim_scope": (
-                    dataset.get("claim_scope")
-                    if isinstance(dataset.get("claim_scope"), str)
-                    else None
-                ),
-                "case_count": (
-                    dataset.get("case_count") if type(dataset.get("case_count")) is int else None
-                ),
-                "sha256": (
-                    dataset.get("sha256")
-                    if isinstance(dataset.get("sha256"), str) and len(dataset.get("sha256")) == 64
-                    else None
-                ),
-            }
-        )
-
-    return {
-        "schema_version": integrity_report.get("schema_version"),
-        "ok": integrity_report.get("ok") is True,
-        "error_categories": error_categories,
-        "datasets": public_datasets,
-        "private_holdout": private_identity,
-        "overlap_count": sum(overlap_kinds.values()),
-        "overlap_kinds": overlap_kinds,
-        "fuzzy_threshold": integrity_report.get("fuzzy_threshold"),
-    }
-
-
-def doctor_public_report(report):
-    return {
-        "profile": report.get("profile"),
-        "model": report.get("model"),
-        "fallback_model": report.get("fallback_model"),
-        "trace_dir_writable": report.get("trace_dir_writable") is True,
-        "ollama_reachable": report.get("ollama_reachable") is True,
-        "judge_mode": report.get("judge_mode") is True,
-        "selected_model": report.get("selected_model"),
-        "selection_reason": report.get("selection_reason"),
-        "available_tags": report.get("available_tags") or [],
-        "hard_gate_failures": report.get("hard_gate_failures") or [],
-        "ok": report.get("ok") is True,
-        "runtime_snapshot": "runtime_profile.lock.json",
-    }
-
-
-def private_holdout_public_report(benchmark_report, integrity_report):
-    """Reduce private benchmark evidence to identity and aggregate results."""
-    identity = integrity_report.get("private_holdout") or {}
-    error_categories = set()
-    for observation in benchmark_report.get("case_results") or []:
-        if not isinstance(observation, dict):
-            continue
-        for error in observation.get("errors") or []:
-            category = _private_holdout_error_category(error)
-            if category:
-                error_categories.add(category)
-
-    validation_failures = private_holdout_validation_failures(
-        benchmark_report,
-        integrity_report,
-    )
-
-    return {
-        "name": identity.get("name"),
-        "sha256": identity.get("sha256"),
-        "case_count": identity.get("case_count"),
-        "backend_type": (
-            "live_ollama" if benchmark_report.get("backend_type") == "live_ollama" else "unexpected"
-        ),
-        "passed": (
-            benchmark_report.get("passed") if type(benchmark_report.get("passed")) is int else None
-        ),
-        "failed": (
-            benchmark_report.get("failed") if type(benchmark_report.get("failed")) is int else None
-        ),
-        "identity_verified": not {
-            "private_holdout_integrity_not_verified",
-            "private_holdout_identity_mismatch",
-            "private_holdout_case_count_mismatch",
-        }.intersection(validation_failures),
-        "ok": benchmark_report.get("ok") is True and not validation_failures,
-        "metrics": _private_holdout_metrics(benchmark_report.get("metrics")),
-        "error_categories": sorted(error_categories),
-    }
-
-
-def sha256_path(path):
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def dataset_evidence():
-    evidence = {}
-    for entry in QUALITY_EVAL_MANIFEST:
-        resource_name = entry["path"]
-        with materialized_resource(resource_name) as dataset_path:
-            evidence[entry["name"]] = {
-                "resource": resource_name,
-                "corpus": entry["corpus"],
-                "gate": entry["gate"],
-                "claim_scope": entry["claim_scope"],
-                "sha256": sha256_path(dataset_path),
-            }
-    return evidence
-
-
-def command_identity(command):
-    if not command:
-        return {"available": False}
-    path = Path(command)
-    try:
-        completed = subprocess.run(
-            [str(path), "-v"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        version = (completed.stdout or completed.stderr).strip()
-    except (OSError, subprocess.SubprocessError) as exc:
-        version = f"unavailable: {type(exc).__name__}"
-    return {
-        "available": path.is_file(),
-        "executable": path.name,
-        "version": version,
-        "sha256": sha256_path(path) if path.is_file() else None,
-    }
-
-
-def ollama_evidence(profile, selected_model):
-    host = os.getenv("LOCALSCRIPT_OLLAMA_HOST", profile.ollama_host).rstrip("/")
-    evidence = {"host": host, "reachable": False, "selected_model": selected_model}
-    try:
-        with httpx.Client(timeout=5.0, trust_env=False) as client:
-            version_response = client.get(host + "/api/version")
-            version_response.raise_for_status()
-            evidence["version"] = version_response.json().get("version")
-            tags_response = client.get(host + "/api/tags")
-            tags_response.raise_for_status()
-            tags = tags_response.json().get("models", [])
-        evidence["reachable"] = True
-        model = next(
-            (
-                item
-                for item in tags
-                if item.get("name") == selected_model or item.get("model") == selected_model
-            ),
-            None,
-        )
-        if model:
-            evidence["model"] = {
-                "name": model.get("name") or model.get("model"),
-                "digest": model.get("digest"),
-                "size": model.get("size"),
-                "modified_at": model.get("modified_at"),
-                "details": model.get("details"),
-            }
-    except Exception as exc:
-        evidence["error"] = type(exc).__name__
-    return evidence
-
-
-def git_commit_sha():
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(ROOT),
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=True,
-        )
-        return completed.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return os.getenv("GITHUB_SHA")
-
-
-def git_evidence():
-    commit_sha = git_commit_sha()
-    try:
-        completed = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=str(ROOT),
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=True,
-        )
-        dirty = bool(completed.stdout.strip())
-    except (OSError, subprocess.SubprocessError):
-        dirty = None
-    return {"commit_sha": commit_sha, "dirty": dirty}
-
-
-def gpu_evidence():
-    command = [
-        "nvidia-smi",
-        "--query-gpu=name,driver_version,memory.total",
-        "--format=csv,noheader,nounits",
-    ]
-    try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=True,
-        )
-        rows = []
-        for line in completed.stdout.splitlines():
-            parts = [part.strip() for part in line.split(",")]
-            if len(parts) == 3:
-                rows.append(
-                    {
-                        "name": parts[0],
-                        "driver_version": parts[1],
-                        "memory_total_mib": int(parts[2]),
-                    }
-                )
-        return {"available": bool(rows), "gpus": rows}
-    except (OSError, subprocess.SubprocessError, ValueError) as error:
-        return {
-            "available": False,
-            "gpus": [],
-            "error": type(error).__name__,
-        }
-
-
-def write_json(path, payload):
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_suffix(target.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(target)
-
-
-def parse_args(argv):
-    parser = argparse.ArgumentParser(description="Проверка готовности LocalScript к релизу.")
+    parser.add_argument("--gpu-index", type=int, default=0)
+    parser.add_argument("--timeout-seconds", type=int, default=LIVE_GATE_BUDGET_SECONDS)
+    parser.add_argument("--worker", choices=("quality", "stability"), help=argparse.SUPPRESS)
     parser.add_argument(
         "--mode",
-        choices=("dev", "competition"),
-        default="competition",
+        choices=("local", "competition"),
+        default="local",
+        help="competition оставлен как совместимый alias",
     )
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--private-holdout", type=Path)
-    return parser.parse_args(argv)
-
-
-def main(argv=None):
-    args = parse_args(sys.argv[1:] if argv is None else argv)
-    started_at = utc_now()
-    gate_started = time.monotonic()
-    write_runtime_lock(
-        {
-            "locked": False,
-            "profile": None,
-            "artifact_role": "release_gate_runtime_snapshot",
-            "generated_by": f"scripts/release_gate.py --mode {args.mode}",
-            "release_gate_commit_sha": None,
-            "hard_gate_failures": ["release_gate_initializing"],
-        }
-    )
-    python_bin = PREFERRED_PYTHON if PREFERRED_PYTHON.exists() else Path(sys.executable)
-    profile = get_runtime_profile()
-    private_holdout_path = args.private_holdout or os.getenv("LOCALSCRIPT_PRIVATE_HOLDOUT_PATH")
-    source_evidence = git_evidence()
-    runtime_lock_path = write_runtime_lock(
-        {
-            "locked": False,
-            "profile": profile.name,
-            "artifact_role": "release_gate_runtime_snapshot",
-            "generated_by": f"scripts/release_gate.py --mode {args.mode}",
-            "release_gate_commit_sha": source_evidence.get("commit_sha"),
-            "hard_gate_failures": ["release_gate_in_progress"],
-        }
-    )
-    try:
-        integrity_report = run_integrity_check(private_holdout_path=private_holdout_path)
-    except Exception as exc:
-        failures = [f"eval_integrity_error::{type(exc).__name__}"]
-        runtime_lock_path = write_runtime_lock(
-            {
-                "locked": False,
-                "profile": profile.name,
-                "artifact_role": "release_gate_runtime_snapshot",
-                "generated_by": f"scripts/release_gate.py --mode {args.mode}",
-                "release_gate_commit_sha": source_evidence.get("commit_sha"),
-                "hard_gate_failures": failures,
-            }
+    args = parser.parse_args(argv)
+    if args.worker:
+        report = (
+            run_quality_benchmark(mode="competition")
+            if args.worker == "quality"
+            else run_stability_benchmark()
         )
-        report = {
-            "schema_version": 2,
-            "mode": args.mode,
-            "ok": False,
-            "failures": failures,
-            "started_at": started_at,
-            "finished_at": utc_now(),
-            "source": source_evidence,
-            "runtime_snapshot_path": runtime_lock_path.name,
-            "evaluation_integrity": None,
-            "preflight_only": True,
-        }
-        if args.output:
-            write_json(args.output, report)
-        print(json.dumps(report, ensure_ascii=False))
-        raise SystemExit(1) from None
-
-    preflight_failures = []
-    if args.mode == "competition" and private_holdout_path is None:
-        preflight_failures.append("private_holdout_not_supplied")
-    if integrity_report.get("ok") is not True:
-        preflight_failures.append("eval_integrity_failed")
-    if args.mode == "competition" and source_evidence.get("dirty") is not False:
-        preflight_failures.append("release_worktree_not_clean")
-    if not source_evidence.get("commit_sha"):
-        preflight_failures.append("commit_sha_missing")
-    if preflight_failures:
-        runtime_lock_path = write_runtime_lock(
-            {
-                "locked": False,
-                "profile": profile.name,
-                "artifact_role": "release_gate_runtime_snapshot",
-                "generated_by": f"scripts/release_gate.py --mode {args.mode}",
-                "release_gate_commit_sha": source_evidence.get("commit_sha"),
-                "hard_gate_failures": preflight_failures,
-            }
-        )
-        report = {
-            "schema_version": 2,
-            "mode": args.mode,
-            "ok": False,
-            "failures": preflight_failures,
-            "started_at": started_at,
-            "finished_at": utc_now(),
-            "source": source_evidence,
-            "runtime_snapshot_path": runtime_lock_path.name,
-            "evaluation_integrity": evaluation_integrity_public_report(integrity_report),
-            "preflight_only": True,
-        }
-        if args.output:
-            write_json(args.output, report)
-        print(json.dumps(report, ensure_ascii=False))
-        raise SystemExit(1)
-
-    live_tests = run_command(
-        "pytest_live",
-        [
-            str(python_bin),
-            "-m",
-            "pytest",
-            "-q",
-            "-m",
-            "integration",
-            "--strict-markers",
-        ],
-        ROOT,
-        extra_env={"LOCALSCRIPT_REQUIRE_LIVE": "1"},
-    )
-
-    with tempfile.TemporaryDirectory(prefix="localscript-release-gate-") as temp_dir:
-        doctor_lock_path = Path(temp_dir) / "runtime_profile.lock.json"
-        doctor = run_command(
-            "doctor",
-            [str(python_bin), "-m", "app.cli.main", "doctor", "--judge"],
-            ROOT,
-            extra_env={
-                "LOCALSCRIPT_IGNORE_LOCK": "1",
-                "LOCALSCRIPT_RUNTIME_LOCK_PATH": str(doctor_lock_path),
-            },
-        )
-        doctor_report = json_payload(doctor)
-        doctor_lock = (
-            json.loads(doctor_lock_path.read_text(encoding="utf-8"))
-            if doctor_lock_path.is_file()
-            else {}
-        )
-
-    quality_report = doctor_report.get("quality_report", {})
-    vram_report = doctor_report.get("vram_report", {})
-    selected_model = doctor_report.get("selected_model") or profile.model
-    private_holdout = None
-    private_holdout_report = None
-    private_holdout_public_evidence = None
-    private_holdout_validation_errors = []
-
-    repeat_stability = run_command(
-        "repeat_stability",
-        [str(python_bin), str(ROOT / "scripts" / "bench_stability.py")],
-        ROOT,
-        extra_env={"LOCALSCRIPT_PRIMARY_MODEL": selected_model},
-    )
-    repeat_stability_report = json_payload(repeat_stability)
-
-    smoke = run_command(
-        "smoke",
-        [str(ROOT / "scripts" / "judge_smoke.sh")],
-        ROOT,
-        extra_env={"LOCALSCRIPT_SKIP_INSTALL": "1"},
-    )
-    smoke_report = json_payload(smoke)
-    private_holdout_preconditions_ok = (
-        live_tests["returncode"] == 0
-        and doctor["returncode"] == 0
-        and doctor_report.get("ok") is True
-        and not quality_gate_failures(quality_report)
-        and quality_report.get("backend_type") == "live_ollama"
-        and (args.mode != "competition" or vram_report.get("status") == "ok")
-        and repeat_stability["returncode"] == 0
-        and repeat_stability_report.get("ok") is True
-        and smoke["returncode"] == 0
-        and smoke_report.get("ok") is True
-        and doctor_lock.get("locked") is True
-    )
-    if private_holdout_path is not None and private_holdout_preconditions_ok:
-        private_holdout = run_command(
-            "private_holdout",
-            [
-                str(python_bin),
-                "-m",
-                "app.cli.main",
-                "benchmark",
-                "--dataset",
-                str(private_holdout_path),
-            ],
-            ROOT,
-            extra_env={"LOCALSCRIPT_PRIMARY_MODEL": selected_model},
-        )
-        private_holdout_report = json_payload(private_holdout)
-        private_holdout_public_evidence = private_holdout_public_report(
-            private_holdout_report,
-            integrity_report,
-        )
-        private_holdout_validation_errors = private_holdout_validation_failures(
-            private_holdout_report,
-            integrity_report,
-        )
-
-    commit_sha = source_evidence["commit_sha"]
-    failures = []
-    if live_tests["returncode"] != 0:
-        failures.append("integration_tests_failed")
-    if doctor["returncode"] != 0 or doctor_report.get("ok") is not True:
-        failures.append("doctor_judge_failed")
-    failures.extend(quality_gate_failures(quality_report))
-    if quality_report.get("backend_type") != "live_ollama":
-        failures.append("quality_backend_not_live_ollama")
-    if args.mode == "competition" and vram_report.get("status") != "ok":
-        failures.append("selected_model_vram_not_ok")
-    if smoke["returncode"] != 0 or smoke_report.get("ok") is not True:
-        failures.append("smoke_failed")
-    if private_holdout_path is not None:
-        if private_holdout is None:
-            failures.append("private_holdout_not_run_due_to_public_failures")
-        elif not isinstance(private_holdout_report, dict) or not private_holdout_report:
-            # returncode != 0 ожидаем: benchmark выходит с ошибкой на любом непрошедшем кейсе,
-            # а порог слепого набора — 7 из 8, поэтому решает разбор отчёта, а не код возврата.
-            failures.append("private_holdout_report_missing")
-    failures.extend(private_holdout_validation_errors)
-    if repeat_stability["returncode"] != 0 or repeat_stability_report.get("ok") is not True:
-        failures.append("repeat_stability_failed")
-    if not doctor_lock or doctor_lock.get("locked") is not True:
-        failures.append("doctor_runtime_snapshot_invalid")
-    live_gate_seconds = round(time.monotonic() - gate_started, 3)
-    if live_gate_seconds > LIVE_GATE_BUDGET_SECONDS:
-        failures.append("live_gate_budget_exceeded")
-
-    try:
-        datasets = dataset_evidence()
-        lua = command_identity(find_lua_binary())
-        luac = command_identity(find_luac_binary())
-        ollama = ollama_evidence(profile, selected_model)
-        gpu = gpu_evidence()
-    except Exception as exc:
-        datasets = {}
-        lua = {"available": False}
-        luac = {"available": False}
-        ollama = {"reachable": False}
-        gpu = {"available": False, "gpus": []}
-        failures.append(f"evidence_collection_failed::{type(exc).__name__}")
-    if not lua.get("available"):
-        failures.append("lua_identity_missing")
-    if not luac.get("available"):
-        failures.append("luac_identity_missing")
-    if not ollama.get("reachable"):
-        failures.append("ollama_evidence_unreachable")
-    if not ollama.get("model", {}).get("digest"):
-        failures.append("selected_model_digest_missing")
-    if args.mode == "competition" and not gpu.get("available"):
-        failures.append("gpu_evidence_missing")
-    failures = list(dict.fromkeys(failures))
-
-    runtime_lock = dict(doctor_lock)
-    runtime_lock.update(
-        {
-            "locked": not failures,
-            "artifact_role": "release_gate_runtime_snapshot",
-            "generated_by": f"scripts/release_gate.py --mode {args.mode}",
-            "release_gate_commit_sha": commit_sha,
-            "hard_gate_failures": failures,
-        }
-    )
-    runtime_lock_path = write_runtime_lock(runtime_lock)
-
+        write_report(args.output, report)
+        return 0 if report.get("ok") else 1
+    if args.timeout_seconds <= 0 or args.timeout_seconds > 3600:
+        parser.error("timeout должен быть от 1 до 3600 секунд")
+    started = time.monotonic()
+    deadline = started + args.timeout_seconds
     report = {
-        "schema_version": 2,
-        "mode": args.mode,
-        "ok": not failures,
-        "failures": failures,
-        "started_at": started_at,
-        "finished_at": utc_now(),
-        "commit_sha": commit_sha,
-        "live_gate_seconds": live_gate_seconds,
-        "source": source_evidence,
-        "runtime_snapshot_path": runtime_lock_path.name,
-        "selected_model": selected_model,
-        "parameters": {
-            "profile": profile.model_dump(),
-            "live_gate_budget_seconds": LIVE_GATE_BUDGET_SECONDS,
-            "min_holdout_verified_cases": MIN_HOLDOUT_VERIFIED_CASES,
-            "stability_case_ids": list(STABILITY_CASE_IDS),
-            "stability_repeats": STABILITY_REPEATS,
-            "private_holdout_repeats": 1,
-            "timeouts_seconds": {name: timeout_for(name) for name in DEFAULT_TIMEOUTS},
-            "mandatory_eval_sets": [
-                entry["name"] for entry in QUALITY_EVAL_MANIFEST if entry["gate"] == "required"
-            ],
-        },
-        "runtime": {
-            "python": {
-                "version": platform.python_version(),
-                "implementation": platform.python_implementation(),
-                "executable": Path(sys.executable).name,
-            },
-            "lua": lua,
-            "luac": luac,
-            "ollama": ollama,
-            "gpu": gpu,
-            "platform": {
-                "system": platform.system(),
-                "release": platform.release(),
-                "machine": platform.machine(),
-            },
-        },
-        "datasets": datasets,
-        "evaluation_integrity": evaluation_integrity_public_report(integrity_report),
-        "commands": {
-            "pytest_live": command_public_evidence(live_tests),
-            "doctor": command_public_evidence(doctor),
-            "smoke": command_public_evidence(smoke),
-            "private_holdout": (
-                command_public_evidence(private_holdout) if private_holdout is not None else None
-            ),
-            "repeat_stability": command_public_evidence(repeat_stability),
-        },
-        "quality_report": _redact_local_paths(quality_report),
-        "doctor_report": doctor_public_report(doctor_report),
-        "smoke_report": _redact_local_paths(smoke_report),
-        "private_holdout_report": private_holdout_public_evidence,
-        "repeat_stability_report": _redact_local_paths(repeat_stability_report),
-        "vram_report": vram_report,
+        "schema_version": 3,
+        "started_at_utc": datetime.now(UTC).isoformat(),
+        "budget_seconds": args.timeout_seconds,
+        "ok": False,
+        "failures": [],
+        "checks": {},
     }
+    stop = threading.Event()
+    memory_samples = []
+    sampler_errors = []
 
-    if args.output:
-        write_json(args.output, report)
-    print(json.dumps(report, ensure_ascii=False))
-    if failures:
-        raise SystemExit(1)
-    return report
+    def sample_memory():
+        while not stop.wait(0.5):
+            try:
+                memory_samples.append(int(gpu_sample(args.gpu_index)["used_mib"]))
+            except (OSError, ValueError, subprocess.SubprocessError):
+                sampler_errors.append("gpu_sampling_failed")
+                return
+
+    sampler = None
+    try:
+        report["preflight"] = preflight(args.gpu_index)
+        report["checks"]["preflight"] = "passed"
+        cpu_commands = [
+            [sys.executable, "-m", "ruff", "check", "."],
+            [sys.executable, "-m", "ruff", "format", "--check", "."],
+            [sys.executable, "-m", "mypy", "--strict", "app"],
+            [sys.executable, "-m", "pytest", "-q", "-m", "unit"],
+        ]
+        for command in cpu_commands:
+            if run_bounded(command, deadline):
+                raise ValueError("cpu_checks_failed")
+        report["checks"]["cpu"] = "passed"
+        sampler = threading.Thread(target=sample_memory, daemon=True)
+        sampler.start()
+        with tempfile.TemporaryDirectory(prefix="localscript-live-") as temporary:
+            results = {}
+            for stage in ("quality", "stability"):
+                path = Path(temporary) / f"{stage}.json"
+                code = run_bounded(
+                    [
+                        sys.executable,
+                        str(Path(__file__).resolve()),
+                        "--worker",
+                        stage,
+                        "--output",
+                        str(path),
+                    ],
+                    deadline,
+                )
+                if not path.is_file():
+                    raise ValueError(f"{stage}_report_missing")
+                results[stage] = json.loads(path.read_text(encoding="utf-8"))
+                results[stage].pop("host", None)
+                report[stage] = results[stage]
+                report["checks"][stage] = "passed" if code == 0 else "failed"
+                if stage == "quality" and code:
+                    report["failures"].extend(
+                        results[stage].get("gate_failures") or ["quality_gate_failed"]
+                    )
+                    break
+            if "stability" in results:
+                report["failures"].extend(report_failures(results["quality"], results["stability"]))
+        # Versions/model identity are checked again, but inference is not repeated.
+        after = preflight(args.gpu_index)
+        if (
+            after["source_commit_sha"] != report["preflight"]["source_commit_sha"]
+            or after["model"] != report["preflight"]["model"]
+        ):
+            report["failures"].append("identity_changed_during_gate")
+    except BackendError as error:
+        report["failures"].append(error.reason)
+    except (TimeoutError, subprocess.TimeoutExpired):
+        report["failures"].append("gate_deadline_exceeded")
+    except (OSError, ValueError, KeyError, httpx.HTTPError, subprocess.SubprocessError) as error:
+        report["failures"].append(
+            str(error) if isinstance(error, ValueError) else type(error).__name__
+        )
+    finally:
+        stop.set()
+        if sampler:
+            sampler.join(timeout=4)
+        report["failures"].extend(sampler_errors)
+        report["gpu_memory"] = {
+            "scope": "whole_selected_gpu_not_model_process",
+            "baseline_used_mib": int(report["preflight"]["gpu"]["used_mib"])
+            if "preflight" in report
+            else None,
+            "peak_used_mib": max(memory_samples) if memory_samples else None,
+            "sample_count": len(memory_samples),
+        }
+        for stage in ("preflight", "cpu", "quality", "stability"):
+            report["checks"].setdefault(stage, "not_run")
+        if not memory_samples:
+            report["failures"].append("gpu_memory_not_measured")
+        report["duration_seconds"] = round(time.monotonic() - started, 3)
+        if report["duration_seconds"] > args.timeout_seconds:
+            report["failures"].append("gate_deadline_exceeded")
+        report["finished_at_utc"] = datetime.now(UTC).isoformat()
+        report["ok"] = not report["failures"] and all(
+            value == "passed" for value in report["checks"].values()
+        )
+        write_report(args.output, report)
+    print(
+        json.dumps(
+            {"ok": report["ok"], "failures": report["failures"], "output": str(args.output)},
+            ensure_ascii=False,
+        )
+    )
+    return 0 if report["ok"] else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

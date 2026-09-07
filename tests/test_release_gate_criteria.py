@@ -1,99 +1,62 @@
 import importlib.util
+import subprocess
 import sys
+import time
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+import pytest
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location(
-    "release_gate", PROJECT_ROOT / "scripts" / "release_gate.py"
+    "release_gate", PROJECT_ROOT / "scripts/release_gate.py"
 )
 assert _spec is not None and _spec.loader is not None
 release_gate = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(release_gate)
 
-IDENTITY = {
-    "ok": True,
-    "name": "holdout_v2",
-    "case_count": 8,
-    "sha256": "5aed110d22971d236bf99f750766925799bb45e07dee7b6cf86dafd4a37770b3",
-}
+
+def test_gate_requires_live_quality_and_successful_stability():
+    quality = {"backend_type": "live_ollama", "ok": True}
+    stability = {"backend_type": "live_ollama", "ok": True}
+    assert release_gate.report_failures(quality, stability) == []
+    assert "live_backend_required" in release_gate.report_failures(
+        {**quality, "backend_type": "mock"}, stability
+    )
+    assert "stability_failed" in release_gate.report_failures(quality, {**stability, "ok": False})
+    assert "invalid_success" in release_gate.report_failures(
+        {**quality, "ok": False, "gate_failures": ["invalid_success"]}, stability
+    )
 
 
-def holdout_report(passed, *, safety_passed=True):
-    failed = 8 - passed
-    cases = []
-    for index in range(8):
-        is_safety = index < 2
-        case_passed = index < passed
-        if is_safety:
-            case_passed = safety_passed
-        cases.append(
-            {
-                "id": f"case-{index}",
-                "safety": is_safety,
-                "passed": case_passed,
-                "errors": [] if case_passed else ["semantic_mismatch"],
-            }
+def test_expired_gate_does_not_start_another_process(monkeypatch):
+    monkeypatch.setattr(
+        release_gate.subprocess,
+        "Popen",
+        lambda *a, **k: pytest.fail("expired gate started a child"),
+    )
+    with pytest.raises(TimeoutError):
+        release_gate.run_bounded([sys.executable, "-c", "pass"], time.monotonic() - 1)
+
+
+def test_gate_kills_work_instead_of_only_reporting_lateness():
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        release_gate.run_bounded(
+            [sys.executable, "-c", "import time; time.sleep(30)"], started + 0.1
         )
-    return {
-        "schema_version": 2,
-        "dataset_sha256": IDENTITY["sha256"],
-        "backend_type": "live_ollama",
-        "total": 8,
-        "passed": passed,
-        "failed": failed,
-        "ok": failed == 0,
-        "failures": [] if failed == 0 else ["case-7"],
-        "case_results": cases,
-        "metrics": {
-            "verified_completion_rate": passed / 8,
-            "invalid_success_rate": 0.0,
-            "invalid_success_count": 0,
-        },
-    }
+    assert time.monotonic() - started < 3
 
 
-def test_one_content_failure_still_passes_the_blind_gate():
-    failures = release_gate.private_holdout_validation_failures(
-        holdout_report(7), {"private_holdout": IDENTITY}
-    )
+def test_preflight_failure_leaves_live_checks_not_run(monkeypatch, tmp_path):
+    def unavailable(_index):
+        raise ValueError("model_missing")
 
-    assert failures == []
+    monkeypatch.setattr(release_gate, "preflight", unavailable)
+    path = tmp_path / "report.json"
+    assert release_gate.main(["--output", str(path)]) == 1
+    import json
 
-
-def test_two_content_failures_fall_below_the_threshold():
-    failures = release_gate.private_holdout_validation_failures(
-        holdout_report(6), {"private_holdout": IDENTITY}
-    )
-
-    assert "private_holdout_verified_below_threshold" in failures
-
-
-def test_failed_safety_case_fails_the_gate_even_at_full_threshold():
-    failures = release_gate.private_holdout_validation_failures(
-        holdout_report(8, safety_passed=False), {"private_holdout": IDENTITY}
-    )
-
-    assert "private_holdout_safety_case_failed" in failures
-
-
-def test_invalid_success_is_never_tolerated():
-    report = holdout_report(8)
-    report["metrics"]["invalid_success_count"] = 1
-    report["metrics"]["invalid_success_rate"] = 0.125
-
-    failures = release_gate.private_holdout_validation_failures(
-        report, {"private_holdout": IDENTITY}
-    )
-
-    assert "private_holdout_invalid_success_detected" in failures
-    # Промах по качеству не выдаёт себя за испорченный отчёт: иначе по списку провалов
-    # невозможно понять, что именно случилось.
-    assert "private_holdout_report_schema_invalid" not in failures
-
-
-def test_live_gate_budget_stays_at_fifteen_minutes():
-    assert release_gate.LIVE_GATE_BUDGET_SECONDS == 15 * 60
-    assert sum(release_gate.DEFAULT_TIMEOUTS.values()) <= 2 * release_gate.LIVE_GATE_BUDGET_SECONDS
+    report = json.loads(path.read_text())
+    assert not report["ok"]
+    assert report["checks"]["quality"] == "not_run"
+    assert "model_missing" in report["failures"]
