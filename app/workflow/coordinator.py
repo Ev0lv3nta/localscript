@@ -106,6 +106,7 @@ class WorkflowCoordinator:
                 )
                 if part
             )
+            self._observe(observe, WorkflowStage.PLANNING)
             decision = self.planner.run(
                 prompt=prompt,
                 context_sample=context_sample,
@@ -140,6 +141,7 @@ class WorkflowCoordinator:
                 # Противоречивый план восстановим ровно так же, как невалидный код: планировщик
                 # получает свои же замечания и одну попытку. Отказывать сразу было асимметрично —
                 # коду правка полагалась, а плану нет.
+                self._observe(observe, WorkflowStage.PLANNING)
                 decision = self.planner.run(
                     prompt=prompt,
                     context_sample=context_sample,
@@ -163,6 +165,7 @@ class WorkflowCoordinator:
                 if not plan_check.ok:
                     return self._failure(plan_check, WorkflowStage.PLANNED)
 
+            self._observe(observe, WorkflowStage.GENERATING)
             candidate = self.generator.run(prompt=prompt, plan=plan)
             state = WorkflowState(
                 stage=WorkflowStage.GENERATED,
@@ -170,6 +173,7 @@ class WorkflowCoordinator:
                 candidate=candidate,
             )
             self._observe(observe, state.stage)
+            self._observe(observe, WorkflowStage.VALIDATING)
             validation = self.validator.validate(
                 candidate=candidate, plan=plan, context=actual_context, examples=examples
             )
@@ -182,6 +186,7 @@ class WorkflowCoordinator:
             self._observe(observe, state.stage)
             review: ReviewDecision | None = None
             if validation.ok:
+                self._observe(observe, WorkflowStage.REVIEWING)
                 review = self.reviewer.run(
                     prompt=prompt,
                     plan=plan,
@@ -205,6 +210,7 @@ class WorkflowCoordinator:
                         output=plan.output,
                     )
 
+            self._observe(observe, WorkflowStage.REVISING)
             revised = self.generator.revise(
                 prompt=prompt,
                 plan=plan,
@@ -219,6 +225,7 @@ class WorkflowCoordinator:
                 revision_count=1,
             )
             self._observe(observe, state.stage)
+            self._observe(observe, WorkflowStage.VALIDATING)
             revised_validation = self.validator.validate(
                 candidate=revised, plan=plan, context=actual_context, examples=examples
             )
@@ -236,6 +243,7 @@ class WorkflowCoordinator:
                     WorkflowStage.VALIDATED,
                     revision_count=1,
                 )
+            self._observe(observe, WorkflowStage.REVIEWING)
             revised_review = self.reviewer.run(
                 prompt=prompt,
                 plan=plan,
@@ -412,5 +420,11 @@ class WorkflowCoordinator:
 
     @staticmethod
     def _observe(observer: StageObserver | None, stage: WorkflowStage) -> None:
-        if observer is not None:
+        if observer is not None and stage not in {
+            WorkflowStage.PLANNED,
+            WorkflowStage.GENERATED,
+            WorkflowStage.VALIDATED,
+            WorkflowStage.REVIEWED,
+            WorkflowStage.REVISED,
+        }:
             observer(stage)

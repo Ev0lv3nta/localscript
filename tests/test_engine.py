@@ -90,10 +90,10 @@ def test_engine_runs_typed_workflow_and_writes_sanitized_trace(tmp_path):
     assert trace["diagnostic_codes"] == []
     assert [event["stage"] for event in trace["stage_events"]] == [
         "received",
-        "planned",
-        "generated",
-        "validated",
-        "reviewed",
+        "planning",
+        "generating",
+        "validating",
+        "reviewing",
         "completed",
     ]
 

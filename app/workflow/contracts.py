@@ -196,6 +196,11 @@ class ValidationResult(StrictModel):
 
 
 class WorkflowStage(StrEnum):
+    PLANNING = "planning"
+    GENERATING = "generating"
+    VALIDATING = "validating"
+    REVIEWING = "reviewing"
+    REVISING = "revising"
     RECEIVED = "received"
     PLANNED = "planned"
     GENERATED = "generated"
@@ -217,6 +222,14 @@ class WorkflowState(StrictModel):
 
     @model_validator(mode="after")
     def validate_stage_payload(self) -> WorkflowState:
+        if self.stage in {
+            WorkflowStage.PLANNING,
+            WorkflowStage.GENERATING,
+            WorkflowStage.VALIDATING,
+            WorkflowStage.REVIEWING,
+            WorkflowStage.REVISING,
+        }:
+            raise ValueError("operation events are not persisted workflow states")
         empty = self.plan is None and self.candidate is None and self.validation is None
         if self.stage in {
             WorkflowStage.RECEIVED,

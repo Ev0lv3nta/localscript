@@ -9,6 +9,7 @@ from typing import Protocol
 from pydantic import TypeAdapter, ValidationError
 
 from app.core.budgets import remaining_seconds, workflow_budget
+from app.generation.backend_errors import BackendTimeout
 from app.validation.lua_ast import analyze_lua_output
 from app.validation.output import OutputParseError, parse_output
 from app.validation.runtime import find_lua_binary, find_luac_binary, runtime_version
@@ -144,6 +145,8 @@ class DeterministicCandidateValidator:
                     plan.output.format.value,
                     plan.output.shape.value,
                 )
+            except BackendTimeout:
+                raise
             except Exception:
                 checks.append(
                     self._failed(
@@ -224,6 +227,16 @@ class DeterministicCandidateValidator:
         output: OutputContract,
         context: dict[str, JsonValue],
     ) -> ValidationResult:
+        with workflow_budget(20):
+            return self._validate_existing(candidate=candidate, output=output, context=context)
+
+    def _validate_existing(
+        self,
+        *,
+        candidate: CodeCandidate,
+        output: OutputContract,
+        context: dict[str, JsonValue],
+    ) -> ValidationResult:
         """Validate and execute caller-supplied code without inventing expected semantics."""
         checks: list[ValidationCheck] = []
         contract_check, chunks = self._validate_format(candidate.code, output.format)
@@ -233,6 +246,8 @@ class DeterministicCandidateValidator:
 
         try:
             policy = self._policy_analyzer(candidate.code, output.format.value)
+        except BackendTimeout:
+            raise
         except Exception:
             checks.append(
                 self._failed(
@@ -262,6 +277,8 @@ class DeterministicCandidateValidator:
                 output.format.value,
                 output.shape.value,
             )
+        except BackendTimeout:
+            raise
         except Exception:
             checks.append(
                 self._failed(
@@ -336,6 +353,8 @@ class DeterministicCandidateValidator:
     def _compile_chunks(self, chunks: tuple[str, ...]) -> ValidationCheck:
         try:
             luac = self._luac_locator()
+        except BackendTimeout:
+            raise
         except Exception:
             return self._failed(
                 "luac",
@@ -380,6 +399,8 @@ class DeterministicCandidateValidator:
                     "luac_execution_failed",
                     "luac could not check the candidate.",
                 )
+            except BackendTimeout:
+                raise
             except Exception:
                 return self._failed(
                     "luac",
