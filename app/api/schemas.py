@@ -1,9 +1,10 @@
 from typing import Annotated
 
-from pydantic import BaseModel, Field, JsonValue, model_validator
+from pydantic import BaseModel, Field, JsonValue, field_validator, model_validator
 
 from app.generation.results import SessionSummary
 from app.workflow.contracts import (
+    AcceptanceCase,
     OutputContract,
     StrictModel,
     ValidationResult,
@@ -33,6 +34,21 @@ class GenerateRequest(BaseModel):
     session_id: SessionIdText | None = None
     feedback: FeedbackText | None = None
     clarification_answer: ClarificationAnswerText | None = None
+    output: OutputContract | None = None
+    examples: tuple[AcceptanceCase, ...] = Field(default=(), max_length=3)
+
+    @field_validator("prompt", "feedback", "clarification_answer")
+    @classmethod
+    def reject_empty_text(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("value must not be empty")
+        return value
+
+    @model_validator(mode="after")
+    def require_prompt_or_session(self) -> "GenerateRequest":
+        if self.prompt is None and self.session_id is None:
+            raise ValueError("prompt or session_id is required")
+        return self
 
 
 class GenerateResponse(StrictModel):
@@ -43,6 +59,7 @@ class GenerateResponse(StrictModel):
     question: str | None = None
     diagnostics: tuple[WorkflowDiagnostic, ...] = ()
     validation: ValidationResult | None = None
+    output: OutputContract | None = None
     revision_count: int = 0
 
     @model_validator(mode="after")
@@ -96,6 +113,7 @@ class ExampleEntry(BaseModel):
     title: str
     prompt: str
     context: JsonValue = None
+    output: OutputContract | None = None
     description: str | None = None
 
 
@@ -107,6 +125,16 @@ class ValidateRequest(BaseModel):
     code: CodeText
     context: dict[str, JsonValue]
     output: OutputContract
+
+    @field_validator("code")
+    @classmethod
+    def reject_empty_or_fenced_code(cls, value: str) -> str:
+        rendered = value.strip()
+        if not rendered:
+            raise ValueError("code must not be empty")
+        if rendered.startswith("```") or rendered.endswith("```"):
+            raise ValueError("code must not contain markdown fences")
+        return rendered
 
 
 class ValidateResponse(BaseModel):

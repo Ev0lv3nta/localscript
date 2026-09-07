@@ -5,8 +5,12 @@ const state = {
   latestSession: {},
   latestValidation: {},
   latestTrace: {},
+  outputContract: null,
+  draftOutputContract: null,
   timeline: [],
   busy: false,
+  requestVersion: 0,
+  activeController: null,
 };
 
 const statusLabels = {
@@ -20,6 +24,11 @@ const statusLabels = {
 
 const stageLabels = {
   received: "запрос принят",
+  planning: "планирование",
+  generating: "генерация",
+  validating: "проверка",
+  reviewing: "ревью",
+  revising: "правка",
   planned: "план",
   generated: "генерация",
   validated: "проверка",
@@ -77,25 +86,10 @@ function parseContext() {
   }
 }
 
-function detectOutputFormat(code) {
-  const stripped = (code || "").trim();
-  if (!stripped.startsWith("{") || !stripped.endsWith("}")) {
-    return "lua_block";
-  }
-  try {
-    const payload = JSON.parse(stripped);
-    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-      return "json_envelope";
-    }
-  } catch (_error) {
-    return "lua_block";
-  }
-  return "lua_block";
-}
-
-function outputContract(code) {
-  return {
-    format: detectOutputFormat(code),
+function selectedOutputContract() {
+  const backendContract = state.outputContract || state.draftOutputContract;
+  return backendContract || {
+    format: "lua_block",
     shape: elements.outputShape.value,
     nullable: elements.outputNullable.checked,
   };
@@ -156,17 +150,42 @@ function setBusy(busy) {
     : "Сгенерировать и проверить";
 }
 
+function invalidateActiveRequest() {
+  state.requestVersion += 1;
+  if (state.activeController) {
+    state.activeController.abort();
+    state.activeController = null;
+  }
+  setBusy(false);
+}
+
+function isCurrentRequest(requestContext) {
+  return requestContext.version === state.requestVersion && !requestContext.signal.aborted;
+}
+
 async function runAction(action) {
   if (state.busy) {
     return;
   }
+  const controller = new AbortController();
+  const requestContext = {
+    version: state.requestVersion + 1,
+    signal: controller.signal,
+  };
+  state.requestVersion = requestContext.version;
+  state.activeController = controller;
   setBusy(true);
   try {
-    await action();
+    await action(requestContext);
   } catch (error) {
-    showError(error);
+    if (isCurrentRequest(requestContext) && error.name !== "AbortError") {
+      showError(error);
+    }
   } finally {
-    setBusy(false);
+    if (isCurrentRequest(requestContext)) {
+      state.activeController = null;
+      setBusy(false);
+    }
   }
 }
 
@@ -214,20 +233,30 @@ function pushTimeline(title, detail = "", meta = "") {
   renderTimeline();
 }
 
-async function refreshSession() {
-  if (!state.sessionId) {
+async function refreshSession(sessionId, requestContext) {
+  if (!sessionId) {
     return;
   }
-  const { body } = await apiFetch(`/api/sessions/${state.sessionId}`);
+  const { body } = await apiFetch(`/api/sessions/${sessionId}`, {
+    signal: requestContext.signal,
+  });
+  if (!isCurrentRequest(requestContext) || state.sessionId !== sessionId) {
+    return;
+  }
   state.latestSession = body;
   renderDiagnostics();
 }
 
-async function refreshTrace() {
-  if (!state.traceId) {
+async function refreshTrace(traceId, requestContext) {
+  if (!traceId) {
     return;
   }
-  const { body } = await apiFetch(`/api/traces/${state.traceId}`);
+  const { body } = await apiFetch(`/api/traces/${traceId}`, {
+    signal: requestContext.signal,
+  });
+  if (!isCurrentRequest(requestContext) || state.traceId !== traceId) {
+    return;
+  }
   state.latestTrace = body;
   renderStages(body);
   renderDiagnostics();
@@ -247,6 +276,11 @@ function renderResult(body) {
   state.sessionId = body.session_id;
   state.traceId = body.trace_id;
   state.latestValidation = body.validation || {};
+  state.outputContract = body.output || null;
+  if (state.outputContract) {
+    elements.outputShape.value = state.outputContract.shape;
+    elements.outputNullable.checked = Boolean(state.outputContract.nullable);
+  }
 
   elements.codeOutput.value = body.code || "";
   renderClarification(body.question || "");
@@ -280,13 +314,17 @@ function renderResult(body) {
 }
 
 async function loadStatus() {
-  const [{ body: health }, { body: profile }] = await Promise.all([
+  const [{ body: health }, { body: profile }, readyResponse] = await Promise.all([
     apiFetch("/health"),
     apiFetch("/api/profile"),
+    fetch("/ready"),
   ]);
+  const ready = await readyResponse.json();
   elements.statusHealth.textContent = health.status === "ok" ? "работает" : health.status;
   elements.statusProfile.textContent = profile.profile;
-  elements.statusModel.textContent = profile.model;
+  elements.statusModel.textContent = `${profile.model} · ${
+    readyResponse.ok && ready.status === "ready" ? "готова" : "не готова"
+  }`;
 }
 
 async function loadExamples() {
@@ -306,77 +344,100 @@ function loadSelectedExample() {
   if (!selected) {
     return;
   }
+  resetSession("Пример загружен.");
   elements.promptInput.value = selected.prompt || "";
   elements.contextInput.value = selected.context ? pretty(selected.context) : "";
-  elements.feedbackInput.value = "";
-  elements.clarificationInput.value = "";
-  elements.codeOutput.value = "";
-  renderClarification("");
+  state.draftOutputContract = selected.output || null;
+  if (selected.output) {
+    elements.outputShape.value = selected.output.shape;
+    elements.outputNullable.checked = Boolean(selected.output.nullable);
+  }
   elements.validationSummary.textContent = selected.description || "Пример загружен.";
   elements.validationSummary.className = "result-note";
   pushTimeline("Запрос подготовлен", selected.description || selected.title, selected.id);
 }
 
-async function generate() {
+async function generate(requestContext) {
   const prompt = elements.promptInput.value.trim();
   const context = parseContext();
+  clearSessionState();
   pushTimeline("Запрос принят", prompt, "POST /api/generate");
+  const payload = { prompt, context };
+  if (state.draftOutputContract) {
+    payload.output = state.draftOutputContract;
+  }
   const { body } = await apiFetch("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      prompt,
-      context,
-      session_id: state.sessionId,
-    }),
+    body: JSON.stringify(payload),
+    signal: requestContext.signal,
   });
+  if (!isCurrentRequest(requestContext)) {
+    return;
+  }
   renderResult(body);
   const timelineTitle =
     body.status === "clarification_required" ? "Найдено уточнение" : "Ответ получен";
   pushTimeline(timelineTitle, body.question || body.code || "Код не опубликован.", body.status);
-  await refreshSession();
-  await refreshTrace();
+  await refreshSession(body.session_id, requestContext);
+  await refreshTrace(body.trace_id, requestContext);
 }
 
-async function continueSession() {
+async function continueSession(requestContext) {
   if (!state.sessionId) {
     throw new Error("Нет активной сессии для продолжения.");
   }
   const answer = elements.clarificationInput.value.trim();
+  if (!answer) {
+    throw new Error("Введите ответ на уточнение.");
+  }
+  const sessionId = state.sessionId;
   const { body } = await apiFetch("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      session_id: state.sessionId,
+      session_id: sessionId,
       clarification_answer: answer,
     }),
+    signal: requestContext.signal,
   });
+  if (!isCurrentRequest(requestContext) || state.sessionId !== sessionId) {
+    return;
+  }
   renderResult(body);
   pushTimeline("Уточнение учтено", answer || "Пустой ответ", body.status);
-  await refreshSession();
-  await refreshTrace();
+  await refreshSession(body.session_id, requestContext);
+  await refreshTrace(body.trace_id, requestContext);
 }
 
-async function sendFeedback() {
+async function sendFeedback(requestContext) {
   if (!state.sessionId) {
     throw new Error("Нет активной сессии для правки результата.");
   }
   const feedback = elements.feedbackInput.value.trim();
+  if (!feedback) {
+    throw new Error("Опишите, что нужно изменить.");
+  }
+  const sessionId = state.sessionId;
   const { body } = await apiFetch("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      session_id: state.sessionId,
+      session_id: sessionId,
       feedback,
     }),
+    signal: requestContext.signal,
   });
+  if (!isCurrentRequest(requestContext) || state.sessionId !== sessionId) {
+    return;
+  }
   renderResult(body);
   pushTimeline("Правка применена", feedback || "Пустое замечание", body.status);
-  await refreshSession();
-  await refreshTrace();
+  await refreshSession(body.session_id, requestContext);
+  await refreshTrace(body.trace_id, requestContext);
 }
 
-async function validateCode() {
+async function validateCode(requestContext) {
   const code = elements.codeOutput.value.trim();
   if (!code) {
     throw new Error("Нет кода для проверки.");
@@ -387,9 +448,13 @@ async function validateCode() {
     body: JSON.stringify({
       code,
       context: parseContext() ?? { wf: { vars: {} } },
-      output: outputContract(code),
+      output: selectedOutputContract(),
     }),
+    signal: requestContext.signal,
   });
+  if (!isCurrentRequest(requestContext)) {
+    return;
+  }
   state.latestValidation = body;
   renderDiagnostics();
   if (body.ok) {
@@ -408,22 +473,38 @@ async function copyCode() {
   await navigator.clipboard.writeText(elements.codeOutput.value || "");
 }
 
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\"'\"'")}'`;
+}
+
 async function copyCurl() {
   const payload = {
     prompt: elements.promptInput.value,
     context: elements.contextInput.value.trim() ? JSON.parse(elements.contextInput.value) : null,
   };
-  const curl = `curl -s http://127.0.0.1:8080/api/generate -H 'Content-Type: application/json' -d '${JSON.stringify(payload)}'`;
+  if (state.draftOutputContract) {
+    payload.output = state.draftOutputContract;
+  }
+  const endpoint = new URL("/api/generate", window.location.origin).toString();
+  const curl = [
+    "curl -sS",
+    shellQuote(endpoint),
+    "-H",
+    shellQuote("Content-Type: application/json"),
+    "--data-raw",
+    shellQuote(JSON.stringify(payload)),
+  ].join(" ");
   await navigator.clipboard.writeText(curl);
   pushTimeline("cURL скопирован", "Команда для POST /api/generate готова.", "буфер обмена");
 }
 
-function resetSession() {
+function clearSessionState(message = "Новая сессия готова.") {
   state.sessionId = null;
   state.traceId = null;
   state.latestSession = {};
   state.latestValidation = {};
   state.latestTrace = {};
+  state.outputContract = null;
   state.timeline = [];
   elements.clarificationInput.value = "";
   elements.feedbackInput.value = "";
@@ -432,15 +513,44 @@ function resetSession() {
   setBadge(elements.statusBadge, "Ожидание", "neutral");
   setBadge(elements.revisionBadge, "Правок: 0", "neutral");
   elements.stageStrip.innerHTML = "";
-  elements.validationSummary.textContent = "Сессия сброшена.";
+  elements.validationSummary.textContent = message;
   elements.validationSummary.className = "result-note";
   refreshMetaBadges();
   renderDiagnostics();
   renderTimeline();
 }
 
+function resetSession(message = "Сессия сброшена.") {
+  invalidateActiveRequest();
+  state.draftOutputContract = null;
+  clearSessionState(message);
+}
+
 function bindEvents() {
   document.getElementById("loadExampleBtn").addEventListener("click", loadSelectedExample);
+  elements.promptInput.addEventListener("input", () => {
+    state.draftOutputContract = null;
+    if (state.busy || state.sessionId) {
+      invalidateActiveRequest();
+      clearSessionState("Изменённая задача начнёт новую сессию.");
+    }
+  });
+  elements.outputShape.addEventListener("change", () => {
+    if (state.draftOutputContract) {
+      state.draftOutputContract = {
+        ...state.draftOutputContract,
+        shape: elements.outputShape.value,
+      };
+    }
+  });
+  elements.outputNullable.addEventListener("change", () => {
+    if (state.draftOutputContract) {
+      state.draftOutputContract = {
+        ...state.draftOutputContract,
+        nullable: elements.outputNullable.checked,
+      };
+    }
+  });
   document.getElementById("formatJsonBtn").addEventListener("click", () => {
     const parsed = parseContext();
     elements.contextInput.value = parsed ? pretty(parsed) : "";
@@ -449,9 +559,13 @@ function bindEvents() {
   document.getElementById("continueBtn").addEventListener("click", () => runAction(continueSession));
   document.getElementById("feedbackBtn").addEventListener("click", () => runAction(sendFeedback));
   document.getElementById("validateBtn").addEventListener("click", () => runAction(validateCode));
-  document.getElementById("copyCodeBtn").addEventListener("click", () => copyCode().catch(showError));
-  document.getElementById("copyCurlBtn").addEventListener("click", () => copyCurl().catch(showError));
-  document.getElementById("resetBtn").addEventListener("click", resetSession);
+  document.getElementById("copyCodeBtn").addEventListener("click", () =>
+    copyCode().catch((error) => showError(error, false)),
+  );
+  document.getElementById("copyCurlBtn").addEventListener("click", () =>
+    copyCurl().catch((error) => showError(error, false)),
+  );
+  document.getElementById("resetBtn").addEventListener("click", () => resetSession());
   document.addEventListener("keydown", (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
       event.preventDefault();
@@ -460,7 +574,14 @@ function bindEvents() {
   });
 }
 
-function showError(error) {
+function showError(error, clearObsoleteResult = true) {
+  if (clearObsoleteResult) {
+    elements.codeOutput.value = "";
+    state.latestValidation = {};
+    state.outputContract = null;
+    renderClarification("");
+    renderDiagnostics();
+  }
   setBadge(elements.statusBadge, "Ошибка", "error");
   elements.validationSummary.textContent = error.message || String(error);
   elements.validationSummary.className = "result-note error";

@@ -47,3 +47,17 @@ def test_ui_support_endpoints_expose_profile_and_examples(tmp_path, monkeypatch)
         "template" not in (item["title"].lower() + (item.get("description") or "").lower())
         for item in examples.json()["examples"]
     )
+    assert all(item["output"] for item in examples.json()["examples"])
+
+
+def test_ui_script_guards_stale_requests_and_uses_backend_output_contract(tmp_path, monkeypatch):
+    client = _make_client(tmp_path, monkeypatch)
+
+    script = client.get("/static/app.js")
+
+    assert script.status_code == 200
+    assert "new AbortController()" in script.text
+    assert "requestVersion" in script.text
+    assert "state.outputContract || state.draftOutputContract" in script.text
+    assert 'new URL("/api/generate", window.location.origin)' in script.text
+    assert "session_id: state.sessionId" not in script.text

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import NoReturn
 
@@ -22,15 +21,24 @@ from app.api.schemas import (
 )
 from app.core.storage import InvalidIdentifierError
 from app.generation.backend_errors import (
+    BackendBusy,
     BackendError,
     BackendModel,
     BackendProtocol,
     BackendTimeout,
     BackendUnavailable,
 )
+from app.generation.engine import SessionStateError
 from app.generation.results import GenerationResult, SessionSummary
 from app.validation.runtime import find_lua_binary, find_luac_binary
-from app.workflow.contracts import CodeCandidate, JsonValue, WorkflowStatus
+from app.workflow.contracts import (
+    CodeCandidate,
+    JsonValue,
+    OutputContract,
+    OutputFormat,
+    OutputShape,
+    WorkflowStatus,
+)
 from app.workflow.validation import DeterministicCandidateValidator
 
 router = APIRouter()
@@ -50,6 +58,7 @@ UI_EXAMPLES = [
                 "vars": {"subscribers": [{"email": "A@Example.com"}, {"email": "b@example.com"}]}
             }
         },
+        output=OutputContract(format=OutputFormat.LUA_BLOCK, shape=OutputShape.ARRAY),
         description="Задача, которую нельзя решить одним выражением: фильтрация, преобразование и дедупликация.",
     ),
     ExampleEntry(
@@ -62,6 +71,7 @@ UI_EXAMPLES = [
                 "initVariables": {"email": "B@EXAMPLE.COM"},
             }
         },
+        output=OutputContract(format=OutputFormat.LUA_BLOCK, shape=OutputShape.SCALAR),
         description="Источник неоднозначен, поэтому planner должен задать один вопрос вместо догадки.",
     ),
     ExampleEntry(
@@ -72,6 +82,7 @@ UI_EXAMPLES = [
             "как JSON envelope."
         ),
         context={"wf": {"vars": {"num": 5}}},
+        output=OutputContract(format=OutputFormat.JSON_ENVELOPE, shape=OutputShape.OBJECT),
         description="Проверяет второй поддерживаемый формат вывода.",
     ),
 ]
@@ -86,17 +97,13 @@ def _raise_constraint_error(exc: APIConstraintError) -> NoReturn:
 
 def _validate_payload_limits(request: Request, prompt: str | None, context: JsonValue) -> None:
     profile = request.app.state.profile
-    max_prompt_chars = int(os.getenv("LOCALSCRIPT_MAX_PROMPT_CHARS", profile.max_prompt_chars))
-    max_context_bytes = int(os.getenv("LOCALSCRIPT_MAX_CONTEXT_BYTES", profile.max_context_bytes))
-    max_context_depth = int(os.getenv("LOCALSCRIPT_MAX_CONTEXT_DEPTH", profile.max_context_depth))
-    max_context_nodes = int(os.getenv("LOCALSCRIPT_MAX_CONTEXT_NODES", profile.max_context_nodes))
     try:
-        validate_prompt(prompt, max_prompt_chars)
+        validate_prompt(prompt, profile.max_prompt_chars)
         validate_context(
             context,
-            max_bytes=max_context_bytes,
-            max_depth=max_context_depth,
-            max_nodes=max_context_nodes,
+            max_bytes=profile.max_context_bytes,
+            max_depth=profile.max_context_depth,
+            max_nodes=profile.max_context_nodes,
         )
     except APIConstraintError as exc:
         _raise_constraint_error(exc)
@@ -111,17 +118,29 @@ def _handle_identifier_error(exc: InvalidIdentifierError) -> NoReturn:
 
 
 def _handle_backend_error(exc: BackendError) -> NoReturn:
-    if isinstance(exc, BackendTimeout):
+    headers: dict[str, str] | None = None
+    if isinstance(exc, BackendBusy):
+        status_code = status.HTTP_429_TOO_MANY_REQUESTS
+        headers = {"Retry-After": str(exc.retry_after_seconds)}
+    elif isinstance(exc, BackendTimeout):
         status_code = status.HTTP_504_GATEWAY_TIMEOUT
-    elif isinstance(exc, BackendUnavailable):
+    elif isinstance(exc, (BackendUnavailable, BackendModel)):
         status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    elif isinstance(exc, (BackendProtocol, BackendModel)):
+    elif isinstance(exc, BackendProtocol):
         status_code = status.HTTP_502_BAD_GATEWAY
     else:
         status_code = status.HTTP_502_BAD_GATEWAY
     raise HTTPException(
         status_code=status_code,
         detail={"code": exc.code, "message": exc.public_message},
+        headers=headers,
+    )
+
+
+def _handle_session_error(exc: SessionStateError) -> NoReturn:
+    raise HTTPException(
+        status_code=exc.status_code,
+        detail={"code": exc.code, "message": exc.message},
     )
 
 
@@ -149,7 +168,6 @@ def ready(request: Request, response: Response) -> ReadyResponse:
     checks = {
         "backend_reachable": backend_reachable,
         "primary_model_present": profile.model in tags,
-        "fallback_model_present": profile.fallback_model in tags,
         "lua_runtime_present": bool(find_lua_binary()),
         "luac_runtime_present": bool(find_luac_binary()),
     }
@@ -166,26 +184,32 @@ def generate(
     request: Request,
     response: Response,
 ) -> GenerateResponse:
-    if not payload.prompt and not payload.session_id:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "prompt_or_session_required",
-                "message": "Provide a prompt for a new session or a session_id to continue one.",
-            },
-        )
     _validate_payload_limits(request, payload.prompt, payload.context)
+    for continuation_text in (payload.feedback, payload.clarification_answer):
+        _validate_payload_limits(request, continuation_text, None)
+    if payload.examples:
+        example_payloads: list[JsonValue] = [
+            {"context": example.context, "expected": example.expected}
+            for example in payload.examples
+        ]
+        _validate_payload_limits(request, None, example_payloads)
 
     try:
-        result = request.app.state.engine.generate(
-            prompt=payload.prompt,
-            context=payload.context,
-            session_id=payload.session_id,
-            feedback=payload.feedback,
-            clarification_answer=payload.clarification_answer,
-        )
+        generation_kwargs: dict[str, object] = {
+            "prompt": payload.prompt,
+            "session_id": payload.session_id,
+            "feedback": payload.feedback,
+            "clarification_answer": payload.clarification_answer,
+            "output": payload.output,
+            "examples": payload.examples,
+        }
+        if "context" in payload.model_fields_set:
+            generation_kwargs["context"] = payload.context
+        result = request.app.state.engine.generate(**generation_kwargs)
     except InvalidIdentifierError as exc:
         _handle_identifier_error(exc)
+    except SessionStateError as exc:
+        _handle_session_error(exc)
     except BackendError as exc:
         _handle_backend_error(exc)
 
@@ -208,6 +232,7 @@ def generate(
         question=workflow.question,
         diagnostics=workflow.diagnostics,
         validation=workflow.validation,
+        output=workflow.output,
         revision_count=workflow.revision_count,
     )
 
@@ -219,7 +244,10 @@ def get_session(session_id: str, request: Request) -> SessionSummary:
     except InvalidIdentifierError as exc:
         _handle_identifier_error(exc)
     if payload is None:
-        raise HTTPException(status_code=404, detail="session_not_found")
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "session_not_found", "message": "Session was not found."},
+        )
     summary: SessionSummary = request.app.state.engine.build_session_summary(payload)
     return summary
 
@@ -231,7 +259,10 @@ def get_trace(trace_id: str, request: Request) -> TraceResponse:
     except InvalidIdentifierError as exc:
         _handle_identifier_error(exc)
     if payload is None:
-        raise HTTPException(status_code=404, detail="trace_not_found")
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "trace_not_found", "message": "Trace was not found."},
+        )
     return TraceResponse(**request.app.state.trace_store.sanitize_trace(payload))
 
 

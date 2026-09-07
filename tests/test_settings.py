@@ -146,6 +146,26 @@ def test_public_request_models_keep_extra_field_compatibility():
     assert not hasattr(request, "future")
 
 
+def test_generate_request_accepts_explicit_output_and_bounded_user_examples():
+    request = GenerateRequest.model_validate(
+        {
+            "prompt": "return the value",
+            "output": {"format": "lua_block", "shape": "scalar"},
+            "examples": [
+                {
+                    "name": "one",
+                    "context": {"wf": {"vars": {"value": 1}}},
+                    "expected": 1,
+                }
+            ],
+        }
+    )
+
+    assert request.output is not None
+    assert request.output.shape.value == "scalar"
+    assert request.examples[0].expected == 1
+
+
 def test_public_text_fields_publish_explicit_positive_schema_limits():
     limits = [
         (

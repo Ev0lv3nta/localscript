@@ -58,3 +58,36 @@ def test_context_width_limit_rejects_wide_context(tmp_path):
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "context_too_wide"
+
+
+def test_continuation_text_uses_service_prompt_budget(tmp_path):
+    client = _make_client(tmp_path, max_prompt_chars=12)
+
+    response = client.post(
+        "/api/generate",
+        json={"session_id": "12345678", "feedback": "x" * 100},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "prompt_too_long"
+
+
+def test_user_examples_share_one_context_budget(tmp_path):
+    client = _make_client(tmp_path, max_context_nodes=12)
+
+    response = client.post(
+        "/api/generate",
+        json={
+            "prompt": "Return items.",
+            "examples": [
+                {
+                    "name": "many",
+                    "context": {"wf": {"vars": {"items": [1, 2, 3]}}},
+                    "expected": list(range(20)),
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "context_too_wide"
