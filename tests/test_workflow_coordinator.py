@@ -7,6 +7,7 @@ from app.workflow.contracts import (
     OutputContract,
     OutputFormat,
     OutputShape,
+    PlanningRefusal,
     PlanStep,
     ReviewApproved,
     ReviewFinding,
@@ -129,6 +130,19 @@ def test_coordinator_returns_clarification_without_generation():
     assert result.status is WorkflowStatus.CLARIFICATION_REQUIRED
     assert result.question == "Which value?"
     assert result.code is None
+
+
+def test_planning_refusal_does_not_generate_or_execute_code():
+    workflow = coordinator(PlanningRefusal(reason="Запись в файлы не поддерживается."), [], [])
+    stages = []
+    result = workflow.run(
+        prompt="Write a file", context={"wf": {"vars": {}}}, observe=stages.append
+    )
+    assert result.status is WorkflowStatus.POLICY_REJECTED
+    assert result.code is None
+    assert result.diagnostics[0].code == "unsupported_request"
+    assert workflow.generator.calls == 0
+    assert stages[-1].value == "failed"
 
 
 def test_coordinator_revises_once_after_deterministic_failure():

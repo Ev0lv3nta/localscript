@@ -196,6 +196,11 @@ class PlannerRole:
         role_prompt = f"""You are the planner in a local code-generation workflow.
 Interpret the request; do not write Lua. Return exactly one JSON PlanningDecision.
 
+Refuse requests that require forbidden effects (workflow mutation, filesystem, operating system,
+network, package loading) or cannot be implemented in this restricted Lua runtime. Return
+kind="refused" with a short concrete reason, rather than generating unsafe code or silently
+substituting a different task. Questions and refusal reasons should use the user's language.
+
 For a plan:
 - express workflow paths as a root enum plus path segments, never as an invented dotted string;
 - describe ordered implementation steps without choosing a predefined task category;
@@ -224,6 +229,8 @@ reasons. Fix them; do not repeat the same plan and do not fall back to a clarifi
 `paths_present_under_both_roots` lists paths that exist under wf.vars and wf.initVariables at the
 same time. If the request needs one of them and does not itself name the root, that is the
 ambiguity you must ask about: choosing a root yourself produces confidently wrong code.
+When asking the user to choose roots, populate source_choices with the possible root enum values.
+For other questions leave source_choices empty. Honor caller_source_roots when already selected.
 
 Ask a concrete clarification when necessary input data or a required choice is missing.
 Two roots may be used together when requested. A missing optional field with an explicitly
