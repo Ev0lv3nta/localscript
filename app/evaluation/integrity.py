@@ -9,7 +9,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
-from app.core.public_eval import load_cases
+from app.core.public_eval import PUBLIC_V2_SOURCE, load_cases, validate_dataset_cases
 from app.core.resources import materialized_resource
 from app.evaluation.manifest import dataset_specs, load_evaluation_manifest
 
@@ -35,6 +35,7 @@ def _case_input_fingerprint(case: dict[str, Any]) -> str:
         "prompt": normalize_prompt(case.get("prompt")),
         "context": case.get("context"),
         "clarification_answer": case.get("clarification_answer"),
+        "clarification_source_roots": case.get("clarification_source_roots"),
     }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -72,19 +73,17 @@ def _validate_case(
     else:
         seen_inputs[fingerprint] = str(case_id)
 
-    if corpus == "live":
-        if case.get("source") != "owner_synthetic_live_v1":
-            errors.append(f"live_case_source_invalid::{case_id}")
-        if case.get("case_type") != "live":
-            errors.append(f"live_case_type_invalid::{case_id}")
+    if corpus == "public":
+        if case.get("source") != PUBLIC_V2_SOURCE:
+            errors.append(f"public_case_source_invalid::{case_id}")
+        if case.get("case_type") not in {"transformation", "clarification", "policy"}:
+            errors.append(f"public_case_type_invalid::{case_id}")
         if not isinstance(case.get("scenario"), str) or not case["scenario"].strip():
-            errors.append(f"live_case_scenario_missing::{case_id}")
-        if case.get("expected_output_style") not in OUTPUT_STYLES:
-            errors.append(f"live_case_output_style_missing::{case_id}")
-        if "expected_result" not in case:
-            errors.append(f"live_case_oracle_missing::{case_id}")
+            errors.append(f"public_case_scenario_missing::{case_id}")
+        if not isinstance(case.get("output"), dict):
+            errors.append(f"public_case_output_missing::{case_id}")
         if "expected_code" in case or "reference_code" in case:
-            errors.append(f"live_case_reference_injection::{case_id}")
+            errors.append(f"public_case_reference_injection::{case_id}")
     return errors
 
 
@@ -169,12 +168,29 @@ def run_integrity_check(private_holdout_path: Path | str | None = None) -> dict[
     seen_inputs: dict[str, str] = {}
     schema_errors: list[str] = []
     datasets: list[dict[str, Any]] = []
-    live_records: list[dict[str, Any]] = []
+    public_records: list[dict[str, Any]] = []
 
     for spec in specs:
         with materialized_resource(spec.path) as dataset_path:
             cases = load_cases(dataset_path)
             digest = _sha256_path(dataset_path)
+        try:
+            validate_dataset_cases(cases)
+        except ValueError as error:
+            schema_errors.append(str(error))
+        if len(cases) != spec.case_count:
+            schema_errors.append(f"dataset_case_count_mismatch::{spec.name}")
+        counts = {
+            "supported": sum(case.get("case_type") == "transformation" for case in cases),
+            "clarification": sum(case.get("case_type") == "clarification" for case in cases),
+            "safety": sum(bool(case.get("safety")) for case in cases),
+        }
+        if counts["supported"] != spec.supported_case_count:
+            schema_errors.append(f"dataset_supported_count_mismatch::{spec.name}")
+        if counts["clarification"] != spec.clarification_case_count:
+            schema_errors.append(f"dataset_clarification_count_mismatch::{spec.name}")
+        if counts["safety"] != spec.safety_case_count:
+            schema_errors.append(f"dataset_safety_count_mismatch::{spec.name}")
         for case in cases:
             schema_errors.extend(_validate_case(case, spec.corpus, seen_ids, seen_inputs))
             record = {
@@ -182,7 +198,7 @@ def run_integrity_check(private_holdout_path: Path | str | None = None) -> dict[
                 "id": str(case.get("id")),
                 "prompt": str(case.get("prompt") or ""),
             }
-            live_records.append(record)
+            public_records.append(record)
         datasets.append(
             {
                 **spec.evidence_dict(),
@@ -223,11 +239,10 @@ def run_integrity_check(private_holdout_path: Path | str | None = None) -> dict[
                     }
                 )
 
-    # Публичный корпус остался один, поэтому сравнивать между собой больше нечего;
-    # смысл проверки теперь в том, что закрытый holdout не пересекается с ним.
+    # Публичный корпус один; внешний holdout проверяется только на пересечение с ним.
     overlaps: list[dict[str, Any]] = []
     if holdout_records:
-        overlaps.extend(_find_cross_corpus_overlaps(holdout_records, live_records))
+        overlaps.extend(_find_cross_corpus_overlaps(holdout_records, public_records))
     errors = list(schema_errors)
     errors.extend(
         "corpus_overlap::{}::{}::{}".format(
@@ -238,7 +253,7 @@ def run_integrity_check(private_holdout_path: Path | str | None = None) -> dict[
         for finding in overlaps
     )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "ok": not errors,
         "errors": errors,
         "datasets": datasets,

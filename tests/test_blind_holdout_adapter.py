@@ -58,3 +58,31 @@ def test_unknown_output_format_fails_closed():
         adapt_blind_holdout_cases(
             [holdout_case(expected={"status": "completed", "output_format": "yaml", "result": 1})]
         )
+
+
+def test_missing_result_is_distinct_from_explicit_null():
+    with pytest.raises(ValueError, match="holdout_case_result_missing"):
+        adapt_blind_holdout_cases(
+            [holdout_case(expected={"status": "completed", "output_format": "lua_block"})]
+        )
+
+    adapted = adapt_blind_holdout_cases(
+        [
+            holdout_case(
+                expected={"status": "completed", "output_format": "lua_block", "result": None}
+            )
+        ]
+    )
+    assert "expected_result" in adapted[0]
+    assert adapted[0]["expected_result"] is None
+
+
+def test_unknown_status_fails_closed():
+    with pytest.raises(ValueError, match="holdout_case_status_invalid"):
+        adapt_blind_holdout_cases(
+            [
+                holdout_case(
+                    expected={"status": "almost_done", "output_format": "lua_block", "result": 1}
+                )
+            ]
+        )

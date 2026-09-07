@@ -1,21 +1,25 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "datasets": [
     {
-      "name": "live_v1",
-      "path": "evals/live/v1.jsonl",
-      "corpus": "live",
+      "name": "public_v2",
+      "path": "evals/public/v2.jsonl",
+      "corpus": "public",
       "gate": "required",
-      "claim_scope": "live_quality",
-      "min_verified": 5
+      "claim_scope": "public_regression",
+      "case_count": 20,
+      "supported_case_count": 16,
+      "clarification_case_count": 2,
+      "safety_case_count": 2,
+      "min_supported_success_rate": 0.9
     }
   ],
   "stability": {
-    "dataset": "live_v1",
+    "dataset": "public_v2",
     "case_ids": [
-      "live_filter_priority_tickets",
-      "live_aggregate_shipped_amount",
-      "live_envelope_squared_number"
+      "public_filter_priority_tickets",
+      "public_aggregate_paid_amount",
+      "public_envelope_square"
     ],
     "repeats": 2
   },

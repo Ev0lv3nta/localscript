@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -8,7 +9,7 @@ from typing import Any
 from app.core.resources import read_resource_text, resource_exists
 
 MANIFEST_RESOURCE = "evals/manifest.json"
-ALLOWED_CORPORA = frozenset({"live"})
+ALLOWED_CORPORA = frozenset({"public"})
 ALLOWED_GATES = frozenset({"required"})
 
 
@@ -18,12 +19,24 @@ class EvaluationDataset:
     path: str
     corpus: str
     gate: str
-    min_verified: int
+    case_count: int
+    supported_case_count: int
+    clarification_case_count: int
+    safety_case_count: int
+    min_supported_success_rate: float
     claim_scope: str
 
     @property
     def required(self) -> bool:
         return self.gate == "required"
+
+    @property
+    def min_verified(self) -> int:
+        return (
+            math.ceil(self.supported_case_count * self.min_supported_success_rate)
+            + self.clarification_case_count
+            + self.safety_case_count
+        )
 
     def evidence_dict(self) -> dict[str, Any]:
         return {
@@ -31,6 +44,11 @@ class EvaluationDataset:
             "path": self.path,
             "corpus": self.corpus,
             "gate": self.gate,
+            "case_count": self.case_count,
+            "supported_case_count": self.supported_case_count,
+            "clarification_case_count": self.clarification_case_count,
+            "safety_case_count": self.safety_case_count,
+            "min_supported_success_rate": self.min_supported_success_rate,
             "min_verified": self.min_verified,
             "claim_scope": self.claim_scope,
         }
@@ -41,7 +59,7 @@ def load_evaluation_manifest() -> dict[str, Any]:
         payload = json.loads(read_resource_text(MANIFEST_RESOURCE))
     except (json.JSONDecodeError, OSError, ValueError) as error:
         raise ValueError("evaluation_manifest_invalid") from error
-    if not isinstance(payload, dict) or payload.get("schema_version") != 2:
+    if not isinstance(payload, dict) or payload.get("schema_version") != 3:
         raise ValueError("evaluation_manifest_schema_unsupported")
     datasets = payload.get("datasets")
     if not isinstance(datasets, list) or not datasets:
@@ -70,13 +88,41 @@ def dataset_specs() -> tuple[EvaluationDataset, ...]:
     for raw in payload["datasets"]:
         if not isinstance(raw, dict):
             raise ValueError("evaluation_manifest_dataset_invalid")
+        expected_fields = {
+            "name",
+            "path",
+            "corpus",
+            "gate",
+            "case_count",
+            "supported_case_count",
+            "clarification_case_count",
+            "safety_case_count",
+            "min_supported_success_rate",
+            "claim_scope",
+        }
+        if set(raw) != expected_fields:
+            raise ValueError("evaluation_manifest_dataset_fields_invalid")
+        count_fields = (
+            "case_count",
+            "supported_case_count",
+            "clarification_case_count",
+            "safety_case_count",
+        )
+        if any(type(raw[field]) is not int for field in count_fields):
+            raise ValueError("evaluation_manifest_dataset_counts_invalid")
+        if type(raw["min_supported_success_rate"]) not in {int, float}:
+            raise ValueError("evaluation_manifest_dataset_threshold_invalid")
         try:
             spec = EvaluationDataset(
                 name=str(raw["name"]),
                 path=str(raw["path"]),
                 corpus=str(raw["corpus"]),
                 gate=str(raw["gate"]),
-                min_verified=int(raw["min_verified"]),
+                case_count=int(raw["case_count"]),
+                supported_case_count=int(raw["supported_case_count"]),
+                clarification_case_count=int(raw["clarification_case_count"]),
+                safety_case_count=int(raw["safety_case_count"]),
+                min_supported_success_rate=float(raw["min_supported_success_rate"]),
                 claim_scope=str(raw["claim_scope"]),
             )
         except KeyError as error:
@@ -89,13 +135,21 @@ def dataset_specs() -> tuple[EvaluationDataset, ...]:
             raise ValueError("evaluation_manifest_corpus_invalid")
         if spec.gate not in ALLOWED_GATES:
             raise ValueError("evaluation_manifest_gate_invalid")
-        if spec.min_verified < 1:
+        if (
+            spec.case_count <= 0
+            or spec.supported_case_count <= 0
+            or spec.clarification_case_count <= 0
+            or spec.safety_case_count <= 0
+            or spec.case_count
+            != spec.supported_case_count + spec.clarification_case_count + spec.safety_case_count
+            or not 0.0 < spec.min_supported_success_rate <= 1.0
+        ):
             raise ValueError("evaluation_manifest_min_verified_invalid")
         names.add(spec.name)
         paths.add(spec.path)
         specs.append(spec)
     if len(specs) != 1:
-        raise ValueError("evaluation_manifest_live_corpus_invalid")
+        raise ValueError("evaluation_manifest_public_corpus_invalid")
     return tuple(specs)
 
 

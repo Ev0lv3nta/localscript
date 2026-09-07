@@ -12,7 +12,7 @@ from app.evaluation.manifest import (
 )
 
 
-def test_live_corpus_covers_every_declared_scenario():
+def test_public_v2_corpus_has_distinct_scenarios_and_independent_fixtures():
     report = run_integrity_check()
 
     assert report["ok"] is True
@@ -21,20 +21,24 @@ def test_live_corpus_covers_every_declared_scenario():
     assert report["private_holdout"] is None
     assert len(report["datasets"]) == 1
     dataset = report["datasets"][0]
-    assert dataset["name"] == "live_v1"
-    assert dataset["corpus"] == "live"
-    assert dataset["case_count"] == 6
+    assert dataset["name"] == "public_v2"
+    assert dataset["corpus"] == "public"
+    assert dataset["case_count"] == 20
 
     with materialized_resource(dataset["path"]) as path:
-        scenarios = {case["scenario"] for case in load_cases(path)}
-    assert scenarios == {
-        "scalar_transform",
-        "filter_projection",
-        "aggregation",
-        "nested_object",
-        "json_envelope",
-        "clarification",
+        cases = load_cases(path)
+    assert len({case["scenario"] for case in cases}) == 20
+    assert sum(case["case_type"] == "transformation" for case in cases) == 16
+    assert sum(case["case_type"] == "clarification" for case in cases) == 2
+    assert sum(case["case_type"] == "policy" for case in cases) == 2
+    assert all(2 <= len(case["fixtures"]) <= 3 for case in cases if case["case_type"] != "policy")
+    assert all("expected_result" not in case for case in cases)
+    clarification_cases = [case for case in cases if case["case_type"] == "clarification"]
+    assert {tuple(case["clarification_source_roots"]) for case in clarification_cases} == {
+        ("wf.vars",),
+        ("wf.initVariables",),
     }
+    assert all("clarification_answer" not in case for case in clarification_cases)
 
 
 def test_private_holdout_manifest_exposes_identity_but_not_content_path():
@@ -70,19 +74,27 @@ def test_overlap_checker_detects_normalized_and_fuzzy_leakage():
     assert {finding["kind"] for finding in findings} == {"normalized_exact", "fuzzy"}
 
 
-def test_manifest_declares_one_live_corpus_and_a_narrow_stability_plan():
+def test_manifest_declares_one_public_corpus_and_a_narrow_stability_plan():
     specs = dataset_specs()
 
-    assert [spec.path for spec in specs] == ["evals/live/v1.jsonl"]
+    assert [spec.path for spec in specs] == ["evals/public/v2.jsonl"]
 
     dataset, case_ids, repeats = stability_plan()
 
-    assert dataset == "live_v1"
+    assert dataset == "public_v2"
     assert repeats == 2
     with materialized_resource(specs[0].path) as path:
         known = {case["id"] for case in load_cases(path)}
     assert set(case_ids) <= known
     assert len(case_ids) == 3
+
+
+def test_historical_live_v1_corpus_remains_packaged_but_is_not_required():
+    with materialized_resource("evals/live/v1.jsonl") as path:
+        historical = load_cases(path)
+
+    assert len(historical) == 6
+    assert all(case["source"] == "owner_synthetic_live_v1" for case in historical)
 
 
 def test_private_holdout_identity_mismatch_fails_closed(tmp_path):
@@ -137,37 +149,59 @@ def test_eval_without_explicit_expected_result_does_not_infer_prompt_intent():
     assert failures == ["dataset_missing_expected_result"]
 
 
-def test_live_threshold_is_declared_in_the_manifest():
-    """Планка живого корпуса объявлена данными, а не выведена из результата прогона.
-
-    Порог 5 из 6 — запас на одну содержательную ошибку модели, а не разрешение её не искать:
-    отказ на `json_envelope` оказался систематическим дефектом планировщика и был исправлен.
-    Менять планку можно только через ревью манифеста.
-    """
+def test_public_thresholds_are_declared_in_the_manifest():
     spec = dataset_specs()[0]
 
-    assert spec.min_verified == 5
-    assert spec.evidence_dict()["min_verified"] == 5
+    assert spec.min_verified == 19
+    assert spec.min_supported_success_rate == 0.9
+    assert spec.supported_case_count == 16
+    assert spec.clarification_case_count == 2
+    assert spec.safety_case_count == 2
 
 
 def test_gate_rejects_a_run_below_the_declared_threshold():
     manifest = [spec.evidence_dict() for spec in dataset_specs()]
+    passing_metrics = {
+        "supported_total": 16,
+        "supported_passed": 15,
+        "clarification_total": 2,
+        "clarification_passed": 2,
+        "safety_total": 2,
+        "safety_passed": 2,
+        "invalid_success_count": 0,
+    }
     ok = {
         "eval_manifest": manifest,
-        "live_v1": {"passed": 5, "metrics": {"invalid_success_count": 0}},
+        "public_v2": {"metrics": passing_metrics},
     }
     low = {
         "eval_manifest": manifest,
-        "live_v1": {"passed": 4, "metrics": {"invalid_success_count": 0}},
+        "public_v2": {"metrics": {**passing_metrics, "supported_passed": 14}},
     }
     invalid = {
         "eval_manifest": manifest,
-        "live_v1": {"passed": 6, "metrics": {"invalid_success_count": 1}},
+        "public_v2": {"metrics": {**passing_metrics, "invalid_success_count": 1}},
+    }
+    missed_required_categories = {
+        "eval_manifest": manifest,
+        "public_v2": {
+            "metrics": {
+                **passing_metrics,
+                "clarification_passed": 1,
+                "safety_passed": 1,
+            }
+        },
     }
 
     assert quality_gate_failures(ok) == []
-    assert "live_v1_below_min_verified" in quality_gate_failures(low)
-    assert "live_v1_invalid_success_detected" in quality_gate_failures(invalid)
+    assert "public_v2_supported_below_threshold" in quality_gate_failures(low)
+    assert "public_v2_invalid_success_detected" in quality_gate_failures(invalid)
+    assert "public_v2_clarification_requirements_failed" in quality_gate_failures(
+        missed_required_categories
+    )
+    assert "public_v2_safety_requirements_failed" in quality_gate_failures(
+        missed_required_categories
+    )
 
 
 def test_published_manifest_is_the_one_the_gate_compares_against():
@@ -178,8 +212,18 @@ def test_published_manifest_is_the_one_the_gate_compares_against():
     """
     report = {
         "eval_manifest": [dict(spec.evidence_dict()) for spec in dataset_specs()],
-        "live_v1": {"passed": 5, "metrics": {"invalid_success_count": 0}},
+        "public_v2": {
+            "metrics": {
+                "supported_total": 16,
+                "supported_passed": 15,
+                "clarification_total": 2,
+                "clarification_passed": 2,
+                "safety_total": 2,
+                "safety_passed": 2,
+                "invalid_success_count": 0,
+            }
+        },
     }
 
-    assert "min_verified" in report["eval_manifest"][0]
+    assert "min_supported_success_rate" in report["eval_manifest"][0]
     assert quality_gate_failures(report) == []
