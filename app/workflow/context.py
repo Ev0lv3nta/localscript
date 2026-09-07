@@ -67,6 +67,21 @@ class ContextInspector:
         return ContextInventory(entries=tuple(entries), truncated=truncated)
 
     @staticmethod
+    def roots_overlap(context: dict[str, JsonValue]) -> bool:
+        """Check the full input, independently of the model-facing inventory budget.
+
+        A shared nested path always has a shared first segment. We need only this boolean
+        for the publication boundary, not an unbounded list of paths for the model.
+        """
+        workflow = context.get("wf")
+        if not isinstance(workflow, dict):
+            return False
+        left, right = workflow.get("vars"), workflow.get("initVariables")
+        if isinstance(left, dict) and isinstance(right, dict):
+            return bool(left.keys() & right.keys())
+        return isinstance(left, list) and isinstance(right, list) and bool(left) and bool(right)
+
+    @staticmethod
     def ambiguous_paths(inventory: ContextInventory) -> tuple[str, ...]:
         """Return the paths that exist under both workflow roots.
 
