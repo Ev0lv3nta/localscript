@@ -51,6 +51,12 @@ class OutputContract(StrictModel):
     shape: OutputShape
     nullable: bool = False
 
+    @model_validator(mode="after")
+    def envelope_is_object(self) -> OutputContract:
+        if self.format is OutputFormat.JSON_ENVELOPE and self.shape is not OutputShape.OBJECT:
+            raise ValueError("JSON envelope output must have object shape")
+        return self
+
 
 class ContextValueType(StrEnum):
     NULL = "null"
