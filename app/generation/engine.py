@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import threading
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from time import monotonic
 from typing import Protocol
 
+from pydantic import TypeAdapter, ValidationError
+
+from app.api.limits import APIConstraintError, validate_context, validate_prompt
+from app.core.budgets import workflow_budget
 from app.core.config import RuntimeProfile
 from app.core.sessions import SessionStore
+from app.generation.backend_errors import BackendBusy
 from app.generation.results import (
     ClarificationExchange,
     GenerationResult,
@@ -116,6 +124,7 @@ class GenerationEngine:
         self.profile = profile
         self.trace_store = trace_store
         self.backend = backend
+        self._admission = threading.Lock()
         if session_store is None:
             session_store = SessionStore(root=trace_store.root.parent / "sessions")
         self.session_store = session_store
@@ -139,7 +148,11 @@ class GenerationEngine:
         examples: tuple[AcceptanceCase, ...] = (),
     ) -> GenerationResult:
         resolved_session_id = session_id or uuid.uuid4().hex
-        with self.session_store.transaction(resolved_session_id) as session_state:
+        with (
+            self.request_slot(),
+            workflow_budget(),
+            self.session_store.transaction(resolved_session_id) as session_state,
+        ):
             return self._generate_locked(
                 prompt=prompt,
                 context=context,
@@ -151,6 +164,15 @@ class GenerationEngine:
                 session_state=session_state,
                 requested_existing_session=session_id is not None,
             )
+
+    @contextmanager
+    def request_slot(self) -> Iterator[None]:
+        if not self._admission.acquire(blocking=False):
+            raise BackendBusy()
+        try:
+            yield
+        finally:
+            self._admission.release()
 
     def _generate_locked(
         self,
@@ -176,6 +198,7 @@ class GenerationEngine:
             session_state=session_state,
             requested_existing_session=requested_existing_session,
         )
+        self._validate_effective_request(session_state, feedback, clarification_answer)
 
         open_question = str(session_state.get("open_clarification_question") or "")
         if open_question and not clarification_answer:
@@ -229,6 +252,59 @@ class GenerationEngine:
             trace_id=trace_id,
             session=self.build_session_summary(session_state),
         )
+
+    def _validate_effective_request(
+        self, state: dict[str, object], feedback: str | None, answer: str | None
+    ) -> None:
+        try:
+            for text in (str(state.get("original_task") or ""), feedback, answer):
+                if text is not None and not text.strip():
+                    raise APIConstraintError(
+                        422, "empty_user_message", "User messages must not be empty."
+                    )
+                validate_prompt(text, self.profile.max_prompt_chars)
+            adapter: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
+            context = adapter.validate_python(state.get("context"), strict=True)
+            validate_context(
+                context,
+                self.profile.max_context_bytes,
+                self.profile.max_context_depth,
+                self.profile.max_context_nodes,
+            )
+            examples = self._stored_examples(state)
+            if len(examples) > 3:
+                raise APIConstraintError(
+                    422, "too_many_examples", "At most three caller examples are supported."
+                )
+            for example in examples:
+                validate_context(
+                    example.context,
+                    self.profile.max_context_bytes,
+                    self.profile.max_context_depth,
+                    self.profile.max_context_nodes,
+                )
+            effective_text = (
+                str(state.get("original_task") or "")
+                + (self._effective_clarification_history(state) or "")
+                + (
+                    self._effective_feedback_history(state, include_latest_code=bool(feedback))
+                    or ""
+                )
+            )
+            if len(effective_text) > 12000:
+                raise APIConstraintError(
+                    422,
+                    "effective_task_too_large",
+                    "The accumulated task is too large; start a new session.",
+                )
+        except APIConstraintError as error:
+            raise SessionStateError(
+                code=error.code, status_code=error.status_code, message=error.message
+            ) from None
+        except ValidationError:
+            raise SessionStateError(
+                code="invalid_json_context", status_code=422, message="Context must be JSON."
+            ) from None
 
     @staticmethod
     def _prepare_session_state(

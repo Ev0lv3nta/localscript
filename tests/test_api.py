@@ -80,7 +80,7 @@ def test_generate_endpoint_publishes_only_validated_code_and_sanitized_trace(tmp
     body = response.json()
     assert body["status"] == "completed"
     assert body["code"] == "return wf.vars.value"
-    assert body["question"] is None
+    assert "question" not in body
     trace = app.state.trace_store.read(response.headers["X-Trace-Id"])
     assert trace["diagnostic_codes"] == []
     assert "not-in-trace" not in str(trace)
@@ -98,7 +98,7 @@ def test_generate_endpoint_never_publishes_rejected_candidate(tmp_path):
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "policy_rejected"
-    assert body["code"] is None
+    assert "code" not in body
     assert "return wf.vars.value" not in response.text
     assert "dangerous_stdlib_os_forbidden" in [item["code"] for item in body["diagnostics"]]
 

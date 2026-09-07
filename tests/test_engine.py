@@ -1,6 +1,5 @@
 import json
 import threading
-import time
 
 from app.core.config import get_runtime_profile
 from app.core.traces import TraceStore
@@ -145,36 +144,34 @@ def test_engine_converts_backend_outage_to_fail_closed_outcome(tmp_path):
     assert result.workflow.code is None
 
 
-def test_engine_serializes_updates_for_the_same_session(tmp_path, monkeypatch):
+def test_engine_rejects_overload_without_queuing(tmp_path, monkeypatch):
+    import pytest
+
+    from app.generation.backend_errors import BackendBusy
+
     engine = GenerationEngine(
         profile=get_runtime_profile(),
         trace_store=TraceStore(root=tmp_path / "traces"),
         backend=SequenceBackend([]),
         validator=PassingValidator(),
     )
+    started, release = threading.Event(), threading.Event()
 
-    def increment_session(**kwargs):
-        session_state = kwargs["session_state"]
-        current = session_state.get("count", 0)
-        time.sleep(0.01)
-        session_state["count"] = current + 1
+    def hold_generation(**kwargs):
+        started.set()
+        assert release.wait(timeout=2)
+        kwargs["session_state"]["count"] = 1
 
-    monkeypatch.setattr(engine, "_generate_locked", increment_session)
-    threads = [
-        threading.Thread(
-            target=engine.generate,
-            kwargs={
-                "prompt": "prompt",
-                "context": None,
-                "session_id": "shared-session",
-            },
-        )
-        for _ in range(8)
-    ]
-
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-
-    assert engine.session_store.read("shared-session")["count"] == 8
+    monkeypatch.setattr(engine, "_generate_locked", hold_generation)
+    thread = threading.Thread(
+        target=engine.generate, kwargs={"prompt": "task", "session_id": "shared-session"}
+    )
+    thread.start()
+    assert started.wait(timeout=1)
+    try:
+        with pytest.raises(BackendBusy):
+            engine.generate(prompt="another task")
+    finally:
+        release.set()
+        thread.join(timeout=2)
+    assert engine.session_store.read("shared-session")["count"] == 1

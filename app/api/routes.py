@@ -178,7 +178,7 @@ def ready(request: Request, response: Response) -> ReadyResponse:
     return ReadyResponse(status="ready", profile=profile.name, checks=checks, errors=[])
 
 
-@router.post("/api/generate", response_model=GenerateResponse)
+@router.post("/api/generate", response_model=GenerateResponse, response_model_exclude_none=True)
 def generate(
     payload: GenerateRequest,
     request: Request,
@@ -287,11 +287,15 @@ def get_examples() -> ExamplesResponse:
 @router.post("/api/validate", response_model=ValidateResponse)
 def validate_code(payload: ValidateRequest, request: Request) -> ValidateResponse:
     _validate_payload_limits(request, "validate existing code", payload.context)
-    report = DeterministicCandidateValidator().validate_existing(
-        candidate=CodeCandidate(code=payload.code),
-        output=payload.output,
-        context=payload.context,
-    )
+    try:
+        with request.app.state.engine.request_slot():
+            report = DeterministicCandidateValidator().validate_existing(
+                candidate=CodeCandidate(code=payload.code),
+                output=payload.output,
+                context=payload.context,
+            )
+    except BackendError as error:
+        _handle_backend_error(error)
     return ValidateResponse(ok=report.ok, validation=report)
 
 

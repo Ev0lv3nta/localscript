@@ -90,7 +90,7 @@ def test_rich_api_persists_and_resumes_one_clarification(tmp_path):
 
     assert first.status_code == 200
     assert first.json()["status"] == "clarification_required"
-    assert first.json()["code"] is None
+    assert "code" not in first.json()
     session_id = first.json()["session_id"]
 
     continued = client.post(
