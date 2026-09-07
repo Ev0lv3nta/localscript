@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light" />
     <title>LocalScript — локальная генерация Lua</title>
-    <link rel="stylesheet" href="/static/styles.css?v=0.2.0" />
+    <link rel="stylesheet" href="/static/styles.css?v=0.3.0" />
   </head>
   <body>
     <header class="topbar">
@@ -53,7 +53,7 @@
           placeholder="Например: нормализуй email из wf.vars и верни строку в нижнем регистре."
         ></textarea>
 
-        <label for="contextInput">Входной контекст <span class="optional">JSON, необязательно</span></label>
+        <label for="contextInput">Входной контекст <span class="optional">JSON; для выражения без данных — пустой wf</span></label>
         <textarea id="contextInput" class="context-box" placeholder='{"wf":{"vars":{}}}' spellcheck="false"></textarea>
         <div class="inline-row compact-row">
           <button id="formatJsonBtn" type="button" class="ghost-btn">Форматировать JSON</button>
@@ -70,8 +70,8 @@
         <div class="panel-header">
           <span class="step-number">02</span>
           <div>
-            <h2>Проверенный результат</h2>
-            <p>Успех означает, что код прошёл доступные структурные, синтаксические и семантические проверки.</p>
+            <h2>Код и результат выполнения</h2>
+            <p>Проверяем запуск на вашем контексте и заданных примерах. Это не гарантия правильности на всех входах.</p>
           </div>
         </div>
 
@@ -108,6 +108,11 @@
         </div>
 
         <div id="validationSummary" class="result-note" role="status">Отправьте первый запрос.</div>
+        <div id="previewBox" class="hidden">
+          <h3>На ваших данных</h3>
+          <pre id="resultPreview" class="result-preview" tabindex="0"></pre>
+          <p id="verificationScope" class="muted"></p>
+        </div>
 
         <div id="clarificationBox" class="clarification-box hidden" aria-live="polite">
           <div class="clarification-title">Нужно одно уточнение</div>
@@ -158,6 +163,6 @@
       <span>Проверка снижает риск ошибки, но не заменяет изоляцию недоверенного кода.</span>
     </footer>
 
-    <script src="/static/app.js?v=0.2.0"></script>
+    <script src="/static/app.js?v=0.3.0"></script>
   </body>
 </html>

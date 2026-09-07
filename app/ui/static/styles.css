@@ -211,3 +211,5 @@ footer { display: flex; justify-content: space-between; gap: 18px; max-width: 14
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto !important; transition: none !important; }
 }
+
+.result-preview { max-height: 220px; overflow: auto; padding: 14px; background: #f4f6f8; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }

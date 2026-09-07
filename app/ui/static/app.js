@@ -56,6 +56,9 @@ const elements = {
   outputShape: document.getElementById("outputShape"),
   outputNullable: document.getElementById("outputNullable"),
   validationSummary: document.getElementById("validationSummary"),
+  previewBox: document.getElementById("previewBox"),
+  resultPreview: document.getElementById("resultPreview"),
+  verificationScope: document.getElementById("verificationScope"),
   clarificationBox: document.getElementById("clarificationBox"),
   clarificationQuestion: document.getElementById("clarificationQuestion"),
   sessionBadge: document.getElementById("sessionBadge"),
@@ -272,10 +275,24 @@ function renderClarification(question) {
   elements.clarificationQuestion.textContent = question;
 }
 
+function renderPreview(validation) {
+  const observations = validation?.observations || [];
+  const request = observations.find((item) => item.source === "request") ||
+    observations.find((item) => !item.source && Object.hasOwn(item, "actual"));
+  elements.previewBox.classList.toggle("hidden", !request);
+  elements.resultPreview.textContent = request ? JSON.stringify(request.actual, null, 2) : "";
+  const caller = observations.filter((item) => item.source === "caller").length;
+  const model = observations.filter((item) => item.source === "model").length;
+  elements.verificationScope.textContent = request
+    ? `Пробное выполнение на входном контексте. Пользовательских примеров: ${caller}; примеров модели: ${model}. Без заданного ожидания проверяются выполнение и форма результата.`
+    : "";
+}
+
 function renderResult(body) {
   state.sessionId = body.session_id;
   state.traceId = body.trace_id;
   state.latestValidation = body.validation || {};
+  renderPreview(body.validation);
   state.outputContract = body.output || null;
   if (state.outputContract) {
     elements.outputShape.value = state.outputContract.shape;
@@ -398,6 +415,7 @@ async function continueSession(requestContext) {
     body: JSON.stringify({
       session_id: sessionId,
       clarification_answer: answer,
+      context: parseContext(),
     }),
     signal: requestContext.signal,
   });
@@ -456,6 +474,7 @@ async function validateCode(requestContext) {
     return;
   }
   state.latestValidation = body;
+  renderPreview(body.validation);
   renderDiagnostics();
   if (body.ok) {
     elements.validationSummary.textContent = "Проверка кода прошла успешно.";
@@ -503,6 +522,7 @@ function clearSessionState(message = "Новая сессия готова.") {
   state.traceId = null;
   state.latestSession = {};
   state.latestValidation = {};
+  renderPreview(null);
   state.latestTrace = {};
   state.outputContract = null;
   state.timeline = [];
@@ -576,6 +596,7 @@ function bindEvents() {
 
 function showError(error, clearObsoleteResult = true) {
   if (clearObsoleteResult) {
+    renderPreview(null);
     elements.codeOutput.value = "";
     state.latestValidation = {};
     state.outputContract = null;
