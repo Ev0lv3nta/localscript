@@ -1,17 +1,20 @@
 from __future__ import annotations
 
-import importlib
 import subprocess
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol
 
 from pydantic import TypeAdapter, ValidationError
 
+from app.core.budgets import remaining_seconds, workflow_budget
+from app.validation.lua_ast import analyze_lua_output
 from app.validation.output import OutputParseError, parse_output
 from app.validation.runtime import find_lua_binary, find_luac_binary, runtime_version
+from app.validation.runtime_executor import execute_output
 from app.workflow.contracts import (
+    AcceptanceCase,
     CheckStatus,
     CodeCandidate,
     JsonValue,
@@ -25,12 +28,16 @@ from app.workflow.contracts import (
 
 
 class PolicyFinding(Protocol):
-    code: str
-    message: str
+    @property
+    def code(self) -> str: ...
+
+    @property
+    def message(self) -> str: ...
 
 
 class PolicyResult(Protocol):
-    findings: tuple[PolicyFinding, ...]
+    @property
+    def findings(self) -> tuple[PolicyFinding, ...]: ...
 
 
 class RuntimeResult(Protocol):
@@ -48,11 +55,7 @@ JSON_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 
 def _default_policy_analyzer(code: str, output_style: str) -> PolicyResult:
-    # PR1 owns the parser and its policy. A dynamic import keeps this adapter independently
-    # testable while PR1 and PR2 are developed on separate branches.
-    module = importlib.import_module("app.validation.lua_ast")
-    analyzer = cast(Callable[..., PolicyResult], module.analyze_lua_output)
-    return analyzer(code, output_style=output_style)
+    return analyze_lua_output(code, output_style=output_style)
 
 
 def _default_runtime_executor(
@@ -61,9 +64,7 @@ def _default_runtime_executor(
     output_style: str,
     output_shape: str | None = None,
 ) -> RuntimeResult:
-    module = importlib.import_module("app.validation.runtime_executor")
-    executor = cast(Callable[..., RuntimeResult], module.execute_output)
-    return executor(
+    return execute_output(
         code=code,
         context=context,
         output_style=output_style,
@@ -99,41 +100,43 @@ class DeterministicCandidateValidator:
         self._luac_locator = luac_locator or _default_luac_locator
         self._compile_timeout_seconds = compile_timeout_seconds
 
-    def validate(self, *, candidate: CodeCandidate, plan: TaskPlan) -> ValidationResult:
-        checks: list[ValidationCheck] = []
-        observations: list[JsonValue] = []
-
-        contract_check, chunks = self._validate_format(candidate.code, plan.output.format)
-        checks.append(contract_check)
-        if contract_check.status is CheckStatus.FAILED:
-            return ValidationResult(checks=tuple(checks))
-
-        try:
-            policy = self._policy_analyzer(candidate.code, plan.output.format.value)
-        except Exception:
-            checks.append(
-                self._failed(
-                    "ast_policy",
-                    "policy_internal_error",
-                    "Lua AST policy could not analyze the candidate.",
-                )
+    def validate(
+        self,
+        *,
+        candidate: CodeCandidate,
+        plan: TaskPlan,
+        context: dict[str, JsonValue],
+        examples: tuple[AcceptanceCase, ...] = (),
+    ) -> ValidationResult:
+        with workflow_budget(20):
+            return self._validate_all(
+                candidate=candidate, plan=plan, context=context, examples=examples
             )
-            return ValidationResult(checks=tuple(checks))
 
-        if policy.findings:
-            checks.extend(
-                self._failed("ast_policy", finding.code, finding.message)
-                for finding in policy.findings
-            )
-            return ValidationResult(checks=tuple(checks))
-        checks.append(self._passed("ast_policy"))
-
-        luac_check = self._compile_chunks(chunks)
-        checks.append(luac_check)
-        if luac_check.status is CheckStatus.FAILED:
-            return ValidationResult(checks=tuple(checks))
-
-        for case in plan.acceptance_cases:
+    def _validate_all(
+        self,
+        *,
+        candidate: CodeCandidate,
+        plan: TaskPlan,
+        context: dict[str, JsonValue],
+        examples: tuple[AcceptanceCase, ...],
+    ) -> ValidationResult:
+        request_result = self.validate_existing(
+            candidate=candidate, output=plan.output, context=context
+        )
+        checks = list(request_result.checks)
+        observations: list[JsonValue] = [
+            {"source": "request", "actual": observation.get("actual")}
+            for observation in request_result.observations
+            if isinstance(observation, dict)
+        ]
+        if not request_result.ok:
+            return ValidationResult(checks=tuple(checks), observations=tuple(observations))
+        cases = [("caller", case) for case in examples] + [
+            ("model", case) for case in plan.acceptance_cases
+        ]
+        for source, case in cases:
+            remaining_seconds(20)
             try:
                 execution = self._runtime_executor(
                     candidate.code,
@@ -144,7 +147,7 @@ class DeterministicCandidateValidator:
             except Exception:
                 checks.append(
                     self._failed(
-                        f"acceptance:{case.name}",
+                        f"{source}:{case.name}",
                         "sandbox_internal_error",
                         "The restricted runtime could not execute this acceptance case.",
                     )
@@ -154,7 +157,7 @@ class DeterministicCandidateValidator:
             if execution.degraded:
                 checks.append(
                     self._failed(
-                        f"acceptance:{case.name}",
+                        f"{source}:{case.name}",
                         execution.error_code or "sandbox_runtime_missing",
                         execution.error_message
                         or "The required restricted Lua runtime is unavailable.",
@@ -164,7 +167,7 @@ class DeterministicCandidateValidator:
             if not execution.ok:
                 checks.append(
                     self._failed(
-                        f"acceptance:{case.name}",
+                        f"{source}:{case.name}",
                         execution.error_code or "sandbox_execution_failed",
                         execution.error_message
                         or "The candidate failed in the restricted runtime.",
@@ -177,7 +180,7 @@ class DeterministicCandidateValidator:
             except ValidationError:
                 checks.append(
                     self._failed(
-                        f"acceptance:{case.name}",
+                        f"{source}:{case.name}",
                         "sandbox_non_json_result",
                         "The restricted runtime returned a non-JSON value.",
                     )
@@ -185,7 +188,9 @@ class DeterministicCandidateValidator:
                 continue
             # Наблюдение несёт и ожидание: без него ни ревизия, ни человек в трассе не видят,
             # чем именно ответ разошёлся с планом.
-            observations.append({"case": case.name, "actual": actual, "expected": case.expected})
+            observations.append(
+                {"source": source, "case": case.name, "actual": actual, "expected": case.expected}
+            )
             shape_error = self._shape_error(
                 actual,
                 expected=plan.output.shape,
@@ -194,7 +199,7 @@ class DeterministicCandidateValidator:
             if shape_error is not None:
                 checks.append(
                     self._failed(
-                        f"acceptance:{case.name}",
+                        f"{source}:{case.name}",
                         shape_error,
                         "The candidate result does not satisfy the declared output shape.",
                     )
@@ -202,13 +207,13 @@ class DeterministicCandidateValidator:
             elif not self._json_equal(actual, case.expected):
                 checks.append(
                     self._failed(
-                        f"acceptance:{case.name}",
+                        f"{source}:{case.name}",
                         "acceptance_result_mismatch",
                         "The candidate result does not match the expected JSON value.",
                     )
                 )
             else:
-                checks.append(self._passed(f"acceptance:{case.name}"))
+                checks.append(self._passed(f"{source}:{case.name}"))
 
         return ValidationResult(checks=tuple(checks), observations=tuple(observations))
 
@@ -359,7 +364,7 @@ class DeterministicCandidateValidator:
                     [luac, "-p", str(temp_path)],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    timeout=self._compile_timeout_seconds,
+                    timeout=remaining_seconds(self._compile_timeout_seconds),
                     check=False,
                     close_fds=True,
                 )

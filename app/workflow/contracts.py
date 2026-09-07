@@ -243,6 +243,10 @@ class WorkflowState(StrictModel):
         elif self.stage in {WorkflowStage.REVIEWED, WorkflowStage.COMPLETED}:
             if self.candidate is None or self.validation is None or self.review is None:
                 raise ValueError("reviewed stage requires candidate, validation, and review")
+            if self.stage is WorkflowStage.COMPLETED and (
+                not self.validation.ok or not isinstance(self.review, ReviewApproved)
+            ):
+                raise ValueError("completed stage requires successful validation and approval")
         elif self.stage is WorkflowStage.FAILED and self.candidate is None:
             raise ValueError("failed generated workflow requires its rejected candidate internally")
         return self
@@ -268,6 +272,7 @@ class WorkflowResult(StrictModel):
     question: str | None = None
     diagnostics: tuple[WorkflowDiagnostic, ...] = ()
     validation: ValidationResult | None = None
+    output: OutputContract | None = None
     revision_count: int = 0
 
     @model_validator(mode="after")

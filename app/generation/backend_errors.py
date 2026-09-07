@@ -30,6 +30,12 @@ class BackendTimeout(BackendError):
     default_message = "Backend request timed out."
 
 
+class BackendBusy(BackendError):
+    code = "backend_busy"
+    default_message = "A generation is already running. Try again shortly."
+    retry_after_seconds = 2
+
+
 class BackendProtocol(BackendError):
     code = "backend_protocol_error"
     default_message = "Backend returned an invalid response."
