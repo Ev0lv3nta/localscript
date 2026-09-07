@@ -10,7 +10,6 @@ from typing import Any
 
 from app.core.state import resolve_state_path
 from app.core.storage import (
-    SECRET_KEYS,
     atomic_write_json,
     delete_file,
     ensure_directory,
@@ -18,7 +17,6 @@ from app.core.storage import (
     isoformat_utc,
     parse_utc,
     read_json,
-    redact_nested,
     resolve_within_root,
     utc_now,
     validate_identifier,
@@ -47,7 +45,12 @@ class SessionStore:
     ) -> None:
         self.root = resolve_state_path("LOCALSCRIPT_SESSION_DIR", "sessions", root=root)
         ensure_directory(self.root)
-        self._lock_path = self.root / ".locks" / "store.lock"
+        with contextlib.suppress(OSError):
+            os.chmod(self.root, 0o700)
+        self._locks_root = ensure_directory(self.root / ".locks")
+        with contextlib.suppress(OSError):
+            os.chmod(self._locks_root, 0o700)
+        self._store_lock_path = self._locks_root / "store.lock"
         self.retention_count = _retention_value(
             retention_count, "LOCALSCRIPT_SESSION_RETENTION_COUNT"
         )
@@ -60,6 +63,14 @@ class SessionStore:
         validate_identifier(session_id, "invalid_session_id")
         return resolve_within_root(self.root, f"{session_id}.json", "invalid_session_id")
 
+    def _lock_path_for(self, session_id: str) -> Path:
+        validate_identifier(session_id, "invalid_session_id")
+        return resolve_within_root(
+            self.root,
+            f"{self._locks_root.name}/{session_id}.lock",
+            "invalid_session_id",
+        )
+
     def _read_unlocked(self, session_id: str) -> dict[str, Any] | None:
         path = self.path_for(session_id)
         if not path.exists():
@@ -68,7 +79,7 @@ class SessionStore:
         return payload
 
     def read(self, session_id: str) -> dict[str, Any] | None:
-        with file_lock(self._lock_path):
+        with file_lock(self._lock_path_for(session_id)):
             payload = self._read_unlocked(session_id)
             return deepcopy(payload)
 
@@ -81,7 +92,11 @@ class SessionStore:
         path = self.path_for(session_id)
         current = self._read_unlocked(session_id) if path.exists() else None
         timestamp = isoformat_utc(now or utc_now(self._clock))
-        persisted = redact_nested(deepcopy(payload), SECRET_KEYS)
+        # Session files are private functional state. Redacting keys such as
+        # ``token`` here changes the input seen by a later workflow turn and can
+        # silently change the generated program. Public traces are redacted at
+        # their own storage boundary; sessions preserve the caller's JSON value.
+        persisted = deepcopy(payload)
         if not isinstance(persisted, dict):
             raise TypeError("session payload must be a mapping")
         persisted["session_id"] = session_id
@@ -93,10 +108,10 @@ class SessionStore:
         return path, persisted
 
     def write(self, session_id: str, payload: dict[str, Any]) -> Path:
-        with file_lock(self._lock_path):
+        with file_lock(self._lock_path_for(session_id)):
             path, _ = self._write_unlocked(session_id, payload)
-            self._cleanup_unlocked()
-            return path
+        self.cleanup()
+        return path
 
     @contextlib.contextmanager
     def transaction(
@@ -104,8 +119,14 @@ class SessionStore:
         session_id: str,
         default: dict[str, Any] | Callable[[], dict[str, Any]] | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """Yield a locked mutable session and atomically commit on normal exit."""
-        with file_lock(self._lock_path):
+        """Yield one locked mutable session and atomically commit on normal exit.
+
+        The lock is deliberately scoped to ``session_id``. A generation may
+        keep this transaction open while it calls the model, but it must not
+        block reads or updates for unrelated sessions.
+        """
+        committed = False
+        with file_lock(self._lock_path_for(session_id)):
             current = self._read_unlocked(session_id)
             if current is None:
                 current = default() if callable(default) else deepcopy(default)
@@ -114,7 +135,9 @@ class SessionStore:
             working = deepcopy(current)
             yield working
             self._write_unlocked(session_id, working)
-            self._cleanup_unlocked()
+            committed = True
+        if committed:
+            self.cleanup()
 
     def update(
         self,
@@ -171,5 +194,18 @@ class SessionStore:
 
     def cleanup(self) -> list[str]:
         """Apply configured count/TTL retention; repeated calls are idempotent."""
-        with file_lock(self._lock_path):
-            return self._cleanup_unlocked()
+        if self.retention_count is None and self.retention_ttl_seconds is None:
+            return []
+        with file_lock(self._store_lock_path):
+            # Lock the current sessions in stable order before selecting
+            # retention victims. This prevents cleanup from deleting a session
+            # while its generation transaction is about to commit fresh state.
+            session_ids = sorted(
+                path.stem
+                for path in self.root.iterdir()
+                if path.is_file() and path.suffix == ".json" and not path.name.startswith(".")
+            )
+            with contextlib.ExitStack() as locks:
+                for session_id in session_ids:
+                    locks.enter_context(file_lock(self._lock_path_for(session_id)))
+                return self._cleanup_unlocked()

@@ -88,7 +88,7 @@ def test_session_transaction_rolls_back_on_error(tmp_path):
     assert store.read(SESSION_ID)["value"] == "before"
 
 
-def test_nested_secrets_are_redacted_without_breaking_session_context(tmp_path):
+def test_private_session_context_preserves_functional_secret_named_fields(tmp_path):
     sentinel = "STATE-SECRET-SENTINEL"
     sessions = SessionStore(root=tmp_path / "sessions")
     sessions.write(
@@ -97,7 +97,7 @@ def test_nested_secrets_are_redacted_without_breaking_session_context(tmp_path):
             "original_task": "continue this prompt",
             "context": {
                 "useful": {"items": [1, 2]},
-                "credentials": {"authorization": sentinel, "api-key": sentinel},
+                "wf": {"vars": {"token": sentinel, "password": "functional-value"}},
             },
         },
     )
@@ -105,11 +105,12 @@ def test_nested_secrets_are_redacted_without_breaking_session_context(tmp_path):
     persisted = sessions.read(SESSION_ID)
     assert persisted["original_task"] == "continue this prompt"
     assert persisted["context"]["useful"] == {"items": [1, 2]}
-    assert persisted["context"]["credentials"] == {
-        "authorization": REDACTED,
-        "api-key": REDACTED,
+    assert persisted["context"]["wf"]["vars"] == {
+        "token": sentinel,
+        "password": "functional-value",
     }
-    assert sentinel not in sessions.path_for(SESSION_ID).read_text(encoding="utf-8")
+    assert sentinel in sessions.path_for(SESSION_ID).read_text(encoding="utf-8")
+    assert sessions.path_for(SESSION_ID).stat().st_mode & 0o077 == 0
 
 
 def test_trace_redaction_public_projection_and_uuid4_ids(tmp_path):

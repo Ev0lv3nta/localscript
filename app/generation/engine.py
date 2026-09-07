@@ -14,10 +14,48 @@ from app.generation.results import (
     SessionSummary,
     StageEvent,
 )
-from app.workflow.contracts import JsonValue, WorkflowResult, WorkflowStage, WorkflowStatus
+from app.workflow.contracts import (
+    AcceptanceCase,
+    JsonValue,
+    OutputContract,
+    WorkflowResult,
+    WorkflowStage,
+    WorkflowStatus,
+)
 from app.workflow.coordinator import CandidateValidator, WorkflowCoordinator
 from app.workflow.roles import GeneratorRole, PlannerRole, ReviewerRole, StructuredModelClient
 from app.workflow.validation import DeterministicCandidateValidator
+
+MAX_SESSION_USER_TURNS = 10
+_CONTEXT_UNSET = object()
+
+
+class SessionStateError(ValueError):
+    """A caller-correctable session error for HTTP/CLI adapters."""
+
+    def __init__(self, *, code: str, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+        self.message = message
+
+
+class SessionNotFoundError(SessionStateError):
+    def __init__(self, session_id: str) -> None:
+        super().__init__(
+            code="session_not_found",
+            status_code=404,
+            message=f"Session {session_id!r} was not found.",
+        )
+
+
+class SessionConflictError(SessionStateError):
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            code="session_conflict",
+            status_code=409,
+            message=message,
+        )
 
 
 class CompletionBackend(Protocol):
@@ -93,10 +131,12 @@ class GenerationEngine:
     def generate(
         self,
         prompt: str | None = None,
-        context: object = None,
+        context: object = _CONTEXT_UNSET,
         session_id: str | None = None,
         feedback: str | None = None,
         clarification_answer: str | None = None,
+        output: OutputContract | None = None,
+        examples: tuple[AcceptanceCase, ...] = (),
     ) -> GenerationResult:
         resolved_session_id = session_id or uuid.uuid4().hex
         with self.session_store.transaction(resolved_session_id) as session_state:
@@ -106,7 +146,10 @@ class GenerationEngine:
                 session_id=resolved_session_id,
                 feedback=feedback,
                 clarification_answer=clarification_answer,
+                output=output,
+                examples=examples,
                 session_state=session_state,
+                requested_existing_session=session_id is not None,
             )
 
     def _generate_locked(
@@ -117,7 +160,10 @@ class GenerationEngine:
         session_id: str,
         feedback: str | None,
         clarification_answer: str | None,
+        output: OutputContract | None,
+        examples: tuple[AcceptanceCase, ...],
         session_state: dict[str, object],
+        requested_existing_session: bool,
     ) -> GenerationResult:
         self._prepare_session_state(
             session_id=session_id,
@@ -125,7 +171,10 @@ class GenerationEngine:
             context=context,
             feedback=feedback,
             clarification_answer=clarification_answer,
+            output=output,
+            examples=examples,
             session_state=session_state,
+            requested_existing_session=requested_existing_session,
         )
 
         open_question = str(session_state.get("open_clarification_question") or "")
@@ -144,8 +193,10 @@ class GenerationEngine:
         workflow = self.workflow.run(
             prompt=str(session_state["original_task"]),
             context=session_state.get("context"),
-            clarification_answer=clarification_answer,
-            feedback=feedback,
+            clarification_answer=self._effective_clarification_history(session_state),
+            feedback=self._effective_feedback_history(session_state),
+            output=self._stored_output(session_state),
+            examples=self._stored_examples(session_state),
             observe=timer.observe,
         )
         stage_events = timer.finish()
@@ -182,9 +233,14 @@ class GenerationEngine:
         context: object,
         feedback: str | None,
         clarification_answer: str | None,
+        output: OutputContract | None,
+        examples: tuple[AcceptanceCase, ...],
         session_state: dict[str, object],
+        requested_existing_session: bool,
     ) -> None:
         if not session_state:
+            if requested_existing_session and not prompt:
+                raise SessionNotFoundError(session_id)
             if not prompt:
                 raise ValueError("original task is required to initialize a session")
             session_state.update(
@@ -193,32 +249,174 @@ class GenerationEngine:
                     "status": SessionStatus.PENDING.value,
                     "original_task": prompt,
                     "latest_prompt": prompt,
-                    "context": context,
+                    "context": None if context is _CONTEXT_UNSET else context,
+                    "output": output.model_dump(mode="json") if output is not None else None,
+                    "examples": [item.model_dump(mode="json") for item in examples],
                     "open_clarification_question": "",
                     "clarification_history": [],
                     "feedback_history": [],
+                    "user_turn_history": [],
                     "latest_trace_id": None,
                     "trace_ids": [],
                 }
             )
-        elif prompt:
-            session_state["latest_prompt"] = prompt
+        elif prompt is not None:
+            raise SessionConflictError(
+                "A prompt cannot replace the task in an existing session; "
+                "start a new session for a new task or use feedback to revise this one."
+            )
 
-        if context is not None:
+        if session_state and session_state.get("original_task"):
+            stored_output = GenerationEngine._stored_output(session_state)
+            if output is not None and output != stored_output:
+                raise SessionConflictError(
+                    "The output contract cannot change within an existing session; "
+                    "start a new session for a different contract."
+                )
+            stored_examples = GenerationEngine._stored_examples(session_state)
+            if examples and examples != stored_examples:
+                raise SessionConflictError(
+                    "Acceptance examples cannot change within an existing session; "
+                    "start a new session for different examples."
+                )
+
+        if context is not _CONTEXT_UNSET:
             session_state["context"] = context
-        if feedback:
-            history = session_state.setdefault("feedback_history", [])
-            if isinstance(history, list):
-                history.append(feedback)
+
+        GenerationEngine._ensure_user_turn_history(session_state)
         if clarification_answer:
             question = str(session_state.get("open_clarification_question") or "")
-            history = session_state.setdefault("clarification_history", [])
-            if isinstance(history, list):
-                history.append({"question": question, "answer": clarification_answer})
+            if not question:
+                raise SessionConflictError(
+                    "This session has no open clarification question to answer."
+                )
+            GenerationEngine._append_user_turn(
+                session_state,
+                {
+                    "kind": "clarification",
+                    "question": question,
+                    "text": clarification_answer,
+                },
+            )
             session_state["open_clarification_question"] = ""
+        if feedback:
+            GenerationEngine._append_user_turn(
+                session_state,
+                {"kind": "feedback", "text": feedback},
+            )
 
         if not session_state.get("original_task"):
             raise ValueError("original task is required to initialize a session")
+
+    @staticmethod
+    def _stored_output(session_state: dict[str, object]) -> OutputContract | None:
+        raw_output = session_state.get("output")
+        if raw_output is None:
+            return None
+        return OutputContract.model_validate(raw_output)
+
+    @staticmethod
+    def _stored_examples(session_state: dict[str, object]) -> tuple[AcceptanceCase, ...]:
+        raw_examples = session_state.get("examples")
+        if raw_examples is None:
+            return ()
+        if not isinstance(raw_examples, list):
+            raise ValueError("persisted session examples must be a list")
+        return tuple(AcceptanceCase.model_validate(item) for item in raw_examples)
+
+    @staticmethod
+    def _ensure_user_turn_history(session_state: dict[str, object]) -> list[dict[str, str]]:
+        raw_history = session_state.get("user_turn_history")
+        normalized: list[dict[str, str]] = []
+        if isinstance(raw_history, list):
+            for item in raw_history:
+                if not isinstance(item, dict):
+                    continue
+                kind = str(item.get("kind") or "")
+                text = str(item.get("text") or "")
+                if kind == "clarification" and text:
+                    normalized.append(
+                        {
+                            "kind": kind,
+                            "question": str(item.get("question") or ""),
+                            "text": text,
+                        }
+                    )
+                elif kind == "feedback" and text:
+                    normalized.append({"kind": kind, "text": text})
+        else:
+            # Older state has separate lists and no cross-list ordering. Keep it
+            # readable and bounded; new writes use the canonical ordered list.
+            clarifications = session_state.get("clarification_history")
+            if isinstance(clarifications, list):
+                for item in clarifications:
+                    if not isinstance(item, dict) or not item.get("answer"):
+                        continue
+                    normalized.append(
+                        {
+                            "kind": "clarification",
+                            "question": str(item.get("question") or ""),
+                            "text": str(item["answer"]),
+                        }
+                    )
+            feedback = session_state.get("feedback_history")
+            if isinstance(feedback, list):
+                normalized.extend(
+                    {"kind": "feedback", "text": str(item)} for item in feedback if item
+                )
+
+        normalized = normalized[-MAX_SESSION_USER_TURNS:]
+        session_state["user_turn_history"] = normalized
+        GenerationEngine._sync_public_history(session_state, normalized)
+        return normalized
+
+    @staticmethod
+    def _append_user_turn(
+        session_state: dict[str, object],
+        turn: dict[str, str],
+    ) -> None:
+        history = GenerationEngine._ensure_user_turn_history(session_state)
+        history.append(turn)
+        del history[:-MAX_SESSION_USER_TURNS]
+        session_state["user_turn_history"] = history
+        GenerationEngine._sync_public_history(session_state, history)
+
+    @staticmethod
+    def _sync_public_history(
+        session_state: dict[str, object],
+        history: list[dict[str, str]],
+    ) -> None:
+        session_state["clarification_history"] = [
+            {"question": item.get("question", ""), "answer": item["text"]}
+            for item in history
+            if item["kind"] == "clarification"
+        ]
+        session_state["feedback_history"] = [
+            item["text"] for item in history if item["kind"] == "feedback"
+        ]
+
+    @staticmethod
+    def _effective_clarification_history(session_state: dict[str, object]) -> str | None:
+        history = GenerationEngine._ensure_user_turn_history(session_state)
+        entries = [item for item in history if item["kind"] == "clarification"]
+        if not entries:
+            return None
+        lines = ["Confirmed clarification history (oldest to newest):"]
+        for index, item in enumerate(entries, start=1):
+            lines.append(
+                f"{index}. Question: {item.get('question', '')}\n   Answer: {item['text']}"
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _effective_feedback_history(session_state: dict[str, object]) -> str | None:
+        history = GenerationEngine._ensure_user_turn_history(session_state)
+        entries = [item["text"] for item in history if item["kind"] == "feedback"]
+        if not entries:
+            return None
+        lines = ["Applied feedback history (oldest to newest):"]
+        lines.extend(f"{index}. {text}" for index, text in enumerate(entries, start=1))
+        return "\n".join(lines)
 
     @staticmethod
     def build_session_summary(session_state: dict[str, object]) -> SessionSummary:
