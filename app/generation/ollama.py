@@ -13,7 +13,9 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.core.budgets import remaining_seconds
 from app.generation.backend_errors import (
+    BackendBusy,
     BackendError,
     BackendModel,
     BackendProtocol,
@@ -51,7 +53,7 @@ class OllamaBackend:
             base_url=self.host,
             timeout=_request_timeout(profile.request_timeout_seconds),
             limits=httpx.Limits(
-                max_connections=self._parallel,
+                max_connections=self._parallel + 1,
                 max_keepalive_connections=self._parallel,
                 keepalive_expiry=30.0,
             ),
@@ -207,7 +209,9 @@ class OllamaBackend:
 
     def _request_json(self, method: str, path: str, **kwargs: Any) -> Mapping[str, Any]:
         try:
-            with self._request_slot():
+            limit = 2.0 if method == "GET" else float(self.profile.request_timeout_seconds)
+            kwargs["timeout"] = httpx.Timeout(remaining_seconds(limit))
+            with self._request_slot(inference=method != "GET"):
                 response = self._client.request(method, path, **kwargs)
                 response.raise_for_status()
         except httpx.TimeoutException:
@@ -230,8 +234,9 @@ class OllamaBackend:
         return payload
 
     @contextmanager
-    def _request_slot(self) -> Iterator[None]:
-        self._semaphore.acquire()
+    def _request_slot(self, *, inference: bool = True) -> Iterator[None]:
+        if inference and not self._semaphore.acquire(blocking=False):
+            raise BackendBusy()
         entered = False
         try:
             with self._state:
@@ -246,7 +251,8 @@ class OllamaBackend:
                     self._active_requests -= 1
                     if not self._active_requests:
                         self._state.notify_all()
-            self._semaphore.release()
+            if inference:
+                self._semaphore.release()
 
     @staticmethod
     def _build_prompt(prompt: str, context: Any) -> str:

@@ -51,6 +51,12 @@ class OutputContract(StrictModel):
     shape: OutputShape
     nullable: bool = False
 
+    @model_validator(mode="after")
+    def envelope_is_object(self) -> OutputContract:
+        if self.format is OutputFormat.JSON_ENVELOPE and self.shape is not OutputShape.OBJECT:
+            raise ValueError("JSON envelope output must have object shape")
+        return self
+
 
 class ContextValueType(StrEnum):
     NULL = "null"
@@ -196,6 +202,11 @@ class ValidationResult(StrictModel):
 
 
 class WorkflowStage(StrEnum):
+    PLANNING = "planning"
+    GENERATING = "generating"
+    VALIDATING = "validating"
+    REVIEWING = "reviewing"
+    REVISING = "revising"
     RECEIVED = "received"
     PLANNED = "planned"
     GENERATED = "generated"
@@ -217,6 +228,14 @@ class WorkflowState(StrictModel):
 
     @model_validator(mode="after")
     def validate_stage_payload(self) -> WorkflowState:
+        if self.stage in {
+            WorkflowStage.PLANNING,
+            WorkflowStage.GENERATING,
+            WorkflowStage.VALIDATING,
+            WorkflowStage.REVIEWING,
+            WorkflowStage.REVISING,
+        }:
+            raise ValueError("operation events are not persisted workflow states")
         empty = self.plan is None and self.candidate is None and self.validation is None
         if self.stage in {
             WorkflowStage.RECEIVED,
@@ -243,6 +262,10 @@ class WorkflowState(StrictModel):
         elif self.stage in {WorkflowStage.REVIEWED, WorkflowStage.COMPLETED}:
             if self.candidate is None or self.validation is None or self.review is None:
                 raise ValueError("reviewed stage requires candidate, validation, and review")
+            if self.stage is WorkflowStage.COMPLETED and (
+                not self.validation.ok or not isinstance(self.review, ReviewApproved)
+            ):
+                raise ValueError("completed stage requires successful validation and approval")
         elif self.stage is WorkflowStage.FAILED and self.candidate is None:
             raise ValueError("failed generated workflow requires its rejected candidate internally")
         return self
@@ -268,6 +291,7 @@ class WorkflowResult(StrictModel):
     question: str | None = None
     diagnostics: tuple[WorkflowDiagnostic, ...] = ()
     validation: ValidationResult | None = None
+    output: OutputContract | None = None
     revision_count: int = 0
 
     @model_validator(mode="after")

@@ -1,123 +1,45 @@
-# Архитектура LocalScript
+# Архитектура
 
-## Контекст и границы
+LocalScript генерирует небольшие преобразования для `wf.vars` и `wf.initVariables`. HTTP API и CLI используют один GenerationEngine; статический UI обращается к HTTP API.
 
-LocalScript — один локальный application service с тремя адаптерами: HTTP API, CLI и небольшой web UI. Адаптеры не принимают продуктовых решений: они приводят ввод к общей команде и отображают типизированный `GenerationOutcome`.
+## Путь запроса
 
-```mermaid
-flowchart TB
-    U["Пользователь"] --> UI["Vanilla web UI"]
-    U --> CLI["CLI"]
-    U --> API["FastAPI"]
-    UI --> API
-    CLI --> APP["Generation application service"]
-    API --> APP
-    APP --> COORD["WorkflowCoordinator"]
-    COORD --> INV["ContextInspector"]
-    COORD --> ROLES["Planner / Generator / Reviewer"]
-    ROLES --> OL["Ollama backend"]
-    COORD --> VAL["DeterministicCandidateValidator"]
-    VAL --> AST["Lua AST policy"]
-    VAL --> LUA["luac и ограниченный Lua 5.4 runtime"]
-    APP --> STATE["SessionStore и TraceStore"]
+1. Service boundary проверяет вход и свободное место для операции. Одна генерация или validation выполняется одновременно; следующий запрос получает busy.
+2. Сессия сохраняет исходную задачу, актуальный контекст, подтверждённые уточнения, правки и последний принятый код.
+3. ContextInspector строит пути и типы. Для большого JSON сохраняется ограниченная выборка значений с явными отметками пропусков; массивы могут содержать неоднородные объекты.
+4. Planner возвращает TaskPlan либо конкретный вопрос. Явные output и examples пользователя остаются обязательными требованиями.
+5. Generator предлагает CodeCandidate.
+6. Validator проверяет формат, AST, luac, выполняет код на настоящем контексте, затем проверяет доверенные examples и модельные acceptance cases.
+7. Reviewer получает задачу с подтверждёнными уточнениями, план, код и результаты выполнения в новом контексте.
+8. После отказа validator/reviewer допускается одна code revision с повторной полной проверкой.
 
-    subgraph trusted["Доверенная локальная граница приложения"]
-      APP
-      COORD
-      INV
-      ROLES
-      VAL
-      AST
-      STATE
-    end
+Planner и reviewer используют ту же локальную модель, что и generator. Их согласие не является независимым доказательством правильности. Task-specific router, канонических ответов и переписывания Lua строковыми заменами нет.
 
-    subgraph constrained["Ограниченная, но не изолированная среда"]
-      LUA
-    end
-```
+## Что означает результат
 
-Ollama может работать как локальный процесс либо как Compose service `ollama`. Произвольный удалённый host по умолчанию запрещён. Сетевой сервис также слушает loopback, пока оператор явно не включит remote mode и bearer-аутентификацию.
+`completed` означает, что обязательные проверки выполнены и прошли. Он не доказывает соответствие произвольному естественному языку на всех входах.
 
-## Последовательность запроса
+Ответ содержит фактический output contract и validation observations:
+- `source=request` — пробное выполнение на данных запроса;
+- `source=caller` — явно переданные пользователем контекст и expected;
+- `source=model` — дополнительные примеры planner, то есть самопроверка модели.
 
-```mermaid
-sequenceDiagram
-    actor User as Пользователь
-    participant Adapter as API / CLI / UI
-    participant Coord as WorkflowCoordinator
-    participant Planner as Planner
-    participant Generator as Generator
-    participant Validator as Deterministic validation
-    participant Reviewer as Reviewer
-    participant State as Session / Trace store
+Только completed содержит code. Clarification содержит question. Транспортные ошибки отделены от отказов проверки: недоступная модель — 503, timeout — 504, перегрузка — 429 с Retry-After. Ошибки пользовательского ввода — 422, отсутствующая сессия — 404, несовместимое продолжение — 409.
 
-    User->>Adapter: prompt + context
-    Adapter->>Coord: generate command
-    Coord->>State: создать или загрузить сессию
-    Coord->>Planner: inventory + запрос
-    alt данных недостаточно
-        Planner-->>Coord: clarification
-        Coord->>State: сохранить вопрос
-        Coord-->>Adapter: результат без code
-        Adapter-->>User: один уточняющий вопрос
-    else задача разрешена
-        Planner-->>Coord: TaskPlan с acceptance cases
-        Coord->>Generator: план + запрос
-        Generator-->>Coord: CodeCandidate
-        Coord->>Validator: AST-policy, luac, acceptance cases
-        alt детерминированная проверка пройдена
-            Coord->>Reviewer: запрос, план, код, результаты
-        end
-        alt проверка или reviewer отклонили кандидата
-            Coord->>Generator: одна revision по structured findings
-            Generator-->>Coord: исправленный CodeCandidate
-            Coord->>Validator: повторная полная проверка
-            Coord->>Reviewer: повторное ревью
-        end
-        alt всё пройдено
-            Coord->>State: сохранить безопасную трассировку
-            Coord-->>Adapter: completed + code
-        else кандидат отклонён
-            Coord->>State: сохранить diagnostics без публикации кода
-            Coord-->>Adapter: отказ без code
-        end
-    end
-```
+`POST /api/validate` не обращается к модели: принимает code, context и OutputContract, проверяет код и показывает результат выполнения. При отсутствии expected подтверждает исполнение и форму, а не семантику задачи.
 
-## Контракты
+## Сессии и бюджет
 
-### План задачи
+Новый prompt создаёт новую сессию; в существующей сессии изменения передаются через feedback, ответ на вопрос — через clarification_answer. Подтверждённая история передаётся при продолжении. После десяти пользовательских уточнений/правок требуется новая сессия; ранние условия не удаляются автоматически.
 
-Единственный детерминированный разбор ввода — `ContextInventory`: обход `wf.vars` и `wf.initVariables` с типами значений и типизированными путями. Естественный язык кодом не классифицируется.
+Сессии хранят исходные данные приватно, с файлами 0600 и каталогами 0700. Поля token/password внутри пользовательского JSON не редактируются: это изменило бы задачу. По умолчанию хранятся до 100 сессий не дольше семи дней. Чтение возвращает последнюю атомарно сохранённую версию, очистка пропускает занятую сессию.
 
-`TaskPlan` содержит цель, входные `WorkflowPath`, `OutputContract`, упорядоченные шаги, ограничения и от одного до трёх исполнимых acceptance cases. План неизменяем и полностью определяет, что именно проверяется дальше; альтернатива плану — `ClarificationRequest` с одним конкретным вопросом.
+Общий бюджет workflow — 180 секунд, validation — 20 секунд. Каждая модельная попытка ограничена оставшимся временем. Schema correction допускается один раз на структурированный ответ; противоречивый план получает одну повторную попытку. Эти попытки учитываются отдельно от code revision.
 
-### Typed outcome
+Trace содержит идентификаторы, модель, стадии и их длительности, коды диагностики. Prompt, context, raw output и Lua в trace не записываются. Стадии planning/generating/validating/reviewing/revising обозначают реально выполняемую операцию.
 
-`GenerationOutcome` допускает пять статусов. Только `completed` может содержать непустой `code`, и только вместе с `ValidationOutcome(PASSED)`. Это проверяется самим immutable domain-объектом, generation engine и HTTP adapters.
+## Runtime
 
-### Validation
+Общий parser выделяет raw Lua или до 16 envelope-чанков. Tree-sitter проверяет настоящие узлы Lua, luac подтверждает синтаксис. Каждый чанк выполняется отдельным ограниченным процессом с read-only библиотеками и workflow-данными.
 
-Валидация не переписывает код. Она проверяет соответствие `OutputContract`, анализирует Lua через AST-policy, компилирует чанки `luac`, выполняет кандидата в ограниченном runtime на каждом acceptance case и сравнивает результат с ожидаемым JSON по структуре. Каждый check имеет стабильный `code` и сообщение; ошибка любой стадии означает, что код не публикуется.
-
-Ожидаемая форма результата берётся из плана конкретного запроса, а не из зарегистрированной таблицы семейств, поэтому проверка не замкнута на реализацию.
-
-### Revision
-
-Deterministic-отказ или отклонение reviewer даёт ровно одну полноценную revision: generator получает план, отклонённый код и structured findings и возвращает нового кандидата, который проходит полную проверку и ревью заново. Строковых правок кода, канонических шаблонов и task-specific repair нет.
-
-### Состояние
-
-Session и trace идентификаторы — UUID. Записи выполняются атомарно с блокировками, индексом, retention и quarantine повреждённых файлов. Writable state хранится вне checkout в XDG/user state или каталоге `LOCALSCRIPT_STATE_DIR`.
-
-Trace предназначен для диагностики, а не для полного model transcript: код и приватные model artifacts редактируются перед записью. Runtime lock создаётся только успешным judged/release pipeline и привязан к SHA ревизии.
-
-## Структура решений
-
-Архитектурные решения фиксируются короткими ADR в [`docs/adr`](adr/): outcome contract, typed agentic workflow, границы eval-корпусов и evidence. Решения о task resolver, реестре семейств и границах repair отмечены как заменённые ADR 0007, а не удалены. Изменение публичного контракта начинается с ADR или обновления существующего решения, затем получает тест контракта.
-
-## Осознанные ограничения
-
-Проект остаётся небольшим модульным монолитом. Отдельный frontend framework, база данных, очередь задач и микросервисы не добавлены: для локального single-user сценария они увеличили бы поверхность отказа без продуктовой пользы.
-
-Это ролевой workflow на одной локальной модели, а не автономная multi-agent система. Reviewer работает на той же модели, что и generator, поэтому он ловит расхождение с планом, но не заменяет независимую экспертизу. Обычный запрос стоит трёх обращений к модели вместо одного — плата за то, что решение принимает модель, а не таблица правил.
+Точные правила чисел, null, массивов, helpers и различия Linux/macOS описаны в [модели безопасности](security.md). Runtime предназначен для локального инструмента одного владельца, не для публичного исполнения недоверенных программ.

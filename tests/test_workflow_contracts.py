@@ -85,12 +85,20 @@ def test_context_inspector_preserves_explicit_null_roots():
     assert ("wf.initVariables", "object") in entries
 
 
-def test_context_sample_falls_back_to_typed_inventory_when_large():
-    sample = ContextInspector(sample_chars=20).sample({"wf": {"vars": {"value": "x" * 100}}})
+def test_context_sample_preserves_representative_values_when_large():
+    sample = ContextInspector().sample(
+        {"wf": {"vars": {"items": [{"x": 1}, {"y": False}], "padding": "x" * 7000}}}
+    )
 
     assert isinstance(sample, dict)
     assert sample["truncated"] is True
-    assert sample["paths"]
+    assert sample["representative_context"]["wf"]["vars"]["items"] == [{"x": 1}, {"y": False}]
+    assert sample["omitted_paths"]
+
+
+def test_inventory_includes_fields_beyond_first_array_item():
+    inventory = ContextInspector().inventory({"wf": {"vars": {"items": [{"x": 1}, {"y": 2}]}}})
+    assert any(entry.path.segments == ("items", "[]", "y") for entry in inventory.entries)
 
 
 def test_code_candidate_rejects_markdown_fences():

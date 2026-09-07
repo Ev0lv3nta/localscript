@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import get_runtime_profile
@@ -60,3 +61,20 @@ def test_validate_endpoint_requires_contract_and_context(tmp_path):
     response = client.post("/api/validate", json={"code": "return 1"})
 
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("code", ["", "  \n", "```lua\nreturn 1\n```", "```\nreturn 1"])
+def test_validate_endpoint_rejects_empty_or_fenced_code_as_request_error(tmp_path, code):
+    client = make_client(tmp_path)
+
+    response = client.post(
+        "/api/validate",
+        json={
+            "code": code,
+            "context": {"wf": {"vars": {}}},
+            "output": {"format": "lua_block", "shape": "scalar", "nullable": False},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]

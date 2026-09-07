@@ -6,12 +6,15 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
+from app.core.budgets import remaining_seconds
 from app.generation.backend_errors import BackendProtocol
 from app.workflow.context import ContextInspector
 from app.workflow.contracts import (
+    AcceptanceCase,
     CodeCandidate,
     ContextInventory,
     JsonValue,
+    OutputContract,
     PlanningDecision,
     ReviewDecision,
     TaskPlan,
@@ -26,11 +29,13 @@ REVIEW_ADAPTER: TypeAdapter[ReviewDecision] = TypeAdapter(ReviewDecision)
 
 DOMAIN_SPECIFICATION = """LocalScript generates small Lua 5.4 transformations for a workflow runtime.
 The only workflow data roots are wf.vars and wf.initVariables. Treat both as read-only.
-Two output formats exist and they are not interchangeable. `lua_block` is one raw Lua chunk that
-returns the result, and it is the default: choose it unless the request itself asks for several
-named workflow variables at once. `json_envelope` is a JSON object whose every value is a
-lua{...}lua chunk, and it belongs only to that multi-variable case. One returned value is a
-`lua_block`, whatever the shape of that value.
+Two output formats exist. `lua_block` is a raw Lua chunk returning one result; it is the default.
+`json_envelope` is a JSON object whose values are lua{...}lua chunks. Honor an explicitly requested
+envelope even for one key; otherwise choose it for several named workflow variables.
+JSON inputs contain no nested null: omit absent fields instead. Numbers must be finite and within
+±(2^53-1). Preserve false and zero. Only dense arrays and string-keyed objects are supported.
+Use _utils.array.markAsArray({}) for a newly created nested empty array; the top-level empty
+table follows the declared output shape. string.lower/upper handle ASCII, not Unicode casing.
 Do not use operating-system, file, network, package, debug, dynamic-loading, or process APIs.
 Prefer a direct returned value over workflow mutation. Ask one concrete question when the requested
 source, result shape, or mutate-versus-return intent cannot be determined safely.
@@ -48,11 +53,16 @@ class StructuredModelClient:
     ) -> SchemaValue:
         adapter = response.adapter
         json_schema = response.schema
+        remaining_seconds(180)
+        if len(prompt) > 24000:
+            raise BackendProtocol(reason="model_input_too_large")
         raw = self._complete(prompt, response_format=json_schema)
+        remaining_seconds(180)
         try:
             return adapter.validate_json(raw, strict=True)
         except ValidationError as first_error:
             correction_prompt = self._correction_prompt(prompt, first_error)
+            remaining_seconds(180)
             corrected = self._complete(correction_prompt, response_format=json_schema)
             try:
                 return adapter.validate_json(corrected, strict=True)
@@ -163,6 +173,8 @@ class PlannerRole:
         inventory: ContextInventory,
         clarification_answer: str | None = None,
         feedback: str | None = None,
+        output: OutputContract | None = None,
+        examples: tuple[AcceptanceCase, ...] = (),
         rejected_plan_findings: tuple[str, ...] = (),
     ) -> PlanningDecision:
         payload = {
@@ -172,6 +184,8 @@ class PlannerRole:
             "paths_present_under_both_roots": list(ContextInspector.ambiguous_paths(inventory)),
             "clarification_answer": clarification_answer,
             "feedback": feedback,
+            "caller_output": output.model_dump(mode="json") if output else None,
+            "caller_examples": [case.model_dump(mode="json") for case in examples],
             "rejected_plan_findings": list(rejected_plan_findings),
         }
         role_prompt = f"""You are the planner in a local code-generation workflow.
@@ -183,6 +197,7 @@ For a plan:
 - preserve the requested output format and shape;
 - provide 1 to 3 small executable acceptance cases with complete workflow contexts;
 - acceptance cases must test the requested behavior, not a preferred source-code spelling.
+- caller_output and caller_examples are requirements; never rewrite their expected values.
 
 Each acceptance case field `expected` holds the exact JSON value the generated code returns for
 that context, and it must match the declared output shape: `scalar` is a bare number, string,
@@ -205,10 +220,9 @@ reasons. Fix them; do not repeat the same plan and do not fall back to a clarifi
 same time. If the request needs one of them and does not itself name the root, that is the
 ambiguity you must ask about: choosing a root yourself produces confidently wrong code.
 
-Return a clarification only when the request leaves you choosing between two concrete alternatives
-that are both present in the context, most often wf.vars versus wf.initVariables. A request that
-names its own source and its transformation is not ambiguous; plan it. Read-only workflow context
-is a rule you already know, not an ambiguity worth asking about.
+Ask a concrete clarification when necessary input data or a required choice is missing.
+Two roots may be used together when requested. A missing optional field with an explicitly
+specified default does not need clarification. Read-only workflow context is a known rule.
 
 Domain specification:
 {DOMAIN_SPECIFICATION}

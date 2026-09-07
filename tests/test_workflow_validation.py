@@ -67,16 +67,24 @@ def test_validator_runs_ast_luac_and_acceptance_case(monkeypatch):
         luac_locator=lambda: "/usr/bin/luac",
     )
 
-    result = validator.validate(candidate=CodeCandidate(code="return 4"), plan=build_plan())
+    result = validator.validate(
+        context={"wf": {"vars": {"value": 4}}},
+        candidate=CodeCandidate(code="return 4"),
+        plan=build_plan(),
+    )
 
     assert result.ok is True
     assert [check.name for check in result.checks] == [
         "output_contract",
         "ast_policy",
         "luac",
-        "acceptance:value",
+        "sandbox",
+        "model:value",
     ]
-    assert result.observations == ({"case": "value", "actual": 4, "expected": 4},)
+    assert result.observations == (
+        {"source": "request", "actual": 4},
+        {"source": "model", "case": "value", "actual": 4, "expected": 4},
+    )
 
 
 def test_validator_never_executes_candidate_rejected_by_ast():
@@ -96,6 +104,7 @@ def test_validator_never_executes_candidate_rejected_by_ast():
     )
 
     result = validator.validate(
+        context={"wf": {"vars": {"value": 4}}},
         candidate=CodeCandidate(code='return os.execute("id")'),
         plan=build_plan(),
     )
@@ -112,7 +121,11 @@ def test_validator_fails_closed_when_luac_is_unavailable():
         luac_locator=lambda: None,
     )
 
-    result = validator.validate(candidate=CodeCandidate(code="return 4"), plan=build_plan())
+    result = validator.validate(
+        context={"wf": {"vars": {"value": 4}}},
+        candidate=CodeCandidate(code="return 4"),
+        plan=build_plan(),
+    )
 
     assert result.ok is False
     assert result.checks[-1].code == "luac_runtime_missing"
@@ -139,6 +152,7 @@ def test_validator_compares_json_results_structurally(monkeypatch):
     )
 
     result = validator.validate(
+        context={"wf": {"vars": {"value": 4}}},
         candidate=CodeCandidate(code='{"result":"lua{return {1, 2}}lua"}'),
         plan=plan,
     )

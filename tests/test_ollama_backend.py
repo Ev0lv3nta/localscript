@@ -115,7 +115,7 @@ def test_backend_constructs_one_isolated_bounded_client(monkeypatch):
     assert options["timeout"].read == 12.0
     assert options["timeout"].write == 10.0
     assert options["timeout"].pool == 5.0
-    assert options["limits"].max_connections == 3
+    assert options["limits"].max_connections == 4  # one connection reserved for metadata/readiness
     assert options["limits"].max_keepalive_connections == 3
     backend.close()
 
@@ -197,7 +197,7 @@ def test_close_is_idempotent_and_context_managed(monkeypatch):
     assert exc_info.value.reason == "backend_closed"
 
 
-def test_parallel_profile_caps_all_backend_io(monkeypatch):
+def test_parallel_profile_rejects_excess_inference_instead_of_queuing(monkeypatch):
     lock = threading.Lock()
     active = 0
     maximum = 0
@@ -236,7 +236,10 @@ def test_parallel_profile_caps_all_backend_io(monkeypatch):
     for thread in threads:
         thread.join()
 
-    assert failures == []
+    from app.generation.backend_errors import BackendBusy
+
+    assert len(failures) == 1
+    assert isinstance(failures[0], BackendBusy)
     assert maximum == 1
     backend.close()
 

@@ -5,13 +5,21 @@ from typing import Protocol
 
 from pydantic import TypeAdapter, ValidationError
 
-from app.generation.backend_errors import BackendError, BackendUnavailable
+from app.generation.backend_errors import (
+    BackendBusy,
+    BackendError,
+    BackendModel,
+    BackendTimeout,
+    BackendUnavailable,
+)
 from app.workflow.context import ContextInspector
 from app.workflow.contracts import (
+    AcceptanceCase,
     CheckStatus,
     ClarificationRequest,
     CodeCandidate,
     JsonValue,
+    OutputContract,
     ReviewDecision,
     ReviewRejected,
     TaskPlan,
@@ -37,7 +45,14 @@ class _InvalidJsonContext(Exception):
 
 
 class CandidateValidator(Protocol):
-    def validate(self, *, candidate: CodeCandidate, plan: TaskPlan) -> ValidationResult: ...
+    def validate(
+        self,
+        *,
+        candidate: CodeCandidate,
+        plan: TaskPlan,
+        context: dict[str, JsonValue],
+        examples: tuple[AcceptanceCase, ...] = (),
+    ) -> ValidationResult: ...
 
 
 StageObserver = Callable[[WorkflowStage], None]
@@ -66,6 +81,8 @@ class WorkflowCoordinator:
         context: object,
         clarification_answer: str | None = None,
         feedback: str | None = None,
+        output: OutputContract | None = None,
+        examples: tuple[AcceptanceCase, ...] = (),
         observe: StageObserver | None = None,
     ) -> WorkflowResult:
         state = WorkflowState()
@@ -75,14 +92,40 @@ class WorkflowCoordinator:
                 json_context = JSON_ADAPTER.validate_python(context, strict=True)
             except ValidationError as error:
                 raise _InvalidJsonContext from error
+            if json_context is None:
+                self._observe(observe, WorkflowStage.CLARIFICATION_REQUIRED)
+                return WorkflowResult(
+                    status=WorkflowStatus.CLARIFICATION_REQUIRED,
+                    question=(
+                        "Передайте JSON-контекст с исходными данными. Для задачи без входных "
+                        "данных передайте явно пустой wf.vars или wf.initVariables."
+                    ),
+                )
+            if not isinstance(json_context, dict):
+                raise _InvalidJsonContext
             inventory = self.context_inspector.inventory(json_context)
             context_sample = self.context_inspector.sample(json_context)
+            # Every role sees the confirmed task, including choices made after clarification.
+            prompt = "\n".join(
+                part
+                for part in (
+                    prompt,
+                    f"Confirmed clarification: {clarification_answer}"
+                    if clarification_answer
+                    else "",
+                    f"Requested changes: {feedback}" if feedback else "",
+                )
+                if part
+            )
+            self._observe(observe, WorkflowStage.PLANNING)
             decision = self.planner.run(
                 prompt=prompt,
                 context_sample=context_sample,
                 inventory=inventory,
                 clarification_answer=clarification_answer,
                 feedback=feedback,
+                output=output,
+                examples=examples,
             )
             if isinstance(decision, ClarificationRequest):
                 self._observe(observe, WorkflowStage.CLARIFICATION_REQUIRED)
@@ -92,19 +135,23 @@ class WorkflowCoordinator:
                 )
 
             plan = decision
+            actual_context: dict[str, JsonValue] = json_context
             state = WorkflowState(stage=WorkflowStage.PLANNED, plan=plan)
             self._observe(observe, state.stage)
-            plan_check = self._validate_plan(plan)
+            plan_check = self._validate_plan(plan, output=output)
             if not plan_check.ok:
                 # Противоречивый план восстановим ровно так же, как невалидный код: планировщик
                 # получает свои же замечания и одну попытку. Отказывать сразу было асимметрично —
                 # коду правка полагалась, а плану нет.
+                self._observe(observe, WorkflowStage.PLANNING)
                 decision = self.planner.run(
                     prompt=prompt,
                     context_sample=context_sample,
                     inventory=inventory,
                     clarification_answer=clarification_answer,
                     feedback=feedback,
+                    output=output,
+                    examples=examples,
                     rejected_plan_findings=tuple(
                         f"{check.code}: {check.message}"
                         for check in plan_check.checks
@@ -116,10 +163,11 @@ class WorkflowCoordinator:
                 plan = decision
                 state = WorkflowState(stage=WorkflowStage.PLANNED, plan=plan)
                 self._observe(observe, state.stage)
-                plan_check = self._validate_plan(plan)
+                plan_check = self._validate_plan(plan, output=output)
                 if not plan_check.ok:
                     return self._failure(plan_check, WorkflowStage.PLANNED)
 
+            self._observe(observe, WorkflowStage.GENERATING)
             candidate = self.generator.run(prompt=prompt, plan=plan)
             state = WorkflowState(
                 stage=WorkflowStage.GENERATED,
@@ -127,7 +175,10 @@ class WorkflowCoordinator:
                 candidate=candidate,
             )
             self._observe(observe, state.stage)
-            validation = self.validator.validate(candidate=candidate, plan=plan)
+            self._observe(observe, WorkflowStage.VALIDATING)
+            validation = self.validator.validate(
+                candidate=candidate, plan=plan, context=actual_context, examples=examples
+            )
             state = WorkflowState(
                 stage=WorkflowStage.VALIDATED,
                 plan=plan,
@@ -137,6 +188,7 @@ class WorkflowCoordinator:
             self._observe(observe, state.stage)
             review: ReviewDecision | None = None
             if validation.ok:
+                self._observe(observe, WorkflowStage.REVIEWING)
                 review = self.reviewer.run(
                     prompt=prompt,
                     plan=plan,
@@ -157,8 +209,10 @@ class WorkflowCoordinator:
                         status=WorkflowStatus.COMPLETED,
                         code=candidate.code,
                         validation=validation,
+                        output=plan.output,
                     )
 
+            self._observe(observe, WorkflowStage.REVISING)
             revised = self.generator.revise(
                 prompt=prompt,
                 plan=plan,
@@ -173,7 +227,10 @@ class WorkflowCoordinator:
                 revision_count=1,
             )
             self._observe(observe, state.stage)
-            revised_validation = self.validator.validate(candidate=revised, plan=plan)
+            self._observe(observe, WorkflowStage.VALIDATING)
+            revised_validation = self.validator.validate(
+                candidate=revised, plan=plan, context=actual_context, examples=examples
+            )
             state = WorkflowState(
                 stage=WorkflowStage.VALIDATED,
                 plan=plan,
@@ -188,6 +245,7 @@ class WorkflowCoordinator:
                     WorkflowStage.VALIDATED,
                     revision_count=1,
                 )
+            self._observe(observe, WorkflowStage.REVIEWING)
             revised_review = self.reviewer.run(
                 prompt=prompt,
                 plan=plan,
@@ -225,7 +283,11 @@ class WorkflowCoordinator:
                 code=revised.code,
                 validation=revised_validation,
                 revision_count=1,
+                output=plan.output,
             )
+        except (BackendBusy, BackendTimeout, BackendModel):
+            self._observe(observe, WorkflowStage.FAILED)
+            raise
         except BackendUnavailable as error:
             self._observe(observe, WorkflowStage.FAILED)
             return WorkflowResult(
@@ -276,8 +338,17 @@ class WorkflowCoordinator:
             )
 
     @staticmethod
-    def _validate_plan(plan: TaskPlan) -> ValidationResult:
+    def _validate_plan(plan: TaskPlan, *, output: OutputContract | None = None) -> ValidationResult:
         checks: list[ValidationCheck] = []
+        if output is not None and plan.output != output:
+            checks.append(
+                ValidationCheck(
+                    name="plan_contract",
+                    status=CheckStatus.FAILED,
+                    code="caller_output_contract_changed",
+                    message="The plan must preserve the caller's output contract.",
+                )
+            )
         case_names = [case.name for case in plan.acceptance_cases]
         if len(case_names) != len(set(case_names)):
             checks.append(
@@ -336,7 +407,10 @@ class WorkflowCoordinator:
         )
         status = (
             WorkflowStatus.POLICY_REJECTED
-            if any(diagnostic.code.startswith("policy_") for diagnostic in diagnostics)
+            if any(
+                check.name == "ast_policy" and check.status is CheckStatus.FAILED
+                for check in validation.checks
+            )
             else WorkflowStatus.VALIDATION_FAILED
         )
         return WorkflowResult(
@@ -348,5 +422,11 @@ class WorkflowCoordinator:
 
     @staticmethod
     def _observe(observer: StageObserver | None, stage: WorkflowStage) -> None:
-        if observer is not None:
+        if observer is not None and stage not in {
+            WorkflowStage.PLANNED,
+            WorkflowStage.GENERATED,
+            WorkflowStage.VALIDATED,
+            WorkflowStage.REVIEWED,
+            WorkflowStage.REVISED,
+        }:
             observer(stage)

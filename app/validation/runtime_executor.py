@@ -12,6 +12,7 @@ from pathlib import Path
 from time import monotonic
 from typing import BinaryIO
 
+from app.core.budgets import remaining_seconds
 from app.validation.lua_ast import analyze_lua_chunk
 from app.validation.output import OutputParseError, parse_output
 from app.validation.runtime import find_lua_binary, runtime_version
@@ -433,7 +434,11 @@ def _run_chunk(
 
     try:
         try:
-            remaining = min(5.0, deadline - monotonic()) if deadline is not None else 5.0
+            remaining = (
+                min(remaining_seconds(5.0), deadline - monotonic())
+                if deadline is not None
+                else remaining_seconds(5.0)
+            )
             if remaining <= 0:
                 raise subprocess.TimeoutExpired(lua_binary, 0)
             with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
