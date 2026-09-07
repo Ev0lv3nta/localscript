@@ -43,6 +43,7 @@ const elements = {
   exampleSelect: document.getElementById("exampleSelect"),
   promptInput: document.getElementById("promptInput"),
   contextInput: document.getElementById("contextInput"),
+  sourceRoots: document.getElementById("sourceRoots"),
   clarificationInput: document.getElementById("clarificationInput"),
   feedbackInput: document.getElementById("feedbackInput"),
   codeOutput: document.getElementById("codeOutput"),
@@ -96,6 +97,11 @@ function selectedOutputContract() {
     shape: elements.outputShape.value,
     nullable: elements.outputNullable.checked,
   };
+}
+
+function selectedSourceRoots() {
+  const value = elements.sourceRoots.value;
+  return value === "both" ? ["wf.vars", "wf.initVariables"] : value ? [value] : null;
 }
 
 function failedChecks(validation) {
@@ -313,6 +319,9 @@ function renderResult(body) {
 
   elements.codeOutput.value = body.code || "";
   renderClarification(body.question || "");
+  elements.clarificationInput.placeholder = body.source_choices?.length
+    ? "Выберите источник данных в левой колонке и нажмите «Продолжить»."
+    : "Ответьте на вопрос или дополните входной JSON-контекст.";
   refreshMetaBadges();
   renderDiagnostics();
 
@@ -392,6 +401,9 @@ async function generate(requestContext) {
   clearSessionState();
   pushTimeline("Запрос принят", prompt, "POST /api/generate");
   const payload = { prompt, context };
+  if (selectedSourceRoots()) {
+    payload.source_roots = selectedSourceRoots();
+  }
   if (state.draftOutputContract) {
     payload.output = state.draftOutputContract;
   }
@@ -417,25 +429,26 @@ async function continueSession(requestContext) {
     throw new Error("Нет активной сессии для продолжения.");
   }
   const answer = elements.clarificationInput.value.trim();
-  if (!answer) {
-    throw new Error("Введите ответ на уточнение.");
+  const sourceRoots = selectedSourceRoots();
+  const context = parseContext();
+  if (!answer && !sourceRoots && context === null) {
+    throw new Error("Ответьте на вопрос, выберите источник или дополните контекст.");
   }
   const sessionId = state.sessionId;
+  const payload = { session_id: sessionId, context };
+  if (answer) payload.clarification_answer = answer;
+  if (sourceRoots) payload.source_roots = sourceRoots;
   const { body } = await apiFetch("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      session_id: sessionId,
-      clarification_answer: answer,
-      context: parseContext(),
-    }),
+    body: JSON.stringify(payload),
     signal: requestContext.signal,
   });
   if (!isCurrentRequest(requestContext) || state.sessionId !== sessionId) {
     return;
   }
   renderResult(body);
-  pushTimeline("Уточнение учтено", answer || "Пустой ответ", body.status);
+  pushTimeline("Уточнение учтено", answer || sourceRoots?.join(", ") || "Контекст дополнен", body.status);
   await refreshSession(body.session_id, requestContext);
   await refreshTrace(body.trace_id, requestContext);
 }
@@ -513,6 +526,9 @@ async function copyCurl() {
     prompt: elements.promptInput.value,
     context: elements.contextInput.value.trim() ? JSON.parse(elements.contextInput.value) : null,
   };
+  if (selectedSourceRoots()) {
+    payload.source_roots = selectedSourceRoots();
+  }
   if (state.draftOutputContract) {
     payload.output = state.draftOutputContract;
   }
@@ -555,6 +571,7 @@ function clearSessionState(message = "Новая сессия готова.") {
 function resetSession(message = "Сессия сброшена.") {
   invalidateActiveRequest();
   state.draftOutputContract = null;
+  elements.sourceRoots.value = "";
   clearSessionState(message);
 }
 

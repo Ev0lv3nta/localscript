@@ -60,6 +60,14 @@
           <span id="jsonStatus" class="muted" role="status">Проверяется в браузере до отправки.</span>
         </div>
 
+        <label for="sourceRoots">Источник данных</label>
+        <select id="sourceRoots">
+          <option value="">По задаче; при неоднозначности — уточнить</option>
+          <option value="wf.vars">Только wf.vars</option>
+          <option value="wf.initVariables">Только wf.initVariables</option>
+          <option value="both">Оба источника</option>
+        </select>
+
         <button id="generateBtn" type="button" class="primary-btn">
           <span>Сгенерировать и проверить</span>
           <kbd>⌘ ↵</kbd>

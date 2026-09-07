@@ -26,6 +26,7 @@ from app.workflow.contracts import (
     OutputContract,
     OutputFormat,
     OutputShape,
+    WorkflowRoot,
     WorkflowStatus,
 )
 from app.workflow.validation import DeterministicCandidateValidator
@@ -91,6 +92,8 @@ def _generation_payload(result: GenerationResult) -> dict[str, Any]:
         payload["code"] = workflow.code
     if workflow.question is not None:
         payload["question"] = workflow.question
+    if workflow.source_choices:
+        payload["source_choices"] = [root.value for root in workflow.source_choices]
     if workflow.validation is not None:
         payload["validation"] = workflow.validation.model_dump(mode="json")
     if workflow.output is not None:
@@ -127,6 +130,9 @@ def generate(
     session_id: str | None = typer.Option(None, help="Existing session id to continue."),
     answer: str | None = typer.Option(None, help="Answer to the open clarification question."),
     feedback: str | None = typer.Option(None, help="Feedback for revising the previous result."),
+    source_root: list[WorkflowRoot] | None = typer.Option(
+        None, "--source-root", help="Select a workflow root; repeat to allow both roots."
+    ),
 ) -> None:
     """Generate LocalScript code, or continue an existing session."""
     if prompt_file == "-" and context_file == "-":
@@ -167,6 +173,7 @@ def generate(
                 session_id=session_id,
                 clarification_answer=answer,
                 feedback=feedback,
+                source_roots=tuple(source_root) if source_root else None,
             )
         else:
             result = engine.generate(
@@ -174,6 +181,7 @@ def generate(
                 session_id=session_id,
                 clarification_answer=answer,
                 feedback=feedback,
+                source_roots=tuple(source_root) if source_root else None,
             )
     except SessionStateError as error:
         _emit_error(error.code, error.message)

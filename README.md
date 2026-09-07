@@ -97,7 +97,7 @@ CLI использует то же ядро:
 
 ```bash
 .venv/bin/localscript generate --prompt-file task.txt --context-file context.json
-.venv/bin/localscript generate --session-id ID --answer 'wf.vars'
+.venv/bin/localscript generate --session-id ID --source-root wf.vars
 .venv/bin/localscript generate --session-id ID --feedback 'Сохрани исходный порядок'
 ```
 
