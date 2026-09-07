@@ -18,7 +18,6 @@ from app.workflow.contracts import (
     CheckStatus,
     ClarificationRequest,
     CodeCandidate,
-    ContextInventory,
     JsonValue,
     OutputContract,
     PlanningRefusal,
@@ -212,7 +211,7 @@ class WorkflowCoordinator:
                 validation=validation,
             )
             self._observe(observe, state.stage)
-            if self._source_clarification_required(validation, inventory, source_roots):
+            if self._source_clarification_required(validation, actual_context, source_roots):
                 self._observe(observe, WorkflowStage.CLARIFICATION_REQUIRED)
                 return self._source_clarification()
             review: ReviewDecision | None = None
@@ -272,7 +271,9 @@ class WorkflowCoordinator:
                 revision_count=1,
             )
             self._observe(observe, WorkflowStage.VALIDATED)
-            if self._source_clarification_required(revised_validation, inventory, source_roots):
+            if self._source_clarification_required(
+                revised_validation, actual_context, source_roots
+            ):
                 self._observe(observe, WorkflowStage.CLARIFICATION_REQUIRED)
                 return self._source_clarification()
             if not revised_validation.ok:
@@ -454,16 +455,18 @@ class WorkflowCoordinator:
     @staticmethod
     def _source_clarification_required(
         validation: ValidationResult,
-        inventory: ContextInventory,
+        context: dict[str, JsonValue],
         source_roots: tuple[WorkflowRoot, ...] | None,
     ) -> bool:
-        if source_roots is not None or not ContextInspector.ambiguous_paths(inventory):
+        if source_roots is not None or not ContextInspector.roots_overlap(context):
             return False
         for observation in validation.observations:
             if not isinstance(observation, dict) or observation.get("source") != "request":
                 continue
             read_roots = observation.get("read_roots")
-            return isinstance(read_roots, list) and len(set(read_roots)) == 1
+            # A read is not proof of influence: a dummy access to the other root cannot
+            # resolve ambiguity. Both-root transformations require explicit confirmation too.
+            return isinstance(read_roots, list) and bool(read_roots)
         return False
 
     @staticmethod

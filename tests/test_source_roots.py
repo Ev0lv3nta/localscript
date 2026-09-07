@@ -102,7 +102,7 @@ def test_model_cannot_hide_single_root_guess_by_omitting_plan_inputs():
     assert result.source_choices == (WorkflowRoot.VARS, WorkflowRoot.INIT_VARIABLES)
 
 
-def test_code_using_both_roots_does_not_force_single_root_question():
+def test_explicitly_selected_both_roots_do_not_force_single_root_question():
     plan = _plan(
         expected=7,
         case_context={"wf": {"vars": {"value": 3}, "initVariables": {"value": 4}}},
@@ -117,10 +117,28 @@ def test_code_using_both_roots_does_not_force_single_root_question():
     result = workflow.run(
         prompt="Add both values.",
         context={"wf": {"vars": {"value": 1}, "initVariables": {"value": 2}}},
+        source_roots=(WorkflowRoot.VARS, WorkflowRoot.INIT_VARIABLES),
     )
 
     assert result.status is WorkflowStatus.COMPLETED
     assert result.code == "return wf.vars.value + wf.initVariables.value"
+
+
+@pytest.mark.parametrize("large", [False, True])
+def test_dummy_second_root_read_and_inventory_truncation_cannot_hide_ambiguity(large):
+    context = {"wf": {"vars": {"value": 4}, "initVariables": {"value": 9}}}
+    if large:
+        context["wf"]["vars"].update({f"a_{index}": index for index in range(300)})
+    plan = _plan(expected=4, case_context=context)
+    workflow = WorkflowCoordinator(
+        planner=Planner(plan),
+        generator=Generator(initial="local ignored = wf.initVariables; return wf.vars.value"),
+        reviewer=Reviewer([]),
+        validator=DeterministicCandidateValidator(),
+    )
+    result = workflow.run(prompt="Return value.", context=context)
+    assert result.status is WorkflowStatus.CLARIFICATION_REQUIRED
+    assert result.code is None
 
 
 def test_code_with_no_workflow_reads_relies_on_examples_without_source_question():
