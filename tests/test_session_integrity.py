@@ -127,6 +127,8 @@ def test_answer_then_feedback_passes_accumulated_history_and_preserves_context(t
     assert third_call["examples"] == examples
     assert "Answer: Use wf.vars." in third_call["clarification_answer"]
     assert "1. Return nil when absent." in third_call["feedback"]
+    assert "Previous completed Lua candidate to revise:" in third_call["feedback"]
+    assert "return wf.vars.value" in third_call["feedback"]
 
     persisted = engine.session_store.read(first.session_id)
     assert persisted["context"]["wf"]["vars"]["token"] == "functional-token"
@@ -173,30 +175,118 @@ def test_existing_session_rejects_conflicting_output_or_examples(tmp_path):
     assert tuple(AcceptanceCase.model_validate(item) for item in persisted["examples"]) == examples
 
 
-def test_user_turn_history_keeps_only_ten_most_recent_meaningful_turns(tmp_path):
+def test_user_turn_limit_rejects_new_turn_without_losing_confirmed_history(tmp_path):
     workflow = CapturingWorkflow(
-        [_clarification_result(), *[_clarification_result() for _ in range(12)]]
+        [_clarification_result(), *[_clarification_result() for _ in range(10)]]
     )
     engine = _engine(tmp_path, workflow)
     first = engine.generate(prompt="Task A")
 
-    for index in range(12):
+    for index in range(MAX_SESSION_USER_TURNS):
         engine.generate(
             session_id=first.session_id,
             clarification_answer=f"answer-{index}",
         )
 
+    before_rejection = engine.session_store.read(first.session_id)
+    with pytest.raises(SessionConflictError) as raised:
+        engine.generate(
+            session_id=first.session_id,
+            clarification_answer="answer-10",
+        )
+
+    assert raised.value.status_code == 409
     persisted = engine.session_store.read(first.session_id)
+    assert persisted == before_rejection
     assert len(persisted["user_turn_history"]) == MAX_SESSION_USER_TURNS
     assert [item["text"] for item in persisted["user_turn_history"]] == [
-        f"answer-{index}" for index in range(2, 12)
+        f"answer-{index}" for index in range(MAX_SESSION_USER_TURNS)
     ]
     assert len(persisted["clarification_history"]) == MAX_SESSION_USER_TURNS
     effective_history = workflow.calls[-1]["clarification_answer"]
     answer_lines = [line.strip() for line in effective_history.splitlines() if "Answer:" in line]
-    assert "Answer: answer-1" not in answer_lines
-    assert "Answer: answer-2" in answer_lines
-    assert "Answer: answer-11" in answer_lines
+    assert "Answer: answer-0" in answer_lines
+    assert "Answer: answer-9" in answer_lines
+
+
+def test_legacy_over_limit_history_is_rejected_without_rewriting_state(tmp_path):
+    engine = _engine(tmp_path, CapturingWorkflow([]))
+    session_id = "legacy-session"
+    engine.session_store.write(
+        session_id,
+        {
+            "session_id": session_id,
+            "status": "clarification_required",
+            "original_task": "Task A",
+            "context": None,
+            "open_clarification_question": "Which root?",
+            "clarification_history": [
+                {"question": "Which root?", "answer": f"answer-{index}"}
+                for index in range(MAX_SESSION_USER_TURNS + 1)
+            ],
+            "feedback_history": [],
+        },
+    )
+    before = engine.session_store.read(session_id)
+
+    with pytest.raises(SessionConflictError):
+        engine.generate(session_id=session_id, clarification_answer="new answer")
+
+    assert engine.session_store.read(session_id) == before
+
+
+def test_cleanup_skips_active_session_and_reads_last_committed_snapshot(tmp_path):
+    store = SessionStore(
+        root=tmp_path / "sessions",
+        retention_count=100,
+        retention_ttl_seconds=60 * 60,
+    )
+    store.write("active-session", {"value": "committed"})
+    store.write("other-session", {"value": "other"})
+    entered = threading.Event()
+    release = threading.Event()
+
+    def hold_active_transaction():
+        with store.transaction("active-session") as state:
+            state["value"] = "uncommitted"
+            entered.set()
+            assert release.wait(timeout=5)
+
+    transaction = threading.Thread(target=hold_active_transaction)
+    transaction.start()
+    assert entered.wait(timeout=2)
+    assert store.read("active-session")["value"] == "committed"
+
+    store.retention_count = 0
+    cleanup_results = []
+    cleanup = threading.Thread(target=lambda: cleanup_results.append(store.cleanup()))
+    cleanup.start()
+    cleanup.join(timeout=0.5)
+
+    try:
+        assert not cleanup.is_alive()
+        assert cleanup_results == [["other-session"]]
+        assert store.read("active-session")["value"] == "committed"
+    finally:
+        release.set()
+        transaction.join(timeout=5)
+        cleanup.join(timeout=5)
+
+
+def test_session_retention_has_finite_defaults_and_preserves_explicit_zero(tmp_path, monkeypatch):
+    monkeypatch.delenv("LOCALSCRIPT_SESSION_RETENTION_COUNT", raising=False)
+    monkeypatch.delenv("LOCALSCRIPT_SESSION_RETENTION_TTL_SECONDS", raising=False)
+    default_store = SessionStore(root=tmp_path / "default")
+    zero_store = SessionStore(
+        root=tmp_path / "zero",
+        retention_count=0,
+        retention_ttl_seconds=0,
+    )
+
+    assert default_store.retention_count == 100
+    assert default_store.retention_ttl_seconds == 7 * 24 * 60 * 60
+    assert zero_store.retention_count == 0
+    assert zero_store.retention_ttl_seconds == 0
 
 
 def test_reading_unrelated_session_does_not_wait_for_generation(tmp_path):

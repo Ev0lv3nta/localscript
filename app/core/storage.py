@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import os
 import re
@@ -223,6 +224,58 @@ def file_lock(path: Path | str) -> Iterator[None]:
             else:
                 fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
+
+
+@contextlib.contextmanager
+def try_file_lock(path: Path | str) -> Iterator[bool]:
+    """Try to hold the same protected file lock without waiting.
+
+    Callers receive ``False`` when another thread or process owns the lock.
+    Path and symbolic-link checks are identical to :func:`file_lock`.
+    """
+    lock_path = Path(path)
+    ensure_directory(lock_path.parent)
+    _assert_not_symlink(lock_path)
+    thread_lock = _thread_lock_for(lock_path)
+    if not thread_lock.acquire(blocking=False):
+        yield False
+        return
+
+    fd: int | None = None
+    acquired_file_lock = False
+    try:
+        flags = os.O_RDWR | os.O_CREAT
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(str(lock_path), flags, 0o600)
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+
+                if os.fstat(fd).st_size == 0:
+                    os.write(fd, b"\0")
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired_file_lock = True
+        except OSError as exc:
+            if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                raise
+
+        yield acquired_file_lock
+    finally:
+        if fd is not None:
+            if acquired_file_lock:
+                if sys.platform == "win32":
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+        thread_lock.release()
 
 
 def _quarantine_corrupt_file(path: Path | str) -> Path | None:

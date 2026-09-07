@@ -194,7 +194,10 @@ class GenerationEngine:
             prompt=str(session_state["original_task"]),
             context=session_state.get("context"),
             clarification_answer=self._effective_clarification_history(session_state),
-            feedback=self._effective_feedback_history(session_state),
+            feedback=self._effective_feedback_history(
+                session_state,
+                include_latest_code=feedback is not None,
+            ),
             output=self._stored_output(session_state),
             examples=self._stored_examples(session_state),
             observe=timer.observe,
@@ -217,6 +220,8 @@ class GenerationEngine:
         if isinstance(trace_ids, list):
             trace_ids.append(trace_id)
         session_state["open_clarification_question"] = workflow.question or ""
+        if workflow.status is WorkflowStatus.COMPLETED and workflow.code:
+            session_state["latest_completed_code"] = workflow.code
 
         return GenerationResult(
             workflow=workflow,
@@ -365,7 +370,11 @@ class GenerationEngine:
                     {"kind": "feedback", "text": str(item)} for item in feedback if item
                 )
 
-        normalized = normalized[-MAX_SESSION_USER_TURNS:]
+        if len(normalized) > MAX_SESSION_USER_TURNS:
+            raise SessionConflictError(
+                "This session contains more than 10 persisted user turns and cannot be "
+                "continued safely; start a new session."
+            )
         session_state["user_turn_history"] = normalized
         GenerationEngine._sync_public_history(session_state, normalized)
         return normalized
@@ -376,8 +385,12 @@ class GenerationEngine:
         turn: dict[str, str],
     ) -> None:
         history = GenerationEngine._ensure_user_turn_history(session_state)
+        if len(history) >= MAX_SESSION_USER_TURNS:
+            raise SessionConflictError(
+                "This session already contains 10 user turns; start a new session instead of "
+                "discarding confirmed clarification or feedback history."
+            )
         history.append(turn)
-        del history[:-MAX_SESSION_USER_TURNS]
         session_state["user_turn_history"] = history
         GenerationEngine._sync_public_history(session_state, history)
 
@@ -409,13 +422,25 @@ class GenerationEngine:
         return "\n".join(lines)
 
     @staticmethod
-    def _effective_feedback_history(session_state: dict[str, object]) -> str | None:
+    def _effective_feedback_history(
+        session_state: dict[str, object],
+        *,
+        include_latest_code: bool,
+    ) -> str | None:
         history = GenerationEngine._ensure_user_turn_history(session_state)
         entries = [item["text"] for item in history if item["kind"] == "feedback"]
         if not entries:
             return None
         lines = ["Applied feedback history (oldest to newest):"]
         lines.extend(f"{index}. {text}" for index, text in enumerate(entries, start=1))
+        latest_code = session_state.get("latest_completed_code")
+        if include_latest_code and latest_code:
+            lines.extend(
+                (
+                    "Previous completed Lua candidate to revise:",
+                    str(latest_code),
+                )
+            )
         return "\n".join(lines)
 
     @staticmethod
