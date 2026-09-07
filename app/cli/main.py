@@ -16,6 +16,7 @@ from app.core.config import get_runtime_profile
 from app.core.resources import materialized_resource, resource_exists
 from app.core.runtime_lock import build_runtime_lock, write_runtime_lock
 from app.core.traces import TraceStore
+from app.generation.backend_errors import BackendError
 from app.generation.engine import GenerationEngine
 from app.generation.ollama import OllamaBackend
 from app.workflow.contracts import (
@@ -185,33 +186,64 @@ def benchmark(
 
 
 @cli.command()
-def doctor(judge: bool = typer.Option(False, "--judge", help="Run judged-path checks.")) -> None:
+def doctor(
+    evaluation: bool = typer.Option(
+        False,
+        "--eval",
+        "--judge",
+        help="Run the slow live evaluation and write a runtime evidence snapshot.",
+    ),
+) -> None:
     profile = get_runtime_profile()
     backend = OllamaBackend(profile)
+    trace_dir_writable = TraceStore().root.exists()
+    try:
+        available_tags = backend.list_tags()
+        ollama_reachable = True
+    except BackendError:
+        available_tags = []
+        ollama_reachable = False
+    model_present = profile.model in available_tags
     report = {
         "profile": profile.name,
         "model": profile.model,
         "fallback_model": profile.fallback_model,
-        "trace_dir_writable": TraceStore().root.exists(),
-        "ollama_reachable": backend.ping(),
-        "judge_mode": judge,
+        "ollama_host": profile.ollama_host,
+        "num_ctx": profile.num_ctx,
+        "num_predict": profile.num_predict,
+        "batch": profile.batch,
+        "parallel": profile.parallel,
+        "request_timeout_seconds": profile.request_timeout_seconds,
+        "trace_dir_writable": trace_dir_writable,
+        "ollama_reachable": ollama_reachable,
+        "model_present": model_present,
+        "eval_mode": evaluation,
+        "judge_mode": evaluation,
+        "ok": trace_dir_writable and ollama_reachable and model_present,
     }
-    if judge:
-        available_tags = backend.list_tags()
-        primary_vram_report = run_vram_probe(profile.model, profile.fallback_model)
+    if evaluation:
+        primary_vram_report = (
+            run_vram_probe(profile.model, profile.fallback_model)
+            if ollama_reachable
+            else {"status": "skipped", "reason": "ollama_unreachable", "model": profile.model}
+        )
         fallback_vram_report = None
         selected_model = profile.model
         selection_reason = "primary_selected"
 
         if (
-            available_tags
+            profile.fallback_model != profile.model
+            and available_tags
             and profile.model not in available_tags
             and profile.fallback_model in available_tags
         ):
             selected_model = profile.fallback_model
             selection_reason = "primary_tag_missing"
             fallback_vram_report = run_vram_probe(profile.fallback_model, profile.fallback_model)
-        elif primary_vram_report.get("status") == "over_cap":
+        elif (
+            profile.fallback_model != profile.model
+            and primary_vram_report.get("status") == "over_cap"
+        ):
             selected_model = profile.fallback_model
             selection_reason = "primary_over_vram_cap"
             fallback_vram_report = run_vram_probe(profile.fallback_model, profile.fallback_model)
@@ -224,20 +256,23 @@ def doctor(judge: bool = typer.Option(False, "--judge", help="Run judged-path ch
         selected_vram_report = primary_vram_report
         if selected_model == profile.fallback_model and fallback_vram_report is not None:
             selected_vram_report = fallback_vram_report
-
         selected_profile = profile
         selected_backend = backend
         if selected_model != profile.model:
             selected_profile = profile.model_copy(update={"model": selected_model})
             selected_backend = OllamaBackend(selected_profile)
-        quality_report = run_quality_benchmark(
-            profile=selected_profile,
-            backend=selected_backend,
-            mode="competition",
+        quality_report = (
+            run_quality_benchmark(
+                profile=selected_profile,
+                backend=selected_backend,
+                mode="competition",
+            )
+            if ollama_reachable and selected_model in available_tags
+            else {"ok": False, "backend_type": "not_run", "reason": "model_unavailable"}
         )
 
         hard_gate_failures = []
-        if not report["ollama_reachable"]:
+        if not ollama_reachable:
             hard_gate_failures.append("ollama_unreachable")
         if quality_report.get("backend_type") != "live_ollama":
             hard_gate_failures.append("quality_backend_not_live_ollama")
@@ -275,7 +310,8 @@ def doctor(judge: bool = typer.Option(False, "--judge", help="Run judged-path ch
         )
 
     typer.echo(json.dumps(report, ensure_ascii=False))
-    if judge and not report.get("ok", report["ollama_reachable"]):
+    backend.close()
+    if not report["ok"]:
         raise typer.Exit(code=1)
 
 

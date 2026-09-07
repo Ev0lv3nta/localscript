@@ -12,6 +12,13 @@ from tests.support_backends import DeterministicTestBackend
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def clear_runtime_profile_cache():
+    get_runtime_profile.cache_clear()
+    yield
+    get_runtime_profile.cache_clear()
+
+
 def _app(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALSCRIPT_STATE_DIR", str(tmp_path / "state"))
     profile = get_runtime_profile()
@@ -111,12 +118,12 @@ def test_request_body_limit_stops_chunked_stream_at_limit_plus_one():
 
 
 def test_runtime_scripts_default_to_loopback_and_compose_publishes_loopback():
-    judge_up = (PROJECT_ROOT / "scripts" / "judge_up.sh").read_text(encoding="utf-8")
+    start = (PROJECT_ROOT / "scripts" / "start.sh").read_text(encoding="utf-8")
     compose = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
 
-    assert "LOCALSCRIPT_BIND_HOST:-127.0.0.1" in judge_up
-    assert "non-loopback bind requires LOCALSCRIPT_REMOTE_MODE=1" in judge_up
+    assert '"UVI_HOST": profile.bind_host' in start
+    assert "non-loopback bind requires LOCALSCRIPT_REMOTE_MODE=1" in start
     assert '"127.0.0.1:${LOCALSCRIPT_PORT:-8080}' in compose
     assert "LOCALSCRIPT_OLLAMA_CONTAINER_ALIAS=ollama" in dockerfile
 

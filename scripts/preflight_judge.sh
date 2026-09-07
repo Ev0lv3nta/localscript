@@ -4,10 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
-PORT="${LOCALSCRIPT_PORT:-8080}"
-OLLAMA_HOST="${LOCALSCRIPT_OLLAMA_HOST:-http://127.0.0.1:11434}"
-PRIMARY_MODEL="${LOCALSCRIPT_PRIMARY_MODEL:-hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M}"
-FALLBACK_MODEL="${LOCALSCRIPT_FALLBACK_MODEL:-qwen3:8b-q4_K_M}"
 PYTHON_BIN="${LOCALSCRIPT_PYTHON_BIN:-}"
 
 if [ -z "${PYTHON_BIN}" ]; then
@@ -19,6 +15,21 @@ if [ -z "${PYTHON_BIN}" ]; then
     PYTHON_BIN="$(command -v python3)"
   fi
 fi
+
+EFFECTIVE_CONFIG="$("${PYTHON_BIN}" - <<'PY'
+import shlex
+from app.core.config import get_runtime_profile
+
+profile = get_runtime_profile()
+for name, value in {
+    "PORT": profile.port,
+    "OLLAMA_HOST": profile.ollama_host,
+    "PRIMARY_MODEL": profile.model,
+}.items():
+    print(f"{name}={shlex.quote(str(value))}")
+PY
+)"
+eval "${EFFECTIVE_CONFIG}"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -64,11 +75,6 @@ PY
   else
     fail_check "primary_model_tag_missing ${PRIMARY_MODEL}"
   fi
-  if printf '%s\n' "${tags}" | grep -Fx "${FALLBACK_MODEL}" >/dev/null 2>&1; then
-    pass "fallback_model_tag_present ${FALLBACK_MODEL}"
-  else
-    fail_check "fallback_model_tag_missing ${FALLBACK_MODEL}"
-  fi
 }
 
 check_lua_runtime() {
@@ -106,7 +112,6 @@ check_runtime_profile() {
 from app.core.config import get_runtime_profile
 profile = get_runtime_profile()
 assert profile.model
-assert profile.fallback_model
 assert profile.num_ctx > 0
 assert profile.num_predict > 0
 PY
@@ -121,7 +126,7 @@ check_doctor_judge() {
   local tmp_json tmp_err
   tmp_json="$(mktemp)"
   tmp_err="$(mktemp)"
-  if LOCALSCRIPT_IGNORE_LOCK=1 "${PYTHON_BIN}" -m app.cli.main doctor --judge >"${tmp_json}" 2>"${tmp_err}"; then
+  if LOCALSCRIPT_IGNORE_LOCK=1 "${PYTHON_BIN}" -m app.cli.main doctor --eval >"${tmp_json}" 2>"${tmp_err}"; then
     if "${PYTHON_BIN}" - <<PY >/dev/null 2>&1
 import json
 from pathlib import Path

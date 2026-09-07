@@ -1,12 +1,20 @@
 import tomllib
 from pathlib import Path
 
+import pytest
+import yaml
+
 from app.core import config as config_module
-from app.core.resources import read_resource_text
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIMARY_MODEL = "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M"
-FALLBACK_MODEL = "qwen3:8b-q4_K_M"
+
+
+@pytest.fixture(autouse=True)
+def clear_runtime_profile_cache():
+    config_module.get_runtime_profile.cache_clear()
+    yield
+    config_module.get_runtime_profile.cache_clear()
 
 
 def test_supported_python_and_dependencies_are_explicit():
@@ -15,8 +23,6 @@ def test_supported_python_and_dependencies_are_explicit():
     lock = tomllib.loads((PROJECT_ROOT / "uv.lock").read_text(encoding="utf-8"))
     locked_versions = {package["name"]: package["version"] for package in lock["package"]}
 
-    # Инвариант здесь — «всё закреплено точной версией и совпадает с локом», а не конкретные
-    # номера: дублировать их в тесте значило бы править его при каждом обновлении зависимостей.
     build_requires = pyproject["build-system"]["requires"]
     assert {requirement.split("==")[0] for requirement in build_requires} == {
         "setuptools",
@@ -36,79 +42,74 @@ def test_supported_python_and_dependencies_are_explicit():
         assert name in pinned
         assert locked_versions[name] == pinned[name]
 
-    # Typer тянет click транзитивно; прямой зависимостью он быть не должен, иначе две
-    # несогласованные версии CLI-слоя разъедутся молча.
     assert "click" not in pinned
     assert "click" in locked_versions
 
 
 def test_structured_output_budget_fits_a_full_task_plan():
-    """Планировщик возвращает JSON-план целиком, а не первые несколько сотен токенов.
-
-    С прежним бюджетом в 256 токенов план обрывался на полуслове и приходил как невалидный
-    структурированный ответ, поэтому нижняя граница здесь — часть контракта, а не вкусовщина.
-    """
     profile = config_module.get_runtime_profile()
 
     assert profile.num_predict >= 1024
     assert profile.num_ctx >= profile.num_predict * 2
-    config_module.get_runtime_profile.cache_clear()
 
 
-def test_runtime_profile_has_a_distinct_fallback(monkeypatch):
+def test_runtime_profile_uses_the_verified_model_without_a_required_fallback(monkeypatch):
     monkeypatch.delenv("LOCALSCRIPT_PRIMARY_MODEL", raising=False)
     monkeypatch.delenv("LOCALSCRIPT_FALLBACK_MODEL", raising=False)
-    config_module.get_runtime_profile.cache_clear()
 
     profile = config_module.get_runtime_profile()
 
+    assert profile.name == "local"
     assert profile.model == PRIMARY_MODEL
-    assert profile.fallback_model == FALLBACK_MODEL
-    assert profile.fallback_model != profile.model
-    config_module.get_runtime_profile.cache_clear()
+    assert profile.fallback_model == profile.model
 
 
 def test_runtime_profile_applies_model_environment_overrides(monkeypatch):
     monkeypatch.setenv("LOCALSCRIPT_PRIMARY_MODEL", "custom-primary")
     monkeypatch.setenv("LOCALSCRIPT_FALLBACK_MODEL", "custom-fallback")
-    config_module.get_runtime_profile.cache_clear()
 
     profile = config_module.get_runtime_profile()
 
     assert profile.model == "custom-primary"
     assert profile.fallback_model == "custom-fallback"
-    config_module.get_runtime_profile.cache_clear()
 
 
-def test_documented_and_script_defaults_match_runtime_profile():
+def test_compose_and_startup_scripts_defer_to_the_runtime_profile():
     env_example = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
-    shell_defaults = {
-        PROJECT_ROOT
-        / "scripts"
-        / "docker_entrypoint.sh": f'FALLBACK_MODEL="${{LOCALSCRIPT_FALLBACK_MODEL:-{FALLBACK_MODEL}}}"',
-        PROJECT_ROOT
-        / "scripts"
-        / "judge_up.sh": f'FALLBACK_MODEL="${{LOCALSCRIPT_FALLBACK_MODEL:-{FALLBACK_MODEL}}}"',
-        PROJECT_ROOT
-        / "scripts"
-        / "preflight_judge.sh": f'FALLBACK_MODEL="${{LOCALSCRIPT_FALLBACK_MODEL:-{FALLBACK_MODEL}}}"',
-    }
+    compose = yaml.safe_load((PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    service_environment = compose["services"]["localscript"]["environment"]
 
-    assert f"LOCALSCRIPT_PRIMARY_MODEL={PRIMARY_MODEL}" in env_example
-    assert f"LOCALSCRIPT_FALLBACK_MODEL={FALLBACK_MODEL}" in env_example
-    assert (
-        f'FALLBACK_MODEL="${{2:-{FALLBACK_MODEL}}}"'
-        in read_resource_text("scripts/bench_vram.sh").splitlines()
-    )
-    for script, expected_assignment in shell_defaults.items():
-        assert expected_assignment in script.read_text(encoding="utf-8").splitlines()
+    assert f"# LOCALSCRIPT_PRIMARY_MODEL={PRIMARY_MODEL}" in env_example
+    assert "LOCALSCRIPT_PRIMARY_MODEL" not in service_environment
+    assert "LOCALSCRIPT_FALLBACK_MODEL" not in service_environment
+    assert service_environment["LOCALSCRIPT_OLLAMA_HOST"] == "http://ollama:11434"
+    for script_name in ("start.sh", "docker_entrypoint.sh", "preflight_judge.sh"):
+        script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+        assert PRIMARY_MODEL not in script
+        assert "get_runtime_profile" in script
 
 
-def test_judge_up_defaults_to_supported_python_minors():
-    script = (PROJECT_ROOT / "scripts" / "judge_up.sh").read_text(encoding="utf-8")
+def test_start_defaults_to_supported_python_minors():
+    script = (PROJECT_ROOT / "scripts" / "start.sh").read_text(encoding="utf-8")
 
     assert 'SUPPORTED_PYTHON_MIN_MINOR="${LOCALSCRIPT_PYTHON_MIN_MINOR:-11}"' in script
     assert 'SUPPORTED_PYTHON_MAX_MINOR="${LOCALSCRIPT_PYTHON_MAX_MINOR:-12}"' in script
+
+
+def test_startup_probes_have_per_request_and_wall_clock_timeouts():
+    for script_name in ("start.sh", "docker_entrypoint.sh"):
+        script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+        assert "--connect-timeout" in script
+        assert "--max-time" in script
+        assert "SECONDS=0" in script
+
+
+def test_model_setup_targets_the_effective_ollama_host():
+    script = (PROJECT_ROOT / "scripts" / "setup_model.sh").read_text(encoding="utf-8")
+
+    assert "profile.model" in script
+    assert "profile.ollama_host" in script
+    assert 'OLLAMA_HOST="${OLLAMA_ENDPOINT}" ollama pull "${MODEL}"' in script
 
 
 def test_primary_install_paths_consume_the_lock():
@@ -121,12 +122,34 @@ def test_primary_install_paths_consume_the_lock():
 
 
 def test_batch_size_admits_a_whole_prompt():
-    """`num_batch: 1` означает промпт в один токен и валит свежий llama.cpp жёстким assert'ом.
-
-    Старый рантайм это молча переживал, поэтому настройка дожила до сюда из архитектуры,
-    где модель получала короткий сниппет.
-    """
     profile = config_module.get_runtime_profile()
 
     assert profile.batch >= 512
-    config_module.get_runtime_profile.cache_clear()
+
+
+def test_dead_candidate_chain_settings_are_not_part_of_effective_config():
+    fields = config_module.RuntimeProfile.model_fields
+
+    assert "max_candidates" not in fields
+    assert "model_chain_rounds" not in fields
+    assert "primary_launch" not in fields
+
+
+def test_compose_pins_verified_ollama_and_persists_separate_state():
+    compose = yaml.safe_load((PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+
+    assert compose["services"]["ollama"]["image"] == "ollama/ollama:0.33.3"
+    assert compose["services"]["ollama"]["environment"]["OLLAMA_NO_CLOUD"] == "1"
+    assert compose["services"]["ollama"]["volumes"] == ["ollama_models:/root/.ollama"]
+    assert compose["services"]["localscript"]["volumes"] == [
+        "localscript_state:/var/lib/localscript"
+    ]
+    assert set(compose["volumes"]) == {"localscript_state", "ollama_models"}
+
+
+def test_container_image_does_not_copy_the_build_workspace():
+    dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "COPY --from=build /workspace /workspace" not in dockerfile
+    assert "COPY --from=build /opt/venv /opt/venv" in dockerfile
+    assert "LOCALSCRIPT_STATE_DIR=/var/lib/localscript" in dockerfile

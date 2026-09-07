@@ -1,7 +1,7 @@
 from functools import lru_cache
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import yaml
 from pydantic import (
@@ -16,9 +16,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.core.resources import get_resource
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_PROFILE = "competition"
+DEFAULT_PROFILE = "local"
 
 PositiveInt = Annotated[int, Field(gt=0)]
+Port = Annotated[int, Field(gt=0, le=65535)]
 
 
 class ConfigurationError(RuntimeError):
@@ -55,9 +56,14 @@ class RuntimeProfile(BaseModel):
     )
 
     name: str = Field(default=DEFAULT_PROFILE, min_length=1)
-    model: str = Field(default="qwen3:8b-q4_K_M", min_length=1)
+    model: str = Field(
+        default="hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M",
+        min_length=1,
+    )
+    # Kept in the public snapshot for compatibility. Startup and readiness do not
+    # require or download a second model.
     fallback_model: str = Field(
-        default="qwen3:4b-instruct-2507-q4_K_M",
+        default="hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M",
         min_length=1,
     )
     think: bool = False
@@ -66,17 +72,22 @@ class RuntimeProfile(BaseModel):
     num_predict: PositiveInt = 256
     batch: PositiveInt = 1
     parallel: PositiveInt = 1
-    max_candidates: PositiveInt = 2
-    model_chain_rounds: PositiveInt = 1
     runtime_lua: str = Field(default="lua5.4_subprocess", min_length=1)
-    primary_launch: str = Field(default="./scripts/judge_up.sh", min_length=1)
     ollama_host: str = Field(default="http://127.0.0.1:11434", min_length=1)
+    ollama_mode: Literal["auto", "local_cli", "remote_api"] = "auto"
     request_timeout_seconds: PositiveInt = 45
     max_request_body_bytes: PositiveInt = 131072
     max_prompt_chars: PositiveInt = 6000
     max_context_bytes: PositiveInt = 64000
     max_context_depth: PositiveInt = 16
     max_context_nodes: PositiveInt = 2000
+    port: Port = 8080
+    bind_host: str = Field(default="127.0.0.1", min_length=1)
+    ui_enabled: bool = True
+    remote_mode: bool = False
+    remote_token: str = ""
+    startup_timeout_seconds: PositiveInt = 120
+    ollama_poll_interval_seconds: PositiveInt = 2
 
 
 class _EnvironmentSettings(BaseSettings):
@@ -101,17 +112,22 @@ class _EnvironmentSettings(BaseSettings):
     num_predict: PositiveInt | None = None
     batch: PositiveInt | None = None
     parallel: PositiveInt | None = None
-    max_candidates: PositiveInt | None = None
-    model_chain_rounds: PositiveInt | None = None
     runtime_lua: str | None = None
-    primary_launch: str | None = None
     ollama_host: str | None = None
+    ollama_mode: Literal["auto", "local_cli", "remote_api"] | None = None
     request_timeout_seconds: PositiveInt | None = None
     max_request_body_bytes: PositiveInt | None = None
     max_prompt_chars: PositiveInt | None = None
     max_context_bytes: PositiveInt | None = None
     max_context_depth: PositiveInt | None = None
     max_context_nodes: PositiveInt | None = None
+    port: Port | None = None
+    bind_host: str | None = None
+    ui_enabled: EnvironmentBool | None = None
+    remote_mode: EnvironmentBool | None = None
+    remote_token: str | None = None
+    startup_timeout_seconds: PositiveInt | None = None
+    ollama_poll_interval_seconds: PositiveInt | None = None
 
 
 class _RuntimeLockOverlay(BaseModel):
@@ -152,13 +168,31 @@ def get_profile_path(profile_name: str | None = None) -> Traversable:
         raise ConfigurationError("configuration_profile_not_found") from error
 
 
-def _load_profile(profile_path: Traversable) -> RuntimeProfile:
+def _load_profile(
+    profile_path: Traversable,
+    *,
+    requested_name: str,
+    aliases: tuple[str, ...] = (),
+) -> RuntimeProfile:
     try:
         raw = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as error:
         raise ConfigurationError("configuration_profile_unreadable") from error
     if not isinstance(raw, dict):
         raise ConfigurationError("configuration_profile_not_mapping")
+    if set(raw) == {"alias"}:
+        alias = raw.get("alias")
+        if not isinstance(alias, str) or not alias.strip():
+            raise ConfigurationError("configuration_profile_invalid", ("alias:string_type",))
+        alias = alias.strip()
+        if alias == requested_name or alias in aliases:
+            raise ConfigurationError("configuration_profile_alias_cycle")
+        target = _load_profile(
+            get_profile_path(alias),
+            requested_name=alias,
+            aliases=(*aliases, requested_name),
+        )
+        return target.model_copy(update={"name": requested_name})
     try:
         return RuntimeProfile.model_validate(raw)
     except ValidationError as error:
@@ -200,8 +234,9 @@ def _load_runtime_lock(profile: RuntimeProfile) -> dict[str, str]:
 @lru_cache(maxsize=4)
 def get_runtime_profile(profile_name: str | None = None) -> RuntimeProfile:
     environment = _load_environment()
-    profile_path = get_profile_path(profile_name or environment.profile)
-    profile = _load_profile(profile_path)
+    selected_profile = profile_name or environment.profile or DEFAULT_PROFILE
+    profile_path = get_profile_path(selected_profile)
+    profile = _load_profile(profile_path, requested_name=selected_profile)
     merged = profile.model_dump()
 
     if environment.use_runtime_lock:

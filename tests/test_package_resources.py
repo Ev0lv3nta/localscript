@@ -16,6 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def test_profile_loads_from_canonical_package_resources():
     assert get_profile_path().is_file()
+    assert resource_exists("config/profiles/local.yaml")
     assert resource_exists("config/profiles/competition.yaml")
 
 

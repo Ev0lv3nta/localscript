@@ -28,15 +28,19 @@ FROM python:3.12.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH="/opt/venv/bin:${PATH}" \
+    PATH="/opt/venv/bin:/opt/localscript/bin:${PATH}" \
     LOCALSCRIPT_PYTHON_BIN=/opt/venv/bin/python \
     LOCALSCRIPT_OLLAMA_MODE=remote_api \
     LOCALSCRIPT_OLLAMA_HOST=http://ollama:11434 \
     LOCALSCRIPT_ALLOW_REMOTE_OLLAMA=1 \
     LOCALSCRIPT_OLLAMA_CONTAINER_ALIAS=ollama \
-    LOCALSCRIPT_UI_ENABLED=1
+    LOCALSCRIPT_UI_ENABLED=1 \
+    LOCALSCRIPT_PROFILE=local \
+    LOCALSCRIPT_STATE_DIR=/var/lib/localscript \
+    LOCALSCRIPT_LUA_BIN=/opt/localscript/bin/lua \
+    LOCALSCRIPT_LUAC_BIN=/opt/localscript/bin/luac
 
-WORKDIR /workspace
+WORKDIR /var/lib/localscript
 
 # Базовый образ пересобирается реже, чем Debian выпускает обновления безопасности,
 # поэтому пакеты рантайма обновляются при сборке: иначе в финальном образе остаются
@@ -45,18 +49,19 @@ RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends bash ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --shell /bin/bash appuser
+    && useradd --uid 10001 --create-home --shell /bin/bash appuser \
+    && install -d -o appuser -g appuser /var/lib/localscript /opt/localscript/bin
 
 COPY --from=build /opt/venv /opt/venv
-COPY --from=build /workspace /workspace
-
-RUN chown -R appuser:appuser /workspace /opt/venv
+COPY --from=build /workspace/.tools/lua-5.4.6/src/lua /opt/localscript/bin/lua
+COPY --from=build /workspace/.tools/lua-5.4.6/src/luac /opt/localscript/bin/luac
+COPY --chmod=755 --from=build /workspace/scripts/docker_entrypoint.sh /usr/local/bin/localscript-entrypoint
 
 USER appuser
 
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
-  CMD curl -fsS http://127.0.0.1:8080/health || exit 1
+  CMD curl -fsS "http://127.0.0.1:${LOCALSCRIPT_PORT:-8080}/health" || exit 1
 
-CMD ["bash", "./scripts/docker_entrypoint.sh"]
+CMD ["/usr/local/bin/localscript-entrypoint"]

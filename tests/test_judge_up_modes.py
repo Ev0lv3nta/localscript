@@ -1,3 +1,4 @@
+import json
 import os
 import stat
 import subprocess
@@ -20,11 +21,12 @@ def _prepare_fake_project(tmp_path):
     venv_bin.mkdir(parents=True)
     fake_bin.mkdir(parents=True)
 
-    source_script = Path(__file__).resolve().parents[1] / "scripts" / "judge_up.sh"
-    (scripts_dir / "judge_up.sh").write_text(
-        source_script.read_text(encoding="utf-8"), encoding="utf-8"
-    )
-    (scripts_dir / "judge_up.sh").chmod((scripts_dir / "judge_up.sh").stat().st_mode | stat.S_IEXEC)
+    source_scripts = Path(__file__).resolve().parents[1] / "scripts"
+    for script_name in ("judge_up.sh", "start.sh"):
+        source_script = source_scripts / script_name
+        target_script = scripts_dir / script_name
+        target_script.write_text(source_script.read_text(encoding="utf-8"), encoding="utf-8")
+        target_script.chmod(target_script.stat().st_mode | stat.S_IEXEC)
 
     _write_executable(
         venv_bin / "uvicorn",
@@ -39,14 +41,14 @@ exit 0
 if [ "$1" = "-m" ] && [ "$2" = "uvicorn" ]; then
   exec "{(venv_bin / "uvicorn").resolve()}" "${{@:3}}"
 fi
-exec "{Path(os.sys.executable).resolve()}" "$@"
+exec "{Path(os.sys.executable)}" "$@"
 """,
     )
 
     _write_executable(
         fake_bin / "python3",
         f"""#!/usr/bin/env bash
-exec "{Path(os.sys.executable).resolve()}" "$@"
+exec "{Path(os.sys.executable)}" "$@"
 """,
     )
 
@@ -54,12 +56,14 @@ exec "{Path(os.sys.executable).resolve()}" "$@"
 
 
 class _TagsHandler(BaseHTTPRequestHandler):
+    models = ("hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M",)
+
     def do_GET(self):
         if self.path != "/api/tags":
             self.send_response(404)
             self.end_headers()
             return
-        payload = b'{"models":[{"name":"hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M"},{"name":"qwen3:8b-q4_K_M"}]}'
+        payload = json.dumps({"models": [{"name": name} for name in self.models]}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
@@ -70,8 +74,13 @@ class _TagsHandler(BaseHTTPRequestHandler):
         return
 
 
-def _start_tags_server():
-    server = HTTPServer(("127.0.0.1", 0), _TagsHandler)
+def _start_tags_server(models=None):
+    class TagsHandler(_TagsHandler):
+        pass
+
+    if models is not None:
+        TagsHandler.models = tuple(models)
+    server = HTTPServer(("127.0.0.1", 0), TagsHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server
@@ -90,6 +99,7 @@ def test_judge_up_remote_api_mode_does_not_require_local_ollama(tmp_path):
             env={
                 **os.environ,
                 "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
                 "LOCALSCRIPT_OLLAMA_MODE": "remote_api",
                 "LOCALSCRIPT_OLLAMA_HOST": f"http://127.0.0.1:{server.server_port}",
                 "LOCALSCRIPT_PYTHON_BIN": str(root / ".venv" / "bin" / "python"),
@@ -126,6 +136,7 @@ exit 0
             env={
                 **os.environ,
                 "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
                 "LOCALSCRIPT_OLLAMA_MODE": "local_cli",
                 "LOCALSCRIPT_OLLAMA_HOST": f"http://127.0.0.1:{server.server_port}",
                 "LOCALSCRIPT_PYTHON_BIN": str(root / ".venv" / "bin" / "python"),
@@ -151,6 +162,7 @@ def test_judge_up_rejects_unsupported_project_python(tmp_path):
         env={
             **os.environ,
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
             "LOCALSCRIPT_PYTHON_BIN": str(root / ".venv" / "bin" / "python"),
             "LOCALSCRIPT_PYTHON_MIN_MINOR": "99",
             "LOCALSCRIPT_PYTHON_MAX_MINOR": "99",
@@ -160,3 +172,39 @@ def test_judge_up_rejects_unsupported_project_python(tmp_path):
     assert completed.returncode != 0
     assert "unsupported_python" in completed.stderr
     assert "fake_uvicorn" not in completed.stdout
+
+
+def test_start_does_not_implicitly_pull_a_missing_model(tmp_path):
+    root, fake_bin = _prepare_fake_project(tmp_path)
+    pull_marker = tmp_path / "pull-called"
+    _write_executable(
+        fake_bin / "ollama",
+        f"""#!/usr/bin/env bash
+touch "{pull_marker}"
+exit 0
+""",
+    )
+    server = _start_tags_server(models=[])
+
+    try:
+        completed = subprocess.run(
+            ["bash", str(root / "scripts" / "start.sh")],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+                "LOCALSCRIPT_OLLAMA_MODE": "local_cli",
+                "LOCALSCRIPT_OLLAMA_HOST": f"http://127.0.0.1:{server.server_port}",
+                "LOCALSCRIPT_PYTHON_BIN": str(root / ".venv" / "bin" / "python"),
+            },
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert completed.returncode == 1
+    assert "make model-setup" in completed.stderr
+    assert not pull_marker.exists()

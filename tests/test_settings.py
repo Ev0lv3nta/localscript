@@ -77,7 +77,7 @@ def test_environment_is_the_highest_precedence_layer(monkeypatch, tmp_path):
         json.dumps(
             {
                 "locked": True,
-                "profile": "competition",
+                "profile": "local",
                 "selected_model": "locked-primary",
                 "fallback_model": "locked-fallback",
             }
@@ -103,7 +103,7 @@ def test_runtime_lock_overrides_profile_only_after_explicit_opt_in(monkeypatch, 
         json.dumps(
             {
                 "locked": True,
-                "profile": "competition",
+                "profile": "local",
                 "selected_model": "locked-primary",
                 "fallback_model": "locked-fallback",
             }
@@ -126,7 +126,7 @@ def test_unlocked_runtime_artifact_does_not_require_model_selection(monkeypatch,
     monkeypatch.setenv("LOCALSCRIPT_RUNTIME_LOCK_PATH", str(lock_path))
     monkeypatch.setenv("LOCALSCRIPT_USE_RUNTIME_LOCK", "true")
 
-    assert config_module.get_runtime_profile().name == "competition"
+    assert config_module.get_runtime_profile().name == "local"
 
 
 def test_invalid_environment_boolean_is_a_safe_configuration_error(monkeypatch):
@@ -137,6 +137,40 @@ def test_invalid_environment_boolean_is_a_safe_configuration_error(monkeypatch):
 
     assert raised.value.code == "configuration_environment_invalid"
     assert "yes-please" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("0", False), ("1", True), ("false", False), ("true", True)],
+)
+def test_environment_booleans_use_one_strict_parser(monkeypatch, raw, expected):
+    monkeypatch.setenv("LOCALSCRIPT_UI_ENABLED", raw)
+    monkeypatch.setenv("LOCALSCRIPT_REMOTE_MODE", raw)
+
+    profile = config_module.get_runtime_profile()
+
+    assert profile.ui_enabled is expected
+    assert profile.remote_mode is expected
+
+
+@pytest.mark.parametrize("raw", ["0", "-1", "invalid"])
+def test_environment_positive_integers_fail_safely(monkeypatch, raw):
+    monkeypatch.setenv("LOCALSCRIPT_STARTUP_TIMEOUT_SECONDS", raw)
+
+    with pytest.raises(config_module.ConfigurationError) as raised:
+        config_module.get_runtime_profile()
+
+    assert raised.value.code == "configuration_environment_invalid"
+    assert f"::{raw}" not in str(raised.value)
+
+
+def test_explicit_profile_name_has_priority_over_environment_profile(monkeypatch):
+    monkeypatch.setenv("LOCALSCRIPT_PROFILE", "missing-profile")
+
+    profile = config_module.get_runtime_profile("competition")
+
+    assert profile.name == "competition"
+    assert profile.model == config_module.get_runtime_profile("local").model
 
 
 def test_public_request_models_keep_extra_field_compatibility():

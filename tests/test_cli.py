@@ -5,6 +5,7 @@ from typer.testing import CliRunner
 from app.cli.main import cli
 from app.core import config as config_module
 from app.core.benchmarks import QUALITY_EVAL_MANIFEST
+from app.generation.backend_errors import BackendUnavailable
 from app.generation.ollama import OllamaBackend
 from app.generation.results import GenerationResult, SessionStatus, SessionSummary
 from app.workflow.contracts import (
@@ -95,10 +96,20 @@ def test_validate_command_requires_explicit_contract(monkeypatch):
 
 
 def test_doctor_flag_parses_as_boolean(monkeypatch):
+    monkeypatch.setattr(OllamaBackend, "ping", lambda self: True)
+    monkeypatch.setattr(
+        OllamaBackend,
+        "list_tags",
+        lambda self: ["hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M"],
+    )
     result = runner.invoke(cli, ["doctor"])
     assert result.exit_code == 0
+    effective = json.loads(result.stdout)
+    assert effective["profile"] == "local"
+    assert effective["model"] == "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M"
+    assert effective["num_ctx"] == 8192
+    assert effective["num_predict"] == 2048
 
-    monkeypatch.setattr(OllamaBackend, "ping", lambda self: True)
     monkeypatch.setattr(
         "app.cli.main.run_quality_benchmark",
         lambda profile=None, backend=None, mode="competition": {
@@ -134,13 +145,7 @@ def test_doctor_flag_parses_as_boolean(monkeypatch):
             json.dumps({"status": "ok", "model": args[2]})
         ),
     )
-    monkeypatch.setattr(
-        OllamaBackend,
-        "list_tags",
-        lambda self: ["hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M", "qwen3:8b-q4_K_M"],
-    )
-
-    judge_result = runner.invoke(cli, ["doctor", "--judge"])
+    judge_result = runner.invoke(cli, ["doctor", "--eval"])
     assert judge_result.exit_code == 0
     payload = json.loads(judge_result.stdout)
     assert payload["judge_mode"] is True
@@ -151,11 +156,27 @@ def test_doctor_flag_parses_as_boolean(monkeypatch):
     }
 
 
+def test_doctor_fails_when_the_effective_model_is_unavailable(monkeypatch):
+    def unavailable(_self):
+        raise BackendUnavailable(reason="test_backend_unavailable")
+
+    monkeypatch.setattr(OllamaBackend, "list_tags", unavailable)
+
+    result = runner.invoke(cli, ["doctor"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["ollama_reachable"] is False
+    assert payload["model_present"] is False
+
+
 def test_doctor_judge_switches_to_fallback_when_primary_over_cap(monkeypatch, tmp_path):
     lock_path = tmp_path / ".runtime_profile.lock.json"
     benchmark_models = []
     monkeypatch.setenv("LOCALSCRIPT_RUNTIME_LOCK_PATH", str(lock_path))
     monkeypatch.setenv("LOCALSCRIPT_TRACE_DIR", str(tmp_path / "traces"))
+    monkeypatch.setenv("LOCALSCRIPT_FALLBACK_MODEL", "qwen3:8b-q4_K_M")
     config_module.get_runtime_profile.cache_clear()
 
     monkeypatch.setattr(OllamaBackend, "ping", lambda self: True)

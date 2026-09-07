@@ -10,8 +10,11 @@ import zipfile
 from email.parser import Parser
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 WHEEL_REQUIRED = {
     "app/resources/config/profiles/competition.yaml",
+    "app/resources/config/profiles/local.yaml",
     "app/resources/evals/manifest.json",
     "app/resources/evals/live/v1.jsonl",
     "app/resources/scripts/bench_vram.sh",
@@ -41,6 +44,8 @@ SDIST_REQUIRED_SUFFIXES = WHEEL_REQUIRED | {
     "docs/evaluation.md",
     "docs/security.md",
     "scripts/bootstrap_lua54.sh",
+    "scripts/setup_model.sh",
+    "scripts/start.sh",
     "scripts/bench_stability.py",
     "scripts/release_gate.py",
     "tests/conftest.py",
@@ -101,7 +106,11 @@ def _installed_wheel_smoke(wheel_path):
         venv = temp_root / "venv"
         empty_cwd = temp_root / "empty"
         state_dir = temp_root / "state"
+        runtime_dir = temp_root / "runtime"
         empty_cwd.mkdir()
+        runtime_dir.mkdir()
+        lua_bin = shutil.copy2(PROJECT_ROOT / ".tools/lua54/bin/lua", runtime_dir / "lua")
+        luac_bin = shutil.copy2(PROJECT_ROOT / ".tools/lua54/bin/luac", runtime_dir / "luac")
 
         _run([uv, "venv", "--python", sys.executable, str(venv)])
         _run([uv, "pip", "install", "--python", str(venv / "bin" / "python"), str(wheel_path)])
@@ -112,12 +121,25 @@ def _installed_wheel_smoke(wheel_path):
             {
                 "LOCALSCRIPT_STATE_DIR": str(state_dir),
                 "LOCALSCRIPT_UI_ENABLED": "1",
+                "LOCALSCRIPT_LUA_BIN": str(lua_bin),
+                "LOCALSCRIPT_LUAC_BIN": str(luac_bin),
                 "VIRTUAL_ENV": str(venv),
                 "PATH": f"{venv / 'bin'}{os.pathsep}{smoke_env.get('PATH', '')}",
             }
         )
         _run([str(venv / "bin" / "localscript"), "--help"], cwd=empty_cwd, env=smoke_env)
-        _run([str(venv / "bin" / "localscript"), "doctor"], cwd=empty_cwd, env=smoke_env)
+        _run(
+            [
+                str(venv / "bin" / "localscript"),
+                "validate",
+                "--code",
+                "return wf.vars.value",
+                "--context",
+                '{"wf":{"vars":{"value":7}}}',
+            ],
+            cwd=empty_cwd,
+            env=smoke_env,
+        )
         _run(
             [
                 str(venv / "bin" / "python"),
@@ -127,11 +149,17 @@ def _installed_wheel_smoke(wheel_path):
                     "from pathlib import Path;"
                     "from app.core.config import get_runtime_profile;"
                     "from app.core.traces import TraceStore;"
+                    "from fastapi.testclient import TestClient;"
                     "from app.main import create_app;"
                     "p=get_runtime_profile();"
-                    "assert p.name=='competition';"
+                    "assert p.name=='local';"
                     "assert TraceStore().root.is_relative_to(Path(os.environ['LOCALSCRIPT_STATE_DIR']).resolve());"
-                    "assert create_app().state.ui_enabled"
+                    "app=create_app();"
+                    "assert app.state.ui_enabled;"
+                    "client=TestClient(app);"
+                    "assert client.get('/').status_code==200;"
+                    "response=client.post('/api/validate',json={'code':'return wf.vars.value','context':{'wf':{'vars':{'value':7}}},'output':{'format':'lua_block','shape':'scalar','nullable':False}});"
+                    "assert response.status_code==200 and response.json()['ok'] is True"
                 ),
             ],
             cwd=empty_cwd,

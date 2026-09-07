@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -44,13 +44,13 @@ def create_app(
         description="Локальная генерация и fail-closed проверка LocalScript/Lua через Ollama.",
         lifespan=lifespan,
     )
-    ui_static_dir = os.path.join(os.path.dirname(__file__), "ui", "static")
-    ui_enabled = os.getenv("LOCALSCRIPT_UI_ENABLED", "0") != "0" and os.path.exists(ui_static_dir)
+    ui_static_dir = Path(__file__).resolve().parent / "ui" / "static"
+    ui_enabled = runtime_profile.ui_enabled and ui_static_dir.is_dir()
     app.state.profile = runtime_profile
     app.state.trace_store = store
     app.state.session_store = sessions
     app.state.ui_enabled = ui_enabled
-    app.state.ui_index_path = os.path.join(ui_static_dir, "index.html")
+    app.state.ui_index_path = ui_static_dir / "index.html"
     app.state.engine = GenerationEngine(
         profile=runtime_profile,
         trace_store=store,
@@ -61,9 +61,8 @@ def create_app(
         RequestBodyLimitMiddleware,
         max_bytes=runtime_profile.max_request_body_bytes,
     )
-    remote_mode = os.getenv("LOCALSCRIPT_REMOTE_MODE", "0") == "1"
-    if remote_mode:
-        remote_token = os.getenv("LOCALSCRIPT_REMOTE_TOKEN", "")
+    if runtime_profile.remote_mode:
+        remote_token = runtime_profile.remote_token
         if len(remote_token) < 32:
             raise RuntimeError("remote_token_missing_or_too_short")
         app.add_middleware(RemoteBearerAuthMiddleware, token=remote_token)

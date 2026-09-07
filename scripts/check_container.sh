@@ -26,7 +26,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 MODELS = [
     {"name": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M"},
-    {"name": "qwen3:8b-q4_K_M"},
 ]
 
 class Handler(BaseHTTPRequestHandler):
@@ -67,7 +66,13 @@ done
 docker exec "${APP_CONTAINER}" curl --fail --silent http://127.0.0.1:8080/health >/dev/null
 docker exec "${APP_CONTAINER}" curl --fail --silent http://127.0.0.1:8080/ready >/dev/null
 docker exec "${APP_CONTAINER}" localscript --help >/dev/null
-docker exec "${APP_CONTAINER}" ./.tools/lua54/bin/lua -e 'assert(_VERSION == "Lua 5.4")'
+docker exec "${APP_CONTAINER}" lua -e 'assert(_VERSION == "Lua 5.4")'
+docker exec "${APP_CONTAINER}" sh -c 'test -w "$LOCALSCRIPT_STATE_DIR"'
+docker exec "${APP_CONTAINER}" curl --fail --silent \
+  --header 'Content-Type: application/json' \
+  --data '{"code":"return wf.vars.value","context":{"wf":{"vars":{"value":7}}},"output":{"format":"lua_block","shape":"scalar","nullable":false}}' \
+  http://127.0.0.1:8080/api/validate \
+  | grep -F '"ok":true' >/dev/null
 
 test "$(docker inspect --format '{{.Config.User}}' "${APP_CONTAINER}")" = "appuser"
 test "$(docker exec "${APP_CONTAINER}" id -u)" != "0"
