@@ -21,6 +21,7 @@ from app.workflow.contracts import (
     ContextInventory,
     JsonValue,
     OutputContract,
+    PlanningRefusal,
     ReviewDecision,
     ReviewRejected,
     TaskPlan,
@@ -137,7 +138,11 @@ class WorkflowCoordinator:
                 return WorkflowResult(
                     status=WorkflowStatus.CLARIFICATION_REQUIRED,
                     question=decision.question,
+                    source_choices=decision.source_choices,
                 )
+            if isinstance(decision, PlanningRefusal):
+                self._observe(observe, WorkflowStage.FAILED)
+                return self._planning_refusal(decision)
 
             plan = decision
             actual_context: dict[str, JsonValue] = json_context
@@ -170,6 +175,9 @@ class WorkflowCoordinator:
                 )
                 if isinstance(decision, ClarificationRequest):
                     return self._failure(plan_check, WorkflowStage.PLANNED)
+                if isinstance(decision, PlanningRefusal):
+                    self._observe(observe, WorkflowStage.FAILED)
+                    return self._planning_refusal(decision)
                 plan = decision
                 state = WorkflowState(stage=WorkflowStage.PLANNED, plan=plan)
                 self._observe(observe, state.stage)
@@ -429,6 +437,19 @@ class WorkflowCoordinator:
         if not checks:
             checks.append(ValidationCheck(name="plan_contract", status=CheckStatus.PASSED))
         return ValidationResult(checks=tuple(checks))
+
+    @staticmethod
+    def _planning_refusal(decision: PlanningRefusal) -> WorkflowResult:
+        return WorkflowResult(
+            status=WorkflowStatus.POLICY_REJECTED,
+            diagnostics=(
+                WorkflowDiagnostic(
+                    code="unsupported_request",
+                    message=decision.reason,
+                    stage=WorkflowStage.PLANNING,
+                ),
+            ),
+        )
 
     @staticmethod
     def _source_clarification_required(

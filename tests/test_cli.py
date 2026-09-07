@@ -16,6 +16,7 @@ from app.workflow.contracts import (
     ValidationCheck,
     ValidationResult,
     WorkflowResult,
+    WorkflowRoot,
     WorkflowStatus,
 )
 
@@ -63,6 +64,27 @@ class CapturingEngine:
         if self.error is not None:
             raise self.error
         return self.result
+
+
+def test_cli_forwards_structured_source_selection(monkeypatch):
+    engine = CapturingEngine()
+    monkeypatch.setattr("app.cli.main.build_engine", lambda: engine)
+    result = runner.invoke(
+        cli,
+        [
+            "generate",
+            "--session-id",
+            "session-1",
+            "--source-root",
+            "wf.vars",
+            "--source-root",
+            "wf.initVariables",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert engine.kwargs["source_roots"] == (WorkflowRoot.VARS, WorkflowRoot.INIT_VARIABLES)
+    assert engine.kwargs["clarification_answer"] is None
+    assert engine.backend.closed
 
 
 def _green_quality_report():

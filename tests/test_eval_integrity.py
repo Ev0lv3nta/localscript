@@ -51,7 +51,7 @@ def test_private_holdout_manifest_exposes_identity_but_not_content_path():
             "case_count": 8,
             "safety_case_count": 2,
             "sha256": "5aed110d22971d236bf99f750766925799bb45e07dee7b6cf86dafd4a37770b3",
-            "gate": "release_only",
+            "gate": "research_optional",
             "claim_scope": "synthetic_blind",
         }
     ]
