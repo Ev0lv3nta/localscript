@@ -25,9 +25,13 @@ def main():
             )
             response.raise_for_status()
             result = response.json()
-            if not result.get("ok") or result.get("validation", {}).get("observations") != [
-                {"actual": 7}
-            ]:
+            observations = result.get("validation", {}).get("observations", [])
+            if (
+                not result.get("ok")
+                or len(observations) != 1
+                or observations[0].get("actual") != 7
+                or observations[0].get("read_roots") != ["wf.vars"]
+            ):
                 raise ValueError("runtime_smoke_failed")
     except (ValueError, httpx.HTTPError) as error:
         print(json.dumps({"ok": False, "failure": type(error).__name__}))

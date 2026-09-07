@@ -10,7 +10,7 @@ include THIRD_PARTY_NOTICES.md
 include docker-compose.yml
 include uv.lock
 
-recursive-include app/resources *.json *.jsonl *.sh *.yaml
+recursive-include app/resources *.json *.jsonl *.yaml
 recursive-include app/ui/static *.css *.html *.js
 recursive-include docs *.jpg *.md
 recursive-include scripts *.py *.sh
