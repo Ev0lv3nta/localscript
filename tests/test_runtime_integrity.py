@@ -39,7 +39,7 @@ def test_exported_plain_lua_and_array_helper_preserve_false():
         "return _utils.array.new(function(x) return x end, wf.vars.data)", [False, 0, True], "array"
     )
     assert result.ok
-    assert result.observations == ({"actual": [False, 0, True]},)
+    assert result.observations == ({"actual": [False, 0, True], "read_roots": ["wf.vars"]},)
 
 
 def test_exhausted_cpu_does_not_break_following_execution():
@@ -91,4 +91,4 @@ def test_unsupported_or_oversized_result_fails(code):
 def test_supported_values_round_trip(data, shape):
     result = validate("return wf.vars.data", data, shape)
     assert result.ok
-    assert result.observations == ({"actual": data},)
+    assert result.observations == ({"actual": data, "read_roots": ["wf.vars"]},)

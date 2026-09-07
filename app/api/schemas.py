@@ -9,6 +9,7 @@ from app.workflow.contracts import (
     StrictModel,
     ValidationResult,
     WorkflowDiagnostic,
+    WorkflowRoot,
     WorkflowStatus,
 )
 
@@ -36,12 +37,26 @@ class GenerateRequest(BaseModel):
     clarification_answer: ClarificationAnswerText | None = None
     output: OutputContract | None = None
     examples: tuple[AcceptanceCase, ...] = Field(default=(), max_length=3)
+    source_roots: tuple[WorkflowRoot, ...] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=2,
+    )
 
     @field_validator("prompt", "feedback", "clarification_answer")
     @classmethod
     def reject_empty_text(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
             raise ValueError("value must not be empty")
+        return value
+
+    @field_validator("source_roots")
+    @classmethod
+    def require_distinct_source_roots(
+        cls, value: tuple[WorkflowRoot, ...] | None
+    ) -> tuple[WorkflowRoot, ...] | None:
+        if value is not None and len(set(value)) != len(value):
+            raise ValueError("source_roots must be distinct")
         return value
 
     @model_validator(mode="after")
@@ -60,6 +75,7 @@ class GenerateResponse(StrictModel):
     diagnostics: tuple[WorkflowDiagnostic, ...] = ()
     validation: ValidationResult | None = None
     output: OutputContract | None = None
+    source_choices: tuple[WorkflowRoot, ...] = Field(default=(), max_length=2)
     revision_count: int = 0
 
     @model_validator(mode="after")
@@ -74,6 +90,10 @@ class GenerateResponse(StrictModel):
                 raise ValueError("clarification response requires a question")
         elif self.question is not None:
             raise ValueError("only a clarification response may carry a question")
+        if len(self.source_choices) != len(set(self.source_choices)):
+            raise ValueError("source choices must be distinct")
+        if self.source_choices and self.status is not WorkflowStatus.CLARIFICATION_REQUIRED:
+            raise ValueError("source choices require a clarification response")
         return self
 
 

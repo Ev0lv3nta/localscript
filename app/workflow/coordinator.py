@@ -18,6 +18,7 @@ from app.workflow.contracts import (
     CheckStatus,
     ClarificationRequest,
     CodeCandidate,
+    ContextInventory,
     JsonValue,
     OutputContract,
     ReviewDecision,
@@ -27,6 +28,7 @@ from app.workflow.contracts import (
     ValidationResult,
     WorkflowDiagnostic,
     WorkflowResult,
+    WorkflowRoot,
     WorkflowStage,
     WorkflowState,
     WorkflowStatus,
@@ -52,6 +54,7 @@ class CandidateValidator(Protocol):
         plan: TaskPlan,
         context: dict[str, JsonValue],
         examples: tuple[AcceptanceCase, ...] = (),
+        source_roots: tuple[WorkflowRoot, ...] | None = None,
     ) -> ValidationResult: ...
 
 
@@ -83,6 +86,7 @@ class WorkflowCoordinator:
         feedback: str | None = None,
         output: OutputContract | None = None,
         examples: tuple[AcceptanceCase, ...] = (),
+        source_roots: tuple[WorkflowRoot, ...] | None = None,
         observe: StageObserver | None = None,
     ) -> WorkflowResult:
         state = WorkflowState()
@@ -126,6 +130,7 @@ class WorkflowCoordinator:
                 feedback=feedback,
                 output=output,
                 examples=examples,
+                source_roots=source_roots,
             )
             if isinstance(decision, ClarificationRequest):
                 self._observe(observe, WorkflowStage.CLARIFICATION_REQUIRED)
@@ -138,7 +143,11 @@ class WorkflowCoordinator:
             actual_context: dict[str, JsonValue] = json_context
             state = WorkflowState(stage=WorkflowStage.PLANNED, plan=plan)
             self._observe(observe, state.stage)
-            plan_check = self._validate_plan(plan, output=output)
+            plan_check = self._validate_plan(
+                plan,
+                output=output,
+                source_roots=source_roots,
+            )
             if not plan_check.ok:
                 # Противоречивый план восстановим ровно так же, как невалидный код: планировщик
                 # получает свои же замечания и одну попытку. Отказывать сразу было асимметрично —
@@ -152,6 +161,7 @@ class WorkflowCoordinator:
                     feedback=feedback,
                     output=output,
                     examples=examples,
+                    source_roots=source_roots,
                     rejected_plan_findings=tuple(
                         f"{check.code}: {check.message}"
                         for check in plan_check.checks
@@ -163,7 +173,11 @@ class WorkflowCoordinator:
                 plan = decision
                 state = WorkflowState(stage=WorkflowStage.PLANNED, plan=plan)
                 self._observe(observe, state.stage)
-                plan_check = self._validate_plan(plan, output=output)
+                plan_check = self._validate_plan(
+                    plan,
+                    output=output,
+                    source_roots=source_roots,
+                )
                 if not plan_check.ok:
                     return self._failure(plan_check, WorkflowStage.PLANNED)
 
@@ -177,7 +191,11 @@ class WorkflowCoordinator:
             self._observe(observe, state.stage)
             self._observe(observe, WorkflowStage.VALIDATING)
             validation = self.validator.validate(
-                candidate=candidate, plan=plan, context=actual_context, examples=examples
+                candidate=candidate,
+                plan=plan,
+                context=actual_context,
+                examples=examples,
+                source_roots=source_roots,
             )
             state = WorkflowState(
                 stage=WorkflowStage.VALIDATED,
@@ -186,6 +204,9 @@ class WorkflowCoordinator:
                 validation=validation,
             )
             self._observe(observe, state.stage)
+            if self._source_clarification_required(validation, inventory, source_roots):
+                self._observe(observe, WorkflowStage.CLARIFICATION_REQUIRED)
+                return self._source_clarification()
             review: ReviewDecision | None = None
             if validation.ok:
                 self._observe(observe, WorkflowStage.REVIEWING)
@@ -229,7 +250,11 @@ class WorkflowCoordinator:
             self._observe(observe, state.stage)
             self._observe(observe, WorkflowStage.VALIDATING)
             revised_validation = self.validator.validate(
-                candidate=revised, plan=plan, context=actual_context, examples=examples
+                candidate=revised,
+                plan=plan,
+                context=actual_context,
+                examples=examples,
+                source_roots=source_roots,
             )
             state = WorkflowState(
                 stage=WorkflowStage.VALIDATED,
@@ -239,6 +264,9 @@ class WorkflowCoordinator:
                 revision_count=1,
             )
             self._observe(observe, WorkflowStage.VALIDATED)
+            if self._source_clarification_required(revised_validation, inventory, source_roots):
+                self._observe(observe, WorkflowStage.CLARIFICATION_REQUIRED)
+                return self._source_clarification()
             if not revised_validation.ok:
                 return self._failure(
                     revised_validation,
@@ -338,7 +366,12 @@ class WorkflowCoordinator:
             )
 
     @staticmethod
-    def _validate_plan(plan: TaskPlan, *, output: OutputContract | None = None) -> ValidationResult:
+    def _validate_plan(
+        plan: TaskPlan,
+        *,
+        output: OutputContract | None = None,
+        source_roots: tuple[WorkflowRoot, ...] | None = None,
+    ) -> ValidationResult:
         checks: list[ValidationCheck] = []
         if output is not None and plan.output != output:
             checks.append(
@@ -349,6 +382,24 @@ class WorkflowCoordinator:
                     message="The plan must preserve the caller's output contract.",
                 )
             )
+        if source_roots is not None:
+            selected = set(source_roots)
+            outside = sorted(
+                {path.root for path in plan.inputs if path.root not in selected},
+                key=lambda root: root.value,
+            )
+            if outside:
+                checks.append(
+                    ValidationCheck(
+                        name="plan_contract",
+                        status=CheckStatus.FAILED,
+                        code="plan_source_root_not_selected",
+                        message=(
+                            "Plan declares an unselected workflow root: "
+                            + ", ".join(root.value for root in outside)
+                        ),
+                    )
+                )
         case_names = [case.name for case in plan.acceptance_cases]
         if len(case_names) != len(set(case_names)):
             checks.append(
@@ -378,6 +429,29 @@ class WorkflowCoordinator:
         if not checks:
             checks.append(ValidationCheck(name="plan_contract", status=CheckStatus.PASSED))
         return ValidationResult(checks=tuple(checks))
+
+    @staticmethod
+    def _source_clarification_required(
+        validation: ValidationResult,
+        inventory: ContextInventory,
+        source_roots: tuple[WorkflowRoot, ...] | None,
+    ) -> bool:
+        if source_roots is not None or not ContextInspector.ambiguous_paths(inventory):
+            return False
+        for observation in validation.observations:
+            if not isinstance(observation, dict) or observation.get("source") != "request":
+                continue
+            read_roots = observation.get("read_roots")
+            return isinstance(read_roots, list) and len(set(read_roots)) == 1
+        return False
+
+    @staticmethod
+    def _source_clarification() -> WorkflowResult:
+        return WorkflowResult(
+            status=WorkflowStatus.CLARIFICATION_REQUIRED,
+            question="Какой источник использовать для совпадающих путей?",
+            source_choices=(WorkflowRoot.VARS, WorkflowRoot.INIT_VARIABLES),
+        )
 
     @staticmethod
     def _matches_output_contract(value: JsonValue, *, shape: str, nullable: bool) -> bool:

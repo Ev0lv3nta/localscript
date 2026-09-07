@@ -20,6 +20,7 @@ from app.workflow.contracts import (
     ValidationCheck,
     ValidationResult,
     WorkflowResult,
+    WorkflowRoot,
     WorkflowStatus,
 )
 
@@ -38,6 +39,14 @@ def _clarification_result(question: str = "Which root?") -> WorkflowResult:
     return WorkflowResult(
         status=WorkflowStatus.CLARIFICATION_REQUIRED,
         question=question,
+    )
+
+
+def _source_clarification_result() -> WorkflowResult:
+    return WorkflowResult(
+        status=WorkflowStatus.CLARIFICATION_REQUIRED,
+        question="Which source root?",
+        source_choices=(WorkflowRoot.VARS, WorkflowRoot.INIT_VARIABLES),
     )
 
 
@@ -169,6 +178,42 @@ def test_answer_then_feedback_passes_accumulated_history_and_preserves_context(t
     assert persisted["feedback_history"] == ["Return nil when absent."]
     assert final.session.clarification_history[0].answer == "Use wf.vars."
     assert final.session.feedback_history == ("Return nil when absent.",)
+
+
+def test_structured_source_selection_resumes_and_persists_through_feedback(tmp_path):
+    workflow = CapturingWorkflow(
+        [_source_clarification_result(), _completed_result(), _completed_result()]
+    )
+    engine = _engine(tmp_path, workflow)
+    context = {"wf": {"vars": {"value": 1}, "initVariables": {"value": 2}}}
+    first = engine.generate(prompt="Task A", context=context)
+
+    assert first.workflow.source_choices == (
+        WorkflowRoot.VARS,
+        WorkflowRoot.INIT_VARIABLES,
+    )
+    continued = engine.generate(
+        session_id=first.session_id,
+        source_roots=(WorkflowRoot.VARS,),
+    )
+    final = engine.generate(session_id=first.session_id, feedback="Keep the same source.")
+
+    assert continued.workflow.status is WorkflowStatus.COMPLETED
+    assert workflow.calls[1]["source_roots"] == (WorkflowRoot.VARS,)
+    assert workflow.calls[2]["source_roots"] == (WorkflowRoot.VARS,)
+    persisted = engine.session_store.read(first.session_id)
+    assert persisted["source_roots"] == [WorkflowRoot.VARS.value]
+    assert persisted["clarification_history"] == [
+        {"question": "Which source root?", "answer": WorkflowRoot.VARS.value}
+    ]
+    assert final.session.feedback_history == ("Keep the same source.",)
+
+    with pytest.raises(SessionConflictError):
+        engine.generate(
+            session_id=first.session_id,
+            feedback="Switch it.",
+            source_roots=(WorkflowRoot.INIT_VARIABLES,),
+        )
 
 
 def test_existing_session_rejects_conflicting_output_or_examples(tmp_path):

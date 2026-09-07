@@ -27,6 +27,7 @@ from app.workflow.contracts import (
     JsonValue,
     OutputContract,
     WorkflowResult,
+    WorkflowRoot,
     WorkflowStage,
     WorkflowStatus,
 )
@@ -146,7 +147,9 @@ class GenerationEngine:
         clarification_answer: str | None = None,
         output: OutputContract | None = None,
         examples: tuple[AcceptanceCase, ...] = (),
+        source_roots: tuple[WorkflowRoot, ...] | None = None,
     ) -> GenerationResult:
+        source_roots = self._normalize_source_roots(source_roots)
         resolved_session_id = session_id or uuid.uuid4().hex
         with (
             self.request_slot(),
@@ -161,6 +164,7 @@ class GenerationEngine:
                 clarification_answer=clarification_answer,
                 output=output,
                 examples=examples,
+                source_roots=source_roots,
                 session_state=session_state,
                 requested_existing_session=session_id is not None,
             )
@@ -184,6 +188,7 @@ class GenerationEngine:
         clarification_answer: str | None,
         output: OutputContract | None,
         examples: tuple[AcceptanceCase, ...],
+        source_roots: tuple[WorkflowRoot, ...] | None,
         session_state: dict[str, object],
         requested_existing_session: bool,
     ) -> GenerationResult:
@@ -195,6 +200,7 @@ class GenerationEngine:
             and clarification_answer is None
             and output is None
             and not examples
+            and source_roots is None
             and session_state.get("status") == SessionStatus.COMPLETED.value
         ):
             raise SessionConflictError(
@@ -208,6 +214,7 @@ class GenerationEngine:
             clarification_answer=clarification_answer,
             output=output,
             examples=examples,
+            source_roots=source_roots,
             session_state=session_state,
             requested_existing_session=requested_existing_session,
         )
@@ -219,6 +226,11 @@ class GenerationEngine:
                 workflow=WorkflowResult(
                     status=WorkflowStatus.CLARIFICATION_REQUIRED,
                     question=open_question,
+                    source_choices=(
+                        (WorkflowRoot.VARS, WorkflowRoot.INIT_VARIABLES)
+                        if session_state.get("open_clarification_kind") == "source_root"
+                        else ()
+                    ),
                 ),
                 session_id=session_id,
                 trace_id=str(session_state.get("latest_trace_id") or ""),
@@ -236,6 +248,7 @@ class GenerationEngine:
             ),
             output=self._stored_output(session_state),
             examples=self._stored_examples(session_state),
+            source_roots=self._stored_source_roots(session_state),
             observe=timer.observe,
         )
         stage_events = timer.finish()
@@ -258,9 +271,12 @@ class GenerationEngine:
         session_state["open_clarification_question"] = workflow.question or ""
         clarification_kind = ""
         if workflow.status is WorkflowStatus.CLARIFICATION_REQUIRED:
-            clarification_kind = (
-                "missing_context" if session_state.get("context") is None else "planner"
-            )
+            if workflow.source_choices:
+                clarification_kind = "source_root"
+            else:
+                clarification_kind = (
+                    "missing_context" if session_state.get("context") is None else "planner"
+                )
         session_state["open_clarification_kind"] = clarification_kind
         if workflow.status is WorkflowStatus.COMPLETED and workflow.code:
             session_state["latest_completed_code"] = workflow.code
@@ -335,6 +351,7 @@ class GenerationEngine:
         clarification_answer: str | None,
         output: OutputContract | None,
         examples: tuple[AcceptanceCase, ...],
+        source_roots: tuple[WorkflowRoot, ...] | None,
         session_state: dict[str, object],
         requested_existing_session: bool,
     ) -> None:
@@ -352,6 +369,9 @@ class GenerationEngine:
                     "context": None if context is _CONTEXT_UNSET else context,
                     "output": output.model_dump(mode="json") if output is not None else None,
                     "examples": [item.model_dump(mode="json") for item in examples],
+                    "source_roots": (
+                        [root.value for root in source_roots] if source_roots is not None else None
+                    ),
                     "open_clarification_question": "",
                     "open_clarification_kind": "",
                     "clarification_history": [],
@@ -380,6 +400,21 @@ class GenerationEngine:
                     "Acceptance examples cannot change within an existing session; "
                     "start a new session for different examples."
                 )
+            stored_source_roots = GenerationEngine._stored_source_roots(session_state)
+            if source_roots is not None and stored_source_roots not in (None, source_roots):
+                raise SessionConflictError(
+                    "Workflow source selection cannot change within an existing session."
+                )
+            if (
+                source_roots is not None
+                and stored_source_roots is None
+                and session_state.get("open_clarification_kind") != "source_root"
+            ):
+                raise SessionConflictError(
+                    "Workflow sources can only be selected when the session requests that choice."
+                )
+            if source_roots is not None:
+                session_state["source_roots"] = [root.value for root in source_roots]
 
         context_resolves_missing_request = (
             context is not _CONTEXT_UNSET
@@ -392,7 +427,24 @@ class GenerationEngine:
             session_state["open_clarification_question"] = ""
             session_state["open_clarification_kind"] = ""
 
+        source_roots_resolve_question = (
+            source_roots is not None
+            and session_state.get("open_clarification_kind") == "source_root"
+        )
+
         GenerationEngine._ensure_user_turn_history(session_state)
+        if source_roots_resolve_question and source_roots is not None and not clarification_answer:
+            question = str(session_state.get("open_clarification_question") or "")
+            GenerationEngine._append_user_turn(
+                session_state,
+                {
+                    "kind": "clarification",
+                    "question": question,
+                    "text": ", ".join(root.value for root in source_roots),
+                },
+            )
+            session_state["open_clarification_question"] = ""
+            session_state["open_clarification_kind"] = ""
         if clarification_answer:
             question = str(session_state.get("open_clarification_question") or "")
             if not question:
@@ -445,6 +497,57 @@ class GenerationEngine:
             raise SessionConflictError(
                 "The persisted acceptance examples are invalid; start a new session."
             ) from None
+
+    @staticmethod
+    def _normalize_source_roots(
+        source_roots: tuple[WorkflowRoot, ...] | None,
+    ) -> tuple[WorkflowRoot, ...] | None:
+        if source_roots is None:
+            return None
+        try:
+            normalized = tuple(WorkflowRoot(root) for root in source_roots)
+        except (TypeError, ValueError):
+            raise SessionStateError(
+                code="invalid_source_roots",
+                status_code=422,
+                message="source_roots must contain workflow root enum values.",
+            ) from None
+        if not 1 <= len(normalized) <= 2 or len(set(normalized)) != len(normalized):
+            raise SessionStateError(
+                code="invalid_source_roots",
+                status_code=422,
+                message="source_roots must contain one or two distinct workflow roots.",
+            )
+        selected = set(normalized)
+        return tuple(
+            root for root in (WorkflowRoot.VARS, WorkflowRoot.INIT_VARIABLES) if root in selected
+        )
+
+    @staticmethod
+    def _stored_source_roots(
+        session_state: dict[str, object],
+    ) -> tuple[WorkflowRoot, ...] | None:
+        raw_roots = session_state.get("source_roots")
+        if raw_roots is None:
+            return None
+        if not isinstance(raw_roots, list):
+            raise SessionConflictError(
+                "The persisted workflow source selection is invalid; start a new session."
+            )
+        try:
+            roots = tuple(WorkflowRoot(root) for root in raw_roots)
+        except (TypeError, ValueError):
+            raise SessionConflictError(
+                "The persisted workflow source selection is invalid; start a new session."
+            ) from None
+        if not 1 <= len(roots) <= 2 or len(set(roots)) != len(roots):
+            raise SessionConflictError(
+                "The persisted workflow source selection is invalid; start a new session."
+            )
+        selected = set(roots)
+        return tuple(
+            root for root in (WorkflowRoot.VARS, WorkflowRoot.INIT_VARIABLES) if root in selected
+        )
 
     @staticmethod
     def _ensure_user_turn_history(session_state: dict[str, object]) -> list[dict[str, str]]:

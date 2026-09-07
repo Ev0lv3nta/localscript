@@ -25,6 +25,7 @@ class RuntimeExecutionResult:
     error_code: str = ""
     error_message: str = ""
     degraded: bool = False
+    read_roots: tuple[str, ...] = ()
 
 
 def _find_lua_binary() -> str | None:
@@ -106,7 +107,24 @@ if raw_wf.initVariables == nil then
   raw_wf.initVariables = {{}}
 end
 
-local function _ls_readonly(value, cache)
+local _ls_read_roots = {{
+  ["wf.vars"] = false,
+  ["wf.initVariables"] = false,
+}}
+
+local function _ls_child_root(parent_root, key)
+  if parent_root == "wf" and key == "vars" then
+    _ls_read_roots["wf.vars"] = true
+    return "wf.vars"
+  end
+  if parent_root == "wf" and key == "initVariables" then
+    _ls_read_roots["wf.initVariables"] = true
+    return "wf.initVariables"
+  end
+  return parent_root
+end
+
+local function _ls_readonly(value, cache, source_root)
   if type(value) ~= "table" then
     return value
   end
@@ -120,7 +138,7 @@ local function _ls_readonly(value, cache)
   local source_mt = getmetatable(value)
   local mt = {{
     __index = function(_, key)
-      return _ls_readonly(value[key], cache)
+      return _ls_readonly(value[key], cache, _ls_child_root(source_root, key))
     end,
     __newindex = function()
       error("workflow input is read-only", 2)
@@ -134,7 +152,7 @@ local function _ls_readonly(value, cache)
         if key == nil then
           return nil
         end
-        return key, _ls_readonly(nested, cache)
+        return key, _ls_readonly(nested, cache, _ls_child_root(source_root, key))
       end
       return iterate, proxy, nil
     end,
@@ -145,7 +163,7 @@ local function _ls_readonly(value, cache)
   return setmetatable(proxy, mt)
 end
 
-local wf = _ls_readonly(raw_wf)
+local wf = _ls_readonly(raw_wf, nil, "wf")
 
 local function _ls_is_array(tbl)
   if type(tbl) ~= "table" then
@@ -243,6 +261,17 @@ local safe_env = {{
   utf8 = _ls_readonly(utf8),
 }}
 
+local function _ls_read_roots_json()
+  local roots = {{}}
+  if _ls_read_roots["wf.vars"] then
+    roots[#roots + 1] = '"wf.vars"'
+  end
+  if _ls_read_roots["wf.initVariables"] then
+    roots[#roots + 1] = '"wf.initVariables"'
+  end
+  return "[" .. table.concat(roots, ",") .. "]"
+end
+
 local function _ls_escape_string(value)
   value = value:gsub("\\\\", "\\\\\\\\")
   value = value:gsub('"', '\\\\"')
@@ -320,13 +349,13 @@ end
 
 local chunk, load_error = load({serialized_chunk}, "localscript_generated", "t", safe_env)
 if not chunk then
-  io.write('{{"ok":false,"error_code":"lua_load_error","error_message":' .. _ls_to_json(load_error) .. '}}')
+  io.write('{{"ok":false,"error_code":"lua_load_error","error_message":' .. _ls_to_json(load_error) .. ',"read_roots":' .. _ls_read_roots_json() .. '}}')
   return
 end
 
 local ok, result = pcall(chunk)
 if not ok then
-  io.write('{{"ok":false,"error_code":"lua_runtime_error","error_message":' .. _ls_to_json(result) .. '}}')
+  io.write('{{"ok":false,"error_code":"lua_runtime_error","error_message":' .. _ls_to_json(result) .. ',"read_roots":' .. _ls_read_roots_json() .. '}}')
   return
 end
 
@@ -341,16 +370,16 @@ end
 
 local serialization_ok, serialized_result = pcall(_ls_to_json, result)
 if not serialization_ok then
-  io.write('{{"ok":false,"error_code":"lua_result_serialization_error","error_message":"' .. _ls_escape_string(tostring(serialized_result)) .. '"}}')
+  io.write('{{"ok":false,"error_code":"lua_result_serialization_error","error_message":"' .. _ls_escape_string(tostring(serialized_result)) .. '","read_roots":' .. _ls_read_roots_json() .. '}}')
   return
 end
 
 if #serialized_result > 65536 then
-  io.write('{{"ok":false,"error_code":"lua_result_too_large","error_message":"Result exceeds 64 KiB."}}')
+  io.write('{{"ok":false,"error_code":"lua_result_too_large","error_message":"Result exceeds 64 KiB.","read_roots":' .. _ls_read_roots_json() .. '}}')
   return
 end
 
-io.write('{{"ok":true,"value":' .. serialized_result .. '}}')
+io.write('{{"ok":true,"value":' .. serialized_result .. ',"read_roots":' .. _ls_read_roots_json() .. '}}')
 """
 
 
@@ -506,11 +535,30 @@ def _run_chunk(
             error_message=stdout,
         )
 
+    if not isinstance(payload, dict):
+        return RuntimeExecutionResult(
+            ok=False,
+            error_code="lua_runtime_invalid_output",
+            error_message="Lua subprocess output must be a JSON object.",
+        )
+    raw_read_roots = payload.get("read_roots", [])
+    if not isinstance(raw_read_roots, list) or any(
+        not isinstance(root, str) or root not in {"wf.vars", "wf.initVariables"}
+        for root in raw_read_roots
+    ):
+        return RuntimeExecutionResult(
+            ok=False,
+            error_code="lua_runtime_invalid_output",
+            error_message="Lua subprocess returned invalid workflow root metadata.",
+        )
+    read_roots = tuple(root for root in ("wf.vars", "wf.initVariables") if root in raw_read_roots)
+
     return RuntimeExecutionResult(
         ok=payload.get("ok") is True,
         value=payload.get("value"),
         error_code=payload.get("error_code", ""),
         error_message=payload.get("error_message", ""),
+        read_roots=read_roots,
     )
 
 
@@ -528,13 +576,19 @@ def execute_output(
     if not parsed.keys:
         return _run_chunk(parsed.chunks[0], context, output_shape, deadline)
     result: dict[str, object] = {}
+    read_roots: set[str] = set()
     for key, chunk in zip(parsed.keys, parsed.chunks, strict=True):
         execution = _run_chunk(chunk, context, deadline=deadline)
         if not execution.ok:
             return execution
+        read_roots.update(execution.read_roots)
         result[key] = execution.value
     if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > 65536:
         return RuntimeExecutionResult(
             ok=False, error_code="lua_result_too_large", error_message="Result exceeds 64 KiB."
         )
-    return RuntimeExecutionResult(ok=True, value=result)
+    return RuntimeExecutionResult(
+        ok=True,
+        value=result,
+        read_roots=tuple(root for root in ("wf.vars", "wf.initVariables") if root in read_roots),
+    )
