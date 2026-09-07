@@ -434,11 +434,20 @@ def _run_cases(
         errors: list[str] = []
         status = "backend_error"
         try:
-            result = engine.generate(
-                prompt=case["prompt"],
-                context=case["context"],
-                output=output_contract_for_case(case),
-            )
+            initial_source_roots = case.get("source_roots")
+            if isinstance(initial_source_roots, list):
+                result = engine.generate(
+                    prompt=case["prompt"],
+                    context=case["context"],
+                    output=output_contract_for_case(case),
+                    source_roots=tuple(WorkflowRoot(str(root)) for root in initial_source_roots),
+                )
+            else:
+                result = engine.generate(
+                    prompt=case["prompt"],
+                    context=case["context"],
+                    output=output_contract_for_case(case),
+                )
             initial_status = result.workflow.status.value
             status = initial_status
             expected_status = str(case.get("expected_status") or WorkflowStatus.COMPLETED.value)

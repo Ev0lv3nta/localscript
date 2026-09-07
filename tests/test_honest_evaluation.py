@@ -51,6 +51,22 @@ def write_cases(path, cases):
     )
 
 
+def completed_generation():
+    return SimpleNamespace(
+        workflow=SimpleNamespace(
+            status=SimpleNamespace(value="completed"),
+            code="return wf.vars.value",
+            diagnostics=(),
+            revision_count=0,
+            validation=SimpleNamespace(
+                checks=(SimpleNamespace(name="luac", status=CheckStatus.PASSED),)
+            ),
+        ),
+        session_id="session",
+        trace_id="",
+    )
+
+
 @pytest.mark.parametrize(
     ("cases", "error_code"),
     [
@@ -101,6 +117,10 @@ def write_cases(path, cases):
                 )
             ],
             "dataset_clarification_transition_invalid",
+        ),
+        (
+            [public_case(source_roots=["wf.vars", "wf.vars"])],
+            "dataset_source_roots_invalid",
         ),
     ],
 )
@@ -166,19 +186,7 @@ def test_runner_never_forwards_oracle_fixtures_as_model_examples(monkeypatch):
 
         def generate(self, **kwargs):
             calls.append(kwargs)
-            return SimpleNamespace(
-                workflow=SimpleNamespace(
-                    status=SimpleNamespace(value="completed"),
-                    code="return wf.vars.value",
-                    diagnostics=(),
-                    revision_count=0,
-                    validation=SimpleNamespace(
-                        checks=(SimpleNamespace(name="luac", status=CheckStatus.PASSED),)
-                    ),
-                ),
-                session_id="session",
-                trace_id="",
-            )
+            return completed_generation()
 
     monkeypatch.setattr(benchmarks, "GenerationEngine", FakeEngine)
     monkeypatch.setattr(
@@ -204,6 +212,44 @@ def test_runner_never_forwards_oracle_fixtures_as_model_examples(monkeypatch):
     assert set(calls[0]) == {"prompt", "context", "output"}
     assert calls[0]["context"] == public_case()["context"]
     assert "fixtures" not in str(calls[0])
+
+
+def test_runner_forwards_explicit_source_roots_on_initial_generation(monkeypatch):
+    calls = []
+
+    class FakeEngine:
+        def __init__(self, **_kwargs):
+            pass
+
+        def generate(self, **kwargs):
+            calls.append(kwargs)
+            return completed_generation()
+
+    monkeypatch.setattr(benchmarks, "GenerationEngine", FakeEngine)
+    monkeypatch.setattr(
+        benchmarks,
+        "evaluate_case_detailed",
+        lambda *_args: IndependentEvaluation(
+            status=EvaluationStatus.PASSED,
+            errors=(),
+            fixtures_total=2,
+            fixtures_attempted=2,
+            fixtures_passed=2,
+        ),
+    )
+    case = public_case(source_roots=["wf.vars", "wf.initVariables"])
+
+    results = benchmarks._run_cases(
+        cases=[case],
+        runtime_profile=benchmarks.get_runtime_profile(),
+        runtime_backend=FailIfCalledBackend(),
+    )
+
+    assert results[0]["passed"] is True
+    assert calls[0]["source_roots"] == (
+        benchmarks.WorkflowRoot.VARS,
+        benchmarks.WorkflowRoot.INIT_VARIABLES,
+    )
 
 
 def test_not_run_checks_do_not_become_perfect_rates():

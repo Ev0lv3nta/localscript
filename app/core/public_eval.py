@@ -221,6 +221,8 @@ def _validate_public_v2_case(case: EvalCase, case_id: str) -> list[str]:
     }
     if case_type in {"transformation", "clarification"}:
         allowed_fields.add("fixtures")
+    if case_type == "transformation":
+        allowed_fields.add("source_roots")
     if case_type == "clarification":
         allowed_fields.update({"expected_final_status", "clarification_source_roots"})
     if set(case) - allowed_fields:
@@ -242,6 +244,7 @@ def _validate_public_v2_case(case: EvalCase, case_id: str) -> list[str]:
     expected_final_status = case.get("expected_final_status")
     clarification_answer = case.get("clarification_answer")
     source_roots = case.get("clarification_source_roots")
+    initial_source_roots = case.get("source_roots")
     fixtures = case.get("fixtures")
     if case_type == "transformation":
         if expected_status != WorkflowStatus.COMPLETED.value:
@@ -252,18 +255,14 @@ def _validate_public_v2_case(case: EvalCase, case_id: str) -> list[str]:
             or source_roots is not None
         ):
             errors.append(f"dataset_transformation_transition_invalid::{case_id}")
+        if initial_source_roots is not None and not _valid_source_roots(initial_source_roots):
+            errors.append(f"dataset_source_roots_invalid::{case_id}")
         errors.extend(_validate_fixtures(fixtures, contract, case.get("context"), case_id))
     elif case_type == "clarification":
         if (
             expected_status != WorkflowStatus.CLARIFICATION_REQUIRED.value
             or expected_final_status != WorkflowStatus.COMPLETED.value
-            or not isinstance(source_roots, list)
-            or not 1 <= len(source_roots) <= 2
-            or len({str(item) for item in source_roots}) != len(source_roots)
-            or any(
-                not isinstance(item, str) or item not in {root.value for root in WorkflowRoot}
-                for item in source_roots
-            )
+            or not _valid_source_roots(source_roots)
         ):
             errors.append(f"dataset_clarification_transition_invalid::{case_id}")
         errors.extend(_validate_fixtures(fixtures, contract, case.get("context"), case_id))
@@ -280,6 +279,18 @@ def _validate_public_v2_case(case: EvalCase, case_id: str) -> list[str]:
         ):
             errors.append(f"dataset_policy_oracle_invalid::{case_id}")
     return errors
+
+
+def _valid_source_roots(value: JsonValue) -> bool:
+    return (
+        isinstance(value, list)
+        and 1 <= len(value) <= 2
+        and len({str(item) for item in value}) == len(value)
+        and all(
+            isinstance(item, str) and item in {root.value for root in WorkflowRoot}
+            for item in value
+        )
+    )
 
 
 def _validate_legacy_case(case: EvalCase, case_id: str) -> list[str]:
