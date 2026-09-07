@@ -2,10 +2,37 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 from collections.abc import Sequence
+from functools import lru_cache
 from pathlib import Path
 
 from app.core.config import PROJECT_ROOT
+
+
+def runtime_version(binary: str) -> str | None:
+    try:
+        info = Path(binary).stat()
+        return _version_at(binary, info.st_mtime_ns, info.st_size)
+    except OSError:
+        return None
+
+
+@lru_cache(maxsize=16)
+def _version_at(binary: str, mtime: int, size: int) -> str | None:
+    try:
+        result = subprocess.run([binary, "-v"], capture_output=True, timeout=2, check=False)
+        parts = (result.stdout + result.stderr).decode("ascii", errors="replace").split()
+        if (
+            result.returncode == 0
+            and len(parts) >= 2
+            and parts[0] == "Lua"
+            and parts[1].startswith("5.4.")
+        ):
+            return parts[1]
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return None
 
 
 def _is_executable(path: Path) -> bool:

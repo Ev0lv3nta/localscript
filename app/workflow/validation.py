@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib
-import json
 import subprocess
 import tempfile
 from collections.abc import Callable
@@ -10,7 +9,8 @@ from typing import Protocol, cast
 
 from pydantic import TypeAdapter, ValidationError
 
-from app.validation.runtime import find_luac_binary
+from app.validation.output import OutputParseError, parse_output
+from app.validation.runtime import find_lua_binary, find_luac_binary, runtime_version
 from app.workflow.contracts import (
     CheckStatus,
     CodeCandidate,
@@ -72,20 +72,15 @@ def _default_runtime_executor(
 
 
 def _default_luac_locator() -> str | None:
-    return find_luac_binary()
-
-
-class _DuplicateEnvelopeKey(ValueError):
-    pass
-
-
-def _json_object_without_duplicates(pairs: list[tuple[str, JsonValue]]) -> dict[str, JsonValue]:
-    result: dict[str, JsonValue] = {}
-    for key, value in pairs:
-        if key in result:
-            raise _DuplicateEnvelopeKey(key)
-        result[key] = value
-    return result
+    lua, luac = find_lua_binary(), find_luac_binary()
+    if (
+        lua
+        and luac
+        and runtime_version(lua) is not None
+        and runtime_version(lua) == runtime_version(luac)
+    ):
+        return luac
+    return None
 
 
 class DeterministicCandidateValidator:
@@ -323,83 +318,15 @@ class DeterministicCandidateValidator:
 
     @staticmethod
     def _validate_format(
-        code: str,
-        output_format: OutputFormat,
+        code: str, output_format: OutputFormat
     ) -> tuple[ValidationCheck, tuple[str, ...]]:
-        if output_format is OutputFormat.LUA_BLOCK:
-            if code.startswith("lua{") and code.endswith("}lua"):
-                return (
-                    DeterministicCandidateValidator._failed(
-                        "output_contract",
-                        "lua_block_wrapper_forbidden",
-                        "A raw Lua block must not use a lua{...}lua wrapper.",
-                    ),
-                    (),
-                )
-            return DeterministicCandidateValidator._passed("output_contract"), (code,)
-
         try:
-            payload = json.loads(code, object_pairs_hook=_json_object_without_duplicates)
-        except _DuplicateEnvelopeKey:
-            return (
-                DeterministicCandidateValidator._failed(
-                    "output_contract",
-                    "json_envelope_duplicate_key",
-                    "JSON envelope keys must be unique.",
-                ),
-                (),
-            )
-        except (json.JSONDecodeError, TypeError, RecursionError):
-            return (
-                DeterministicCandidateValidator._failed(
-                    "output_contract",
-                    "json_envelope_invalid",
-                    "The candidate is not a valid JSON envelope.",
-                ),
-                (),
-            )
-        if not isinstance(payload, dict) or not payload:
-            return (
-                DeterministicCandidateValidator._failed(
-                    "output_contract",
-                    "json_envelope_not_object",
-                    "A JSON envelope must be a non-empty object.",
-                ),
-                (),
-            )
-
-        chunks: list[str] = []
-        for key, value in payload.items():
-            if not key or not isinstance(value, str):
-                return (
-                    DeterministicCandidateValidator._failed(
-                        "output_contract",
-                        "json_envelope_value_invalid",
-                        "Every envelope key must contain one wrapped Lua chunk.",
-                    ),
-                    (),
-                )
-            if not value.startswith("lua{") or not value.endswith("}lua"):
-                return (
-                    DeterministicCandidateValidator._failed(
-                        "output_contract",
-                        "json_envelope_wrapper_invalid",
-                        "Every envelope value must use a lua{...}lua wrapper.",
-                    ),
-                    (),
-                )
-            chunk = value[4:-4]
-            if not chunk.strip():
-                return (
-                    DeterministicCandidateValidator._failed(
-                        "output_contract",
-                        "lua_chunk_empty",
-                        "Envelope Lua chunks must not be empty.",
-                    ),
-                    (),
-                )
-            chunks.append(chunk)
-        return DeterministicCandidateValidator._passed("output_contract"), tuple(chunks)
+            parsed = parse_output(code, output_format.value)
+            return DeterministicCandidateValidator._passed("output_contract"), parsed.chunks
+        except OutputParseError as error:
+            return DeterministicCandidateValidator._failed(
+                "output_contract", error.code, str(error)
+            ), ()
 
     def _compile_chunks(self, chunks: tuple[str, ...]) -> ValidationCheck:
         try:
