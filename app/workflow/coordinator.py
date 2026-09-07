@@ -92,6 +92,17 @@ class WorkflowCoordinator:
                 json_context = JSON_ADAPTER.validate_python(context, strict=True)
             except ValidationError as error:
                 raise _InvalidJsonContext from error
+            if json_context is None:
+                self._observe(observe, WorkflowStage.CLARIFICATION_REQUIRED)
+                return WorkflowResult(
+                    status=WorkflowStatus.CLARIFICATION_REQUIRED,
+                    question=(
+                        "Передайте JSON-контекст с исходными данными. Для задачи без входных "
+                        "данных передайте явно пустой wf.vars или wf.initVariables."
+                    ),
+                )
+            if not isinstance(json_context, dict):
+                raise _InvalidJsonContext
             inventory = self.context_inspector.inventory(json_context)
             context_sample = self.context_inspector.sample(json_context)
             # Every role sees the confirmed task, including choices made after clarification.
@@ -124,16 +135,7 @@ class WorkflowCoordinator:
                 )
 
             plan = decision
-            if json_context is None and plan.inputs:
-                return WorkflowResult(
-                    status=WorkflowStatus.CLARIFICATION_REQUIRED,
-                    question="Передайте JSON-контекст с исходными данными wf.vars или wf.initVariables.",
-                )
-            actual_context: dict[str, JsonValue] = (
-                json_context if isinstance(json_context, dict) else {"wf": {"vars": {}}}
-            )
-            if json_context is not None and not isinstance(json_context, dict):
-                raise _InvalidJsonContext
+            actual_context: dict[str, JsonValue] = json_context
             state = WorkflowState(stage=WorkflowStage.PLANNED, plan=plan)
             self._observe(observe, state.stage)
             plan_check = self._validate_plan(plan, output=output)

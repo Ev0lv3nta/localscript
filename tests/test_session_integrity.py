@@ -85,6 +85,20 @@ def test_existing_session_rejects_a_new_prompt_without_mutating_task(tmp_path):
     assert len(workflow.calls) == 1
 
 
+def test_completed_session_rejects_bare_continuation_without_growing_traces(tmp_path):
+    workflow = CapturingWorkflow([_completed_result()])
+    engine = _engine(tmp_path, workflow)
+    first = engine.generate(prompt="Task A", context={"wf": {"vars": {"value": 1}}})
+    before = engine.session_store.read(first.session_id)
+
+    with pytest.raises(SessionConflictError) as raised:
+        engine.generate(session_id=first.session_id)
+
+    assert raised.value.status_code == 409
+    assert engine.session_store.read(first.session_id) == before
+    assert len(workflow.calls) == 1
+
+
 def test_missing_continuation_session_raises_typed_not_found(tmp_path):
     engine = _engine(tmp_path, CapturingWorkflow([]))
 
@@ -94,6 +108,23 @@ def test_missing_continuation_session_raises_typed_not_found(tmp_path):
     assert raised.value.code == "session_not_found"
     assert raised.value.status_code == 404
     assert engine.session_store.read("missing-session") is None
+
+
+def test_explicit_context_resumes_missing_context_clarification(tmp_path):
+    workflow = CapturingWorkflow([_clarification_result("Provide context."), _completed_result()])
+    engine = _engine(tmp_path, workflow)
+    first = engine.generate(prompt="Task A", context=None)
+
+    persisted = engine.session_store.read(first.session_id)
+    assert persisted["open_clarification_kind"] == "missing_context"
+
+    continued = engine.generate(
+        session_id=first.session_id,
+        context={"wf": {"vars": {}}},
+    )
+
+    assert continued.workflow.status is WorkflowStatus.COMPLETED
+    assert len(workflow.calls) == 2
 
 
 def test_answer_then_feedback_passes_accumulated_history_and_preserves_context(tmp_path):
@@ -175,6 +206,52 @@ def test_existing_session_rejects_conflicting_output_or_examples(tmp_path):
     assert tuple(AcceptanceCase.model_validate(item) for item in persisted["examples"]) == examples
 
 
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("output", {"format": "broken", "shape": "scalar", "nullable": False}),
+        ("examples", {"not": "a-list"}),
+        (
+            "examples",
+            [
+                {
+                    "name": "broken",
+                    "context": {"not_wf": {}},
+                    "expected": 1,
+                }
+            ],
+        ),
+    ],
+)
+def test_invalid_persisted_contract_state_is_typed_conflict(tmp_path, field, invalid_value):
+    engine = _engine(tmp_path, CapturingWorkflow([]))
+    session_id = "invalid-contract-session"
+    state = {
+        "session_id": session_id,
+        "status": "completed",
+        "original_task": "Task A",
+        "latest_prompt": "Task A",
+        "context": {"wf": {"vars": {"value": 1}}},
+        "output": None,
+        "examples": [],
+        "open_clarification_question": "",
+        "clarification_history": [],
+        "feedback_history": [],
+        "user_turn_history": [],
+        "latest_trace_id": None,
+        "trace_ids": [],
+    }
+    state[field] = invalid_value
+    engine.session_store.write(session_id, state)
+    before = engine.session_store.read(session_id)
+
+    with pytest.raises(SessionConflictError) as raised:
+        engine.generate(session_id=session_id, feedback="Revise it.")
+
+    assert raised.value.status_code == 409
+    assert engine.session_store.read(session_id) == before
+
+
 def test_user_turn_limit_rejects_new_turn_without_losing_confirmed_history(tmp_path):
     workflow = CapturingWorkflow(
         [_clarification_result(), *[_clarification_result() for _ in range(10)]]
@@ -232,6 +309,30 @@ def test_legacy_over_limit_history_is_rejected_without_rewriting_state(tmp_path)
     with pytest.raises(SessionConflictError):
         engine.generate(session_id=session_id, clarification_answer="new answer")
 
+    assert engine.session_store.read(session_id) == before
+
+
+def test_legacy_mixed_history_is_rejected_instead_of_reordered(tmp_path):
+    engine = _engine(tmp_path, CapturingWorkflow([]))
+    session_id = "mixed-legacy-session"
+    engine.session_store.write(
+        session_id,
+        {
+            "session_id": session_id,
+            "status": "clarification_required",
+            "original_task": "Task A",
+            "context": {"wf": {"vars": {}}},
+            "open_clarification_question": "Which root?",
+            "clarification_history": [{"question": "Which root?", "answer": "Use wf.vars."}],
+            "feedback_history": ["Feedback happened first."],
+        },
+    )
+    before = engine.session_store.read(session_id)
+
+    with pytest.raises(SessionConflictError) as raised:
+        engine.generate(session_id=session_id, clarification_answer="A new answer")
+
+    assert raised.value.status_code == 409
     assert engine.session_store.read(session_id) == before
 
 

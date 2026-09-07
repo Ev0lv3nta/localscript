@@ -197,7 +197,7 @@ def test_second_reviewer_rejection_does_not_publish_rejected_code():
 def test_backend_outage_is_typed_and_fail_closed():
     workflow = coordinator(BackendUnavailable(reason="transport_error"), [], [])
 
-    result = workflow.run(prompt="Return value", context=None)
+    result = workflow.run(prompt="Return value", context={"wf": {"vars": {}}})
 
     assert result.status is WorkflowStatus.BACKEND_UNAVAILABLE
     assert result.code is None
@@ -206,10 +206,36 @@ def test_backend_outage_is_typed_and_fail_closed():
 def test_invalid_structured_model_output_is_typed_and_fail_closed():
     workflow = coordinator(BackendProtocol(reason="structured_response_invalid"), [], [])
 
-    result = workflow.run(prompt="Return value", context=None)
+    result = workflow.run(prompt="Return value", context={"wf": {"vars": {}}})
 
     assert result.status is WorkflowStatus.VALIDATION_FAILED
     assert result.code is None
+
+
+def test_missing_context_requests_clarification_before_planner_runs():
+    class PlannerMustNotRun:
+        def run(self, **_kwargs):
+            raise AssertionError("planner must not decide whether missing context is acceptable")
+
+    workflow = WorkflowCoordinator(
+        planner=PlannerMustNotRun(),
+        generator=Generator(),
+        reviewer=Reviewer([]),
+        validator=Validator([]),
+    )
+
+    result = workflow.run(prompt="Return one.", context=None)
+
+    assert result.status is WorkflowStatus.CLARIFICATION_REQUIRED
+    assert "пустой wf.vars" in result.question
+
+
+def test_explicit_empty_workflow_context_reaches_planner():
+    workflow = coordinator(plan(), [validation()], [ReviewApproved()])
+
+    result = workflow.run(prompt="Return one.", context={"wf": {"vars": {}}})
+
+    assert result.status is WorkflowStatus.COMPLETED
 
 
 def test_oversized_workflow_key_is_inspected_instead_of_rejected():

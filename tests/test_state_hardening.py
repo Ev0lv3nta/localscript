@@ -205,6 +205,19 @@ def test_structurally_corrupt_session_is_quarantined(tmp_path):
     assert not path.exists()
 
 
+def test_cleanup_quarantines_corrupt_entry_without_failing_unrelated_write(tmp_path):
+    store = SessionStore(root=tmp_path / "sessions")
+    corrupt_path = store.path_for("corrupt-session")
+    corrupt_path.write_text("{broken", encoding="utf-8")
+
+    healthy_path = store.write("healthy-session", {"value": 1})
+
+    assert healthy_path.exists()
+    assert store.read("healthy-session")["value"] == 1
+    assert not corrupt_path.exists()
+    assert list(store.root.glob(".corrupt-session.json.corrupt-*"))
+
+
 def test_symlink_roots_and_state_files_fail_closed(tmp_path):
     real_root = tmp_path / "real"
     real_root.mkdir()

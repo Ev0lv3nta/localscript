@@ -10,6 +10,7 @@ from typing import Any
 
 from app.core.state import resolve_state_path
 from app.core.storage import (
+    CorruptStateError,
     atomic_write_json,
     delete_file,
     ensure_directory,
@@ -177,7 +178,13 @@ class SessionStore:
                 continue
             if not path.is_file() or path.suffix != ".json" or path.name.startswith("."):
                 continue
-            payload = read_json(path, expected_type=dict)
+            try:
+                payload = read_json(path, expected_type=dict)
+            except (CorruptStateError, FileNotFoundError):
+                # Retention is maintenance for all sessions. A malformed or
+                # concurrently removed unrelated entry must not turn a healthy
+                # session's already committed write into an error response.
+                continue
             timestamp = None
             if isinstance(payload, dict):
                 with contextlib.suppress(TypeError, ValueError):

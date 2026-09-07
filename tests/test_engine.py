@@ -138,7 +138,7 @@ def test_engine_converts_backend_outage_to_fail_closed_outcome(tmp_path):
         validator=PassingValidator(),
     )
 
-    result = engine.generate(prompt="Return value.", context=None)
+    result = engine.generate(prompt="Return value.", context={"wf": {"vars": {}}})
 
     assert result.workflow.status is WorkflowStatus.BACKEND_UNAVAILABLE
     assert result.workflow.code is None

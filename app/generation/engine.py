@@ -187,6 +187,19 @@ class GenerationEngine:
         session_state: dict[str, object],
         requested_existing_session: bool,
     ) -> GenerationResult:
+        if (
+            requested_existing_session
+            and prompt is None
+            and context is _CONTEXT_UNSET
+            and feedback is None
+            and clarification_answer is None
+            and output is None
+            and not examples
+            and session_state.get("status") == SessionStatus.COMPLETED.value
+        ):
+            raise SessionConflictError(
+                "A completed session needs feedback or an explicit context update to continue."
+            )
         self._prepare_session_state(
             session_id=session_id,
             prompt=prompt,
@@ -243,6 +256,12 @@ class GenerationEngine:
         if isinstance(trace_ids, list):
             trace_ids.append(trace_id)
         session_state["open_clarification_question"] = workflow.question or ""
+        clarification_kind = ""
+        if workflow.status is WorkflowStatus.CLARIFICATION_REQUIRED:
+            clarification_kind = (
+                "missing_context" if session_state.get("context") is None else "planner"
+            )
+        session_state["open_clarification_kind"] = clarification_kind
         if workflow.status is WorkflowStatus.COMPLETED and workflow.code:
             session_state["latest_completed_code"] = workflow.code
 
@@ -334,6 +353,7 @@ class GenerationEngine:
                     "output": output.model_dump(mode="json") if output is not None else None,
                     "examples": [item.model_dump(mode="json") for item in examples],
                     "open_clarification_question": "",
+                    "open_clarification_kind": "",
                     "clarification_history": [],
                     "feedback_history": [],
                     "user_turn_history": [],
@@ -361,8 +381,16 @@ class GenerationEngine:
                     "start a new session for different examples."
                 )
 
+        context_resolves_missing_request = (
+            context is not _CONTEXT_UNSET
+            and context is not None
+            and session_state.get("open_clarification_kind") == "missing_context"
+        )
         if context is not _CONTEXT_UNSET:
             session_state["context"] = context
+        if context_resolves_missing_request and not clarification_answer:
+            session_state["open_clarification_question"] = ""
+            session_state["open_clarification_kind"] = ""
 
         GenerationEngine._ensure_user_turn_history(session_state)
         if clarification_answer:
@@ -380,6 +408,7 @@ class GenerationEngine:
                 },
             )
             session_state["open_clarification_question"] = ""
+            session_state["open_clarification_kind"] = ""
         if feedback:
             GenerationEngine._append_user_turn(
                 session_state,
@@ -394,7 +423,12 @@ class GenerationEngine:
         raw_output = session_state.get("output")
         if raw_output is None:
             return None
-        return OutputContract.model_validate(raw_output)
+        try:
+            return OutputContract.model_validate(raw_output)
+        except (TypeError, ValidationError):
+            raise SessionConflictError(
+                "The persisted output contract is invalid; start a new session."
+            ) from None
 
     @staticmethod
     def _stored_examples(session_state: dict[str, object]) -> tuple[AcceptanceCase, ...]:
@@ -402,8 +436,15 @@ class GenerationEngine:
         if raw_examples is None:
             return ()
         if not isinstance(raw_examples, list):
-            raise ValueError("persisted session examples must be a list")
-        return tuple(AcceptanceCase.model_validate(item) for item in raw_examples)
+            raise SessionConflictError(
+                "The persisted acceptance examples are invalid; start a new session."
+            )
+        try:
+            return tuple(AcceptanceCase.model_validate(item) for item in raw_examples)
+        except (TypeError, ValidationError):
+            raise SessionConflictError(
+                "The persisted acceptance examples are invalid; start a new session."
+            ) from None
 
     @staticmethod
     def _ensure_user_turn_history(session_state: dict[str, object]) -> list[dict[str, str]]:
@@ -426,9 +467,20 @@ class GenerationEngine:
                 elif kind == "feedback" and text:
                     normalized.append({"kind": kind, "text": text})
         else:
-            # Older state has separate lists and no cross-list ordering. Keep it
-            # readable and bounded; new writes use the canonical ordered list.
             clarifications = session_state.get("clarification_history")
+            feedback = session_state.get("feedback_history")
+            if (
+                isinstance(clarifications, list)
+                and clarifications
+                and isinstance(feedback, list)
+                and feedback
+            ):
+                raise SessionConflictError(
+                    "This legacy session contains unordered clarification and feedback history; "
+                    "start a new session to avoid changing the meaning of prior instructions."
+                )
+            # A legacy state containing only one kind of turn has an
+            # unambiguous order and can be migrated to the canonical list.
             if isinstance(clarifications, list):
                 for item in clarifications:
                     if not isinstance(item, dict) or not item.get("answer"):
@@ -440,7 +492,6 @@ class GenerationEngine:
                             "text": str(item["answer"]),
                         }
                     )
-            feedback = session_state.get("feedback_history")
             if isinstance(feedback, list):
                 normalized.extend(
                     {"kind": "feedback", "text": str(item)} for item in feedback if item
