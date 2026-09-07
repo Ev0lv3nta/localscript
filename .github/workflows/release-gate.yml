@@ -10,6 +10,7 @@ on:
         type: string
 
 permissions:
+  checks: read
   contents: read
 
 concurrency:
@@ -66,6 +67,8 @@ jobs:
         run: ./scripts/bootstrap_lua54.sh
 
       - name: Выполнить release gate
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: >-
           .venv/bin/python scripts/release_gate.py
           --mode local
