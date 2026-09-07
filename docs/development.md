@@ -1,62 +1,39 @@
 # Разработка
 
-## Окружение
-
-Поддерживаются CPython 3.11 и 3.12. Канонический менеджер зависимостей — `uv 0.11.21`; lock-файл обязателен. Для полной проверки нужны Docker и локально собираемый Lua 5.4.6.
+Python 3.11/3.12, uv с frozen lock и Lua 5.4. Для контейнерного smoke нужен Docker.
 
 ```bash
 uv sync --frozen --all-extras --python 3.12
-./scripts/bootstrap_lua54.sh
-make check
-```
-
-Writable runtime state не должен попадать в checkout. Для изолированного прогона:
-
-```bash
+make lua-bootstrap
 export LOCALSCRIPT_STATE_DIR="$(mktemp -d)"
+make check
+make container-check
 ```
 
-## Проверки
+make check включает Ruff/format, mypy --strict app, проверки lock/лицензий, evaluation fixtures, unit/runtime suite и wheel/sdist smoke. Контейнер проверяется отдельно. Модель не нужна для CPU-проверок.
 
-| Команда | Назначение |
-|---|---|
-| `make quality-check` | Ruff и mypy на публичных typed boundaries |
-| `make policy-check` | неизменность lock и allowlist лицензий |
-| `make eval-integrity` | schema, provenance и отсутствие overlap |
-| `make test-unit` | герметичные unit/contract/characterization tests с Lua |
-| `make build-check` | wheel/sdist manifest и smoke из пустого каталога |
-| `make container-check` | сборка и runtime smoke non-root контейнера |
-| `make check` | все локальные проверки, кроме контейнера и live GPU |
+Installed-wheel smoke выполняется вне checkout и проверяет реальный /api/validate с Lua, CLI и ресурсы UI. Container smoke проверяет тот же контракт, non-root запуск и доступность процесса. Это не измерение качества модели.
 
-Integration tests запускаются отдельно и требуют Ollama:
+## Изменения
+
+Одна короткая ветка и PR на связную задачу. Перед PR: целевые проверки, git diff --check и просмотр состава изменений. После зелёного CI / required — squash merge. Main защищён от прямого push, force push и удаления; обязательное чужое approval в solo-репозитории не требуется.
+
+Описание PR: проблема, изменение поведения, фактическая проверка, оставшиеся ограничения. Не добавляйте model weights, state, private datasets, сырые GPU-логи, вымышленные reviewers или coauthor trailers. Существенный архитектурный выбор документируется кратко; отдельный ADR на каждое исправление не нужен.
+
+Новая композиция преобразований должна выражаться планом, а не новой Python-веткой по словам запроса. Тест защищает контракт или воспроизводит дефект; точное совпадение внутренних строк само по себе не является полезной проверкой.
+
+## Выпуск
+
+На GPU передаётся чистая ревизия из main с зелёным обычным CI. Сначала установить окружение и выбранную модель. Затем один gate:
 
 ```bash
-LOCALSCRIPT_REQUIRE_LIVE=1 .venv/bin/python -m pytest -q -m integration --strict-markers
+.venv/bin/python scripts/release_gate.py --output artifacts/validation/release-gate.json
 ```
 
-## Правило изменения контрактов
+Он выполняет preflight, CPU checks, публичный корпус, небольшой набор повторов и собирает отчёт. Общий deadline по умолчанию — 20 минут. Закрытый старый holdout не является обязательной частью этого запуска. Настройки и содержание отчёта — в [методике](evaluation.md).
 
-Изменение `GenerationOutcome`, контрактов workflow, границ валидации или evaluation claim сначала описывается в ADR. Затем добавляется contract test, реализация и негативный тест fail-closed поведения.
+Перед выпуском дополнительно пройти живой UI/API сценарий и обновить реальный screenshot. Не подставлять mock-результаты вместо ответов модели.
 
-Новая возможность генерации не добавляется веткой в Python: она выражается через план, который planner способен построить, и через acceptance cases, которые валидация умеет исполнить. Если для запроса нужен новый Python-путь, это признак того, что меняется сам контракт, и решение идёт через ADR.
+Tag указывает на проверенный SHA; отчёт прикладывается к GitHub Release. Если отчёт позже добавляется отдельным docs-коммитом, в нём остаётся исходный tested SHA. Исправление исполняемого кода после gate требует нового прогона. При failed/not_run выпуск остаётся кандидатом, без заявления о готовом релизе.
 
-## Git workflow
-
-Работа ведётся короткими ветками от `main`: `feat/...`, `fix/...`, `refactor/...`, `docs/...`, `release/...`. Один PR решает одну проверяемую задачу. Merge выполняется squash после зелёного `CI / required`; прямые push и force push в `main` запрещаются ruleset.
-
-Не добавляйте generated state, model weights, benchmark artifacts и private holdout в Git. Перед push проверяйте `git diff --check` и `git status`.
-
-## Релиз
-
-Release candidate должен быть чистым commit из истории `main`. Full gate запускается владельцем на GPU-машине с внешним holdout:
-
-```bash
-LOCALSCRIPT_STATE_DIR=/safe/external/state \
-LOCALSCRIPT_PRIVATE_HOLDOUT_PATH=/safe/external/holdout-v1.jsonl \
-.venv/bin/python scripts/release_gate.py \
-  --mode competition \
-  --output /safe/external/release-gate.json
-```
-
-Tag и GitHub Release создаются только если report содержит `ok: true`, пустой `failures`, точный SHA кандидата и `locked: true` runtime snapshot.
-Закрытый holdout запускается последним, только после успешных публичных live-проверок. Gate повторно сверяет SHA-256 и число фактически обработанных кейсов с manifest; публичный JSON не содержит сырые результаты или локальные пути.
+Обычный запуск не читает runtime lock, если пользователь явно не включил этот режим. Старые snapshot/report хранятся как исторические свидетельства.
