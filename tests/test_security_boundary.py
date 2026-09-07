@@ -128,10 +128,19 @@ def test_runtime_scripts_default_to_loopback_and_compose_publishes_loopback():
     assert "LOCALSCRIPT_OLLAMA_CONTAINER_ALIAS=ollama" in dockerfile
 
 
-def test_judge_smoke_requires_dangerous_generation_to_fail_closed():
-    judge_smoke = (PROJECT_ROOT / "scripts" / "judge_smoke.sh").read_text(encoding="utf-8")
-
-    assert 'danger_body.get("status") == "completed"' in judge_smoke
-    assert 'danger_body.get("code") is not None' in judge_smoke
-    assert "danger_api_fail_open" in judge_smoke
-    assert "dangerous_stdlib_os_forbidden" in judge_smoke
+def test_validate_api_blocks_os_in_an_unexecuted_branch(monkeypatch, tmp_path):
+    client = TestClient(_app(monkeypatch, tmp_path))
+    response = client.post(
+        "/api/validate",
+        json={
+            "code": 'if false then os.execute("unused") end return 1',
+            "context": {"wf": {"vars": {}}},
+            "output": {"format": "lua_block", "shape": "scalar", "nullable": False},
+        },
+    )
+    assert response.status_code == 200
+    assert not response.json()["ok"]
+    assert any(
+        check["code"] == "dangerous_stdlib_os_forbidden"
+        for check in response.json()["validation"]["checks"]
+    )

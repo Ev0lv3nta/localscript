@@ -64,7 +64,7 @@ container-check:
 check: install quality-check policy-check eval-integrity test-unit build-check
 
 smoke:
-	./scripts/judge_smoke.sh
+	.venv/bin/python scripts/smoke.py
 
 run:
 	./scripts/start.sh

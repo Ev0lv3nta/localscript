@@ -83,7 +83,7 @@ def test_compose_and_startup_scripts_defer_to_the_runtime_profile():
     assert "LOCALSCRIPT_PRIMARY_MODEL" not in service_environment
     assert "LOCALSCRIPT_FALLBACK_MODEL" not in service_environment
     assert service_environment["LOCALSCRIPT_OLLAMA_HOST"] == "http://ollama:11434"
-    for script_name in ("start.sh", "docker_entrypoint.sh", "preflight_judge.sh"):
+    for script_name in ("start.sh", "docker_entrypoint.sh"):
         script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
         assert PRIMARY_MODEL not in script
         assert "get_runtime_profile" in script
