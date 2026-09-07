@@ -148,6 +148,17 @@ def test_uuid_shaped_ids_must_be_version_four_but_legacy_slugs_remain_compatible
         validate_identifier(str(uuid.uuid1()), "invalid_session_id")
 
 
+def test_corrupt_old_trace_does_not_fail_a_new_write(tmp_path):
+    traces = TraceStore(root=tmp_path / "traces")
+    old_id = traces.write({"session_id": uuid.uuid4().hex, "status": "completed"})
+    path = next(traces.root.glob(f"*/{old_id}.json"))
+    path.write_text("{broken", encoding="utf-8")
+    new_id = traces.write({"session_id": uuid.uuid4().hex, "status": "completed"})
+    assert traces.read(new_id)["status"] == "completed"
+    assert not path.exists()
+    assert list(path.parent.glob(f".{old_id}.json.corrupt-*"))
+
+
 def test_trace_lookup_uses_index_without_recursive_glob(monkeypatch, tmp_path):
     traces = TraceStore(root=tmp_path / "traces")
     session_id = uuid.uuid4().hex

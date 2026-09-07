@@ -240,9 +240,15 @@ async function refreshSession(sessionId, requestContext) {
   if (!sessionId) {
     return;
   }
-  const { body } = await apiFetch(`/api/sessions/${sessionId}`, {
-    signal: requestContext.signal,
-  });
+  let body;
+  try {
+    ({ body } = await apiFetch(`/api/sessions/${sessionId}`, { signal: requestContext.signal }));
+  } catch (error) {
+    if (isCurrentRequest(requestContext) && error.name !== "AbortError") {
+      pushTimeline("История сессии недоступна", error.message);
+    }
+    return;
+  }
   if (!isCurrentRequest(requestContext) || state.sessionId !== sessionId) {
     return;
   }
@@ -254,9 +260,15 @@ async function refreshTrace(traceId, requestContext) {
   if (!traceId) {
     return;
   }
-  const { body } = await apiFetch(`/api/traces/${traceId}`, {
-    signal: requestContext.signal,
-  });
+  let body;
+  try {
+    ({ body } = await apiFetch(`/api/traces/${traceId}`, { signal: requestContext.signal }));
+  } catch (error) {
+    if (isCurrentRequest(requestContext) && error.name !== "AbortError") {
+      pushTimeline("Трассировка недоступна", error.message);
+    }
+    return;
+  }
   if (!isCurrentRequest(requestContext) || state.traceId !== traceId) {
     return;
   }
