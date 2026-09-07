@@ -28,9 +28,7 @@ def make_profile(**overrides):
         "num_predict": 2048,
         "batch": 1,
         "parallel": 1,
-        "max_candidates": 2,
         "runtime_lua": "lua5.4_subprocess",
-        "primary_launch": "./scripts/judge_up.sh",
         "request_timeout_seconds": 45,
     }
     values.update(overrides)

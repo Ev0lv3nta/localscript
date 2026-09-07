@@ -58,7 +58,6 @@ namespaces = true
 [tool.setuptools.package-data]
 "app.resources.config.profiles" = ["*.yaml"]
 "app.resources" = ["evals/*.json", "evals/**/*.jsonl"]
-"app.resources.scripts" = ["*.sh"]
 "app.ui.static" = ["*.html", "*.css", "*.js"]
 
 [tool.pytest.ini_options]

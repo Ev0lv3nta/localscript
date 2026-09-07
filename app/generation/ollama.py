@@ -49,6 +49,7 @@ class OllamaBackend:
         self._model_lock = threading.RLock()
         self._resolved_models: dict[str, ResolvedModel] = {}
         self._last_resolved_model: ResolvedModel | None = None
+        self.last_call_metrics: dict[str, int | float] = {}
         self._client = httpx.Client(
             base_url=self.host,
             timeout=_request_timeout(profile.request_timeout_seconds),
@@ -134,6 +135,7 @@ class OllamaBackend:
         model: str | None = None,
         response_format: object | None = None,
     ) -> str:
+        self.last_call_metrics = {}
         resolved = self.resolve_model(model)
         payload = {
             "model": resolved.tag,
@@ -150,6 +152,20 @@ class OllamaBackend:
             payload["format"] = response_format
 
         data = self._request_json("POST", "/api/generate", json=payload)
+        self.last_call_metrics = {
+            key: value
+            for key in (
+                "total_duration",
+                "load_duration",
+                "prompt_eval_count",
+                "prompt_eval_duration",
+                "eval_count",
+                "eval_duration",
+            )
+            if isinstance((value := data.get(key)), (int, float))
+            and not isinstance(value, bool)
+            and value >= 0
+        }
         if not model_identities_match(resolved, data.get("model")):
             raise BackendModel(reason="model_identity_mismatch")
 

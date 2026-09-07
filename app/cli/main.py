@@ -1,29 +1,32 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import typer
+from pydantic import ValidationError
 
 from app.core.benchmarks import (
     quality_gate_failures,
     run_dataset_benchmark,
     run_quality_benchmark,
 )
-from app.core.config import get_runtime_profile
-from app.core.resources import materialized_resource, resource_exists
-from app.core.runtime_lock import build_runtime_lock, write_runtime_lock
+from app.core.config import RuntimeProfile, get_runtime_profile
+from app.core.resources import resource_exists
 from app.core.traces import TraceStore
-from app.generation.engine import GenerationEngine
+from app.generation.backend_errors import BackendError
+from app.generation.engine import GenerationEngine, SessionStateError
 from app.generation.ollama import OllamaBackend
+from app.generation.results import GenerationResult
+from app.validation.runtime import find_lua_binary, find_luac_binary
 from app.workflow.contracts import (
     CheckStatus,
     CodeCandidate,
     OutputContract,
     OutputFormat,
     OutputShape,
+    WorkflowRoot,
     WorkflowStatus,
 )
 from app.workflow.validation import DeterministicCandidateValidator
@@ -31,89 +34,164 @@ from app.workflow.validation import DeterministicCandidateValidator
 cli = typer.Typer(help="LocalScript local CLI")
 
 
-def _display_path(path: Path | str) -> str:
-    target = Path(path).resolve()
-    project_root = Path(__file__).resolve().parents[2]
+def _emit_error(code: str, message: str, *, exit_code: int = 1) -> NoReturn:
+    typer.echo(
+        json.dumps(
+            {"ok": False, "error": {"code": code, "message": message}},
+            ensure_ascii=False,
+        )
+    )
+    raise typer.Exit(code=exit_code)
+
+
+def _read_text_file(path: str, *, label: str) -> str:
+    if path == "-":
+        return typer.get_text_stream("stdin").read()
     try:
-        return str(target.relative_to(project_root))
-    except ValueError:
-        return str(target)
+        return Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        _emit_error(
+            f"{label}_file_unreadable",
+            f"The {label} file could not be read as UTF-8 text.",
+            exit_code=2,
+        )
+
+
+def _resolve_text_input(
+    inline: str | None,
+    file_path: str | None,
+    *,
+    label: str,
+) -> str | None:
+    if inline is not None and file_path is not None:
+        _emit_error(
+            f"{label}_source_conflict",
+            f"Use either --{label} or --{label}-file, not both.",
+            exit_code=2,
+        )
+    return _read_text_file(file_path, label=label) if file_path is not None else inline
+
+
+def _close_backend(owner: object) -> None:
+    backend = getattr(owner, "backend", None)
+    close = getattr(backend, "close", None)
+    if callable(close):
+        close()
+
+
+def _generation_payload(result: GenerationResult) -> dict[str, Any]:
+    workflow = result.workflow
+    payload: dict[str, Any] = {
+        "status": workflow.status.value,
+        "session_id": result.session_id,
+        "trace_id": result.trace_id,
+        "diagnostics": [diagnostic.model_dump(mode="json") for diagnostic in workflow.diagnostics],
+        "revision_count": workflow.revision_count,
+    }
+    if workflow.code is not None:
+        payload["code"] = workflow.code
+    if workflow.question is not None:
+        payload["question"] = workflow.question
+    if workflow.source_choices:
+        payload["source_choices"] = [root.value for root in workflow.source_choices]
+    if workflow.validation is not None:
+        payload["validation"] = workflow.validation.model_dump(mode="json")
+    if workflow.output is not None:
+        payload["output"] = workflow.output.model_dump(mode="json")
+    return payload
 
 
 def build_engine() -> GenerationEngine:
     profile = get_runtime_profile()
-    return GenerationEngine(
-        profile=profile,
-        trace_store=TraceStore(),
-        backend=OllamaBackend(profile),
-    )
-
-
-def run_vram_probe(model: str, fallback_model: str) -> dict[str, Any]:
-    with materialized_resource("scripts/bench_vram.sh") as vram_script:
-        completed = subprocess.run(
-            ["bash", str(vram_script), model, fallback_model, "judged_probe"],
-            capture_output=True,
-            text=True,
-        )
+    backend = OllamaBackend(profile)
     try:
-        report = json.loads(completed.stdout.strip() or "{}")
-    except json.JSONDecodeError:
-        report = {
-            "status": "error",
-            "reason": "invalid_vram_report",
-            "raw_stdout": completed.stdout.strip(),
-        }
-    report.setdefault("model", model)
-    report.setdefault("fallback_model", fallback_model)
-    typed_report: dict[str, Any] = report
-    return typed_report
+        return GenerationEngine(
+            profile=profile,
+            trace_store=TraceStore(),
+            backend=backend,
+        )
+    except Exception:
+        backend.close()
+        raise
 
 
 @cli.command()
 def generate(
     prompt: str | None = typer.Option(None, help="Natural-language generation request."),
+    prompt_file: str | None = typer.Option(
+        None,
+        help="Read the generation request from a UTF-8 file; use '-' for stdin.",
+    ),
     context: str | None = typer.Option(None, help="Workflow context as JSON."),
+    context_file: str | None = typer.Option(
+        None,
+        help="Read workflow context JSON from a UTF-8 file; use '-' for stdin.",
+    ),
     session_id: str | None = typer.Option(None, help="Existing session id to continue."),
     answer: str | None = typer.Option(None, help="Answer to the open clarification question."),
     feedback: str | None = typer.Option(None, help="Feedback for revising the previous result."),
+    source_root: list[WorkflowRoot] | None = typer.Option(
+        None, "--source-root", help="Select a workflow root; repeat to allow both roots."
+    ),
 ) -> None:
     """Generate LocalScript code, or continue an existing session."""
-    if not prompt and not session_id:
-        raise typer.BadParameter("Provide --prompt for a new session or --session-id to continue.")
-    parsed_context = None
-    if context is not None:
-        try:
-            parsed_context = json.loads(context)
-        except json.JSONDecodeError as error:
-            raise typer.BadParameter("--context must be valid JSON") from error
-
-    engine = build_engine()
-    result = engine.generate(
-        prompt=prompt,
-        context=parsed_context,
-        session_id=session_id,
-        clarification_answer=answer,
-        feedback=feedback,
-    )
-    workflow = result.workflow
-    typer.echo(
-        json.dumps(
-            {
-                "status": workflow.status.value,
-                "session_id": result.session_id,
-                "trace_id": result.trace_id,
-                "code": workflow.code,
-                "question": workflow.question,
-                "diagnostics": [
-                    diagnostic.model_dump(mode="json") for diagnostic in workflow.diagnostics
-                ],
-                "revision_count": workflow.revision_count,
-            },
-            ensure_ascii=False,
+    if prompt_file == "-" and context_file == "-":
+        _emit_error(
+            "stdin_source_conflict",
+            "Standard input can provide either the prompt or the context, not both.",
+            exit_code=2,
         )
-    )
-    raise typer.Exit(code=0 if workflow.status is WorkflowStatus.COMPLETED else 1)
+    resolved_prompt = _resolve_text_input(prompt, prompt_file, label="prompt")
+    if not resolved_prompt and not session_id:
+        _emit_error(
+            "prompt_or_session_required",
+            "Provide a prompt for a new session or a session_id to continue one.",
+            exit_code=2,
+        )
+    raw_context = _resolve_text_input(context, context_file, label="context")
+    context_was_provided = context is not None or context_file is not None
+    parsed_context: object = None
+    if context_was_provided:
+        try:
+            parsed_context = json.loads(raw_context or "")
+        except json.JSONDecodeError:
+            _emit_error(
+                "invalid_json_context",
+                "Context must be valid JSON.",
+                exit_code=2,
+            )
+
+    try:
+        engine = build_engine()
+    except BackendError as error:
+        _emit_error(error.code, error.public_message)
+    try:
+        if context_was_provided:
+            result = engine.generate(
+                prompt=resolved_prompt,
+                context=parsed_context,
+                session_id=session_id,
+                clarification_answer=answer,
+                feedback=feedback,
+                source_roots=tuple(source_root) if source_root else None,
+            )
+        else:
+            result = engine.generate(
+                prompt=resolved_prompt,
+                session_id=session_id,
+                clarification_answer=answer,
+                feedback=feedback,
+                source_roots=tuple(source_root) if source_root else None,
+            )
+    except SessionStateError as error:
+        _emit_error(error.code, error.message)
+    except BackendError as error:
+        _emit_error(error.code, error.public_message)
+    finally:
+        _close_backend(engine)
+
+    typer.echo(json.dumps(_generation_payload(result), ensure_ascii=False))
+    raise typer.Exit(code=0 if result.workflow.status is WorkflowStatus.COMPLETED else 1)
 
 
 @cli.command()
@@ -125,27 +203,67 @@ def validate(
     output_shape: str = typer.Option("scalar", help="scalar, array, or object."),
     nullable: bool = typer.Option(False, help="Allow a null result."),
 ) -> None:
-    if not code and not code_file:
-        raise typer.BadParameter("Provide --code or --code-file.")
+    content = _resolve_text_input(code, code_file, label="code")
+    if content is None:
+        _emit_error(
+            "code_required",
+            "Provide --code or --code-file.",
+            exit_code=2,
+        )
 
-    content = code or Path(str(code_file)).read_text(encoding="utf-8")
     try:
         parsed_context = json.loads(context)
-    except json.JSONDecodeError as error:
-        raise typer.BadParameter("--context must be valid JSON") from error
+    except json.JSONDecodeError:
+        _emit_error(
+            "invalid_json_context",
+            "Context must be valid JSON.",
+            exit_code=2,
+        )
     if not isinstance(parsed_context, dict):
-        raise typer.BadParameter("--context must contain a JSON object")
+        _emit_error(
+            "invalid_json_context",
+            "Context must contain a JSON object.",
+            exit_code=2,
+        )
+    try:
+        resolved_output_format = OutputFormat(output_format)
+        resolved_output_shape = OutputShape(output_shape)
+    except ValueError:
+        _emit_error(
+            "invalid_output_contract",
+            "The output format or shape is not supported.",
+            exit_code=2,
+        )
     try:
         output = OutputContract(
-            format=OutputFormat(output_format),
-            shape=OutputShape(output_shape),
+            format=resolved_output_format,
+            shape=resolved_output_shape,
             nullable=nullable,
         )
-    except ValueError as error:
-        raise typer.BadParameter("invalid output contract") from error
+    except ValidationError:
+        _emit_error(
+            "invalid_output_contract",
+            "The output format, shape, and nullable options are inconsistent.",
+            exit_code=2,
+        )
+
+    try:
+        candidate = CodeCandidate(code=content)
+    except ValidationError:
+        rendered = content.strip()
+        if not rendered:
+            error_code = "code_empty"
+            message = "Code must not be empty."
+        elif rendered.startswith("```") or rendered.endswith("```"):
+            error_code = "code_markdown_fence_forbidden"
+            message = "Code must not contain Markdown fences."
+        else:
+            error_code = "invalid_code"
+            message = "Code does not satisfy the supported validation input contract."
+        _emit_error(error_code, message, exit_code=2)
 
     report = DeterministicCandidateValidator().validate_existing(
-        candidate=CodeCandidate(code=content),
+        candidate=candidate,
         output=output,
         context=parsed_context,
     )
@@ -162,120 +280,119 @@ def validate(
 
 @cli.command()
 def benchmark(
-    dataset: str = typer.Option("evals/live/v1.jsonl", help="JSONL dataset path."),
+    dataset: str = typer.Option("evals/public/v2.jsonl", help="JSONL dataset path."),
 ) -> None:
     dataset_path = Path(dataset)
     packaged_dataset = dataset.replace("\\", "/")
     if not dataset_path.is_file() and not (
         packaged_dataset.startswith("evals/") and resource_exists(packaged_dataset)
     ):
-        typer.echo(
-            json.dumps(
-                {"ok": False, "error": "dataset_not_found", "dataset": str(dataset_path)},
-                ensure_ascii=False,
-            )
+        _emit_error(
+            "dataset_not_found",
+            "The requested benchmark dataset was not found.",
         )
-        raise typer.Exit(code=1)
 
-    report = run_dataset_benchmark(
-        dataset_path, profile=get_runtime_profile(), backend=OllamaBackend(get_runtime_profile())
-    )
+    profile = get_runtime_profile()
+    try:
+        backend = OllamaBackend(profile)
+    except BackendError as error:
+        _emit_error(error.code, error.public_message)
+    try:
+        report = run_dataset_benchmark(dataset_path, profile=profile, backend=backend)
+    except BackendError as error:
+        _emit_error(error.code, error.public_message)
+    finally:
+        backend.close()
     typer.echo(json.dumps(report, ensure_ascii=False))
     raise typer.Exit(code=0 if report["ok"] else 1)
 
 
-@cli.command()
-def doctor(judge: bool = typer.Option(False, "--judge", help="Run judged-path checks.")) -> None:
-    profile = get_runtime_profile()
-    backend = OllamaBackend(profile)
+def _doctor_report(
+    profile: RuntimeProfile,
+    backend: OllamaBackend,
+    evaluation: bool,
+) -> dict[str, Any]:
+    trace_dir_writable = TraceStore().root.exists()
+    lua_runtime_present = bool(find_lua_binary())
+    luac_runtime_present = bool(find_luac_binary())
+    try:
+        available_tags = backend.list_tags()
+        ollama_reachable = True
+    except BackendError:
+        available_tags = []
+        ollama_reachable = False
+    model_present = profile.model in available_tags
     report = {
         "profile": profile.name,
         "model": profile.model,
-        "fallback_model": profile.fallback_model,
-        "trace_dir_writable": TraceStore().root.exists(),
-        "ollama_reachable": backend.ping(),
-        "judge_mode": judge,
+        "ollama_host": profile.ollama_host,
+        "num_ctx": profile.num_ctx,
+        "num_predict": profile.num_predict,
+        "batch": profile.batch,
+        "parallel": profile.parallel,
+        "request_timeout_seconds": profile.request_timeout_seconds,
+        "trace_dir_writable": trace_dir_writable,
+        "ollama_reachable": ollama_reachable,
+        "model_present": model_present,
+        "lua_runtime_present": lua_runtime_present,
+        "luac_runtime_present": luac_runtime_present,
+        "eval_mode": evaluation,
+        "judge_mode": evaluation,
+        "ok": all(
+            (
+                trace_dir_writable,
+                ollama_reachable,
+                model_present,
+                lua_runtime_present,
+                luac_runtime_present,
+            )
+        ),
     }
-    if judge:
-        available_tags = backend.list_tags()
-        primary_vram_report = run_vram_probe(profile.model, profile.fallback_model)
-        fallback_vram_report = None
-        selected_model = profile.model
-        selection_reason = "primary_selected"
-
-        if (
-            available_tags
-            and profile.model not in available_tags
-            and profile.fallback_model in available_tags
-        ):
-            selected_model = profile.fallback_model
-            selection_reason = "primary_tag_missing"
-            fallback_vram_report = run_vram_probe(profile.fallback_model, profile.fallback_model)
-        elif primary_vram_report.get("status") == "over_cap":
-            selected_model = profile.fallback_model
-            selection_reason = "primary_over_vram_cap"
-            fallback_vram_report = run_vram_probe(profile.fallback_model, profile.fallback_model)
-        elif primary_vram_report.get("status") == "ok":
-            selected_model = profile.model
-            selection_reason = "primary_within_vram_cap"
-        elif primary_vram_report.get("status") == "skipped":
-            selection_reason = "primary_selected_vram_skipped"
-
-        selected_vram_report = primary_vram_report
-        if selected_model == profile.fallback_model and fallback_vram_report is not None:
-            selected_vram_report = fallback_vram_report
-
-        selected_profile = profile
-        selected_backend = backend
-        if selected_model != profile.model:
-            selected_profile = profile.model_copy(update={"model": selected_model})
-            selected_backend = OllamaBackend(selected_profile)
-        quality_report = run_quality_benchmark(
-            profile=selected_profile,
-            backend=selected_backend,
-            mode="competition",
+    if evaluation:
+        quality_report = (
+            run_quality_benchmark(profile=profile, backend=backend, mode="competition")
+            if report["ok"]
+            else {"ok": False, "backend_type": "not_run", "reason": "runtime_not_ready"}
         )
-
-        hard_gate_failures = []
-        if not report["ollama_reachable"]:
-            hard_gate_failures.append("ollama_unreachable")
+        quality_failures = []
         if quality_report.get("backend_type") != "live_ollama":
-            hard_gate_failures.append("quality_backend_not_live_ollama")
-        hard_gate_failures.extend(quality_gate_failures(quality_report))
-        if available_tags and selected_model not in available_tags:
-            hard_gate_failures.append("selected_model_tag_missing")
-        if selected_vram_report.get("status") != "ok":
-            hard_gate_failures.append("selected_model_vram_not_ok")
-
-        lock_payload = build_runtime_lock(
-            profile=profile,
-            selected_model=selected_model,
-            selection_reason=selection_reason,
-            quality_report=quality_report,
-            vram_report=selected_vram_report,
-            primary_vram_report=primary_vram_report,
-            fallback_vram_report=fallback_vram_report,
-            available_tags=available_tags,
-            hard_gate_failures=hard_gate_failures,
-        )
-        lock_path = write_runtime_lock(lock_payload)
+            quality_failures.append("quality_backend_not_live_ollama")
+        quality_failures.extend(quality_gate_failures(quality_report))
         report.update(
             {
                 "quality_report": quality_report,
-                "vram_report": selected_vram_report,
-                "primary_vram_report": primary_vram_report,
-                "fallback_vram_report": fallback_vram_report,
                 "available_tags": available_tags,
-                "selected_model": selected_model,
-                "selection_reason": selection_reason,
-                "hard_gate_failures": hard_gate_failures,
-                "ok": not hard_gate_failures,
-                "runtime_snapshot_path": _display_path(lock_path),
+                "quality_failures": quality_failures,
+                "ok": bool(report["ok"]) and not quality_failures,
             }
         )
 
+    return report
+
+
+@cli.command()
+def doctor(
+    evaluation: bool = typer.Option(
+        False,
+        "--eval",
+        "--judge",
+        help="Run the slow live quality evaluation with the effective model.",
+    ),
+) -> None:
+    profile = get_runtime_profile()
+    try:
+        backend = OllamaBackend(profile)
+    except BackendError as error:
+        _emit_error(error.code, error.public_message)
+    try:
+        report = _doctor_report(profile, backend, evaluation)
+    except BackendError as error:
+        _emit_error(error.code, error.public_message)
+    finally:
+        backend.close()
+
     typer.echo(json.dumps(report, ensure_ascii=False))
-    if judge and not report.get("ok", report["ollama_reachable"]):
+    if not report["ok"]:
         raise typer.Exit(code=1)
 
 

@@ -43,6 +43,7 @@ const elements = {
   exampleSelect: document.getElementById("exampleSelect"),
   promptInput: document.getElementById("promptInput"),
   contextInput: document.getElementById("contextInput"),
+  sourceRoots: document.getElementById("sourceRoots"),
   clarificationInput: document.getElementById("clarificationInput"),
   feedbackInput: document.getElementById("feedbackInput"),
   codeOutput: document.getElementById("codeOutput"),
@@ -56,6 +57,9 @@ const elements = {
   outputShape: document.getElementById("outputShape"),
   outputNullable: document.getElementById("outputNullable"),
   validationSummary: document.getElementById("validationSummary"),
+  previewBox: document.getElementById("previewBox"),
+  resultPreview: document.getElementById("resultPreview"),
+  verificationScope: document.getElementById("verificationScope"),
   clarificationBox: document.getElementById("clarificationBox"),
   clarificationQuestion: document.getElementById("clarificationQuestion"),
   sessionBadge: document.getElementById("sessionBadge"),
@@ -93,6 +97,11 @@ function selectedOutputContract() {
     shape: elements.outputShape.value,
     nullable: elements.outputNullable.checked,
   };
+}
+
+function selectedSourceRoots() {
+  const value = elements.sourceRoots.value;
+  return value === "both" ? ["wf.vars", "wf.initVariables"] : value ? [value] : null;
 }
 
 function failedChecks(validation) {
@@ -237,9 +246,15 @@ async function refreshSession(sessionId, requestContext) {
   if (!sessionId) {
     return;
   }
-  const { body } = await apiFetch(`/api/sessions/${sessionId}`, {
-    signal: requestContext.signal,
-  });
+  let body;
+  try {
+    ({ body } = await apiFetch(`/api/sessions/${sessionId}`, { signal: requestContext.signal }));
+  } catch (error) {
+    if (isCurrentRequest(requestContext) && error.name !== "AbortError") {
+      pushTimeline("История сессии недоступна", error.message);
+    }
+    return;
+  }
   if (!isCurrentRequest(requestContext) || state.sessionId !== sessionId) {
     return;
   }
@@ -251,9 +266,15 @@ async function refreshTrace(traceId, requestContext) {
   if (!traceId) {
     return;
   }
-  const { body } = await apiFetch(`/api/traces/${traceId}`, {
-    signal: requestContext.signal,
-  });
+  let body;
+  try {
+    ({ body } = await apiFetch(`/api/traces/${traceId}`, { signal: requestContext.signal }));
+  } catch (error) {
+    if (isCurrentRequest(requestContext) && error.name !== "AbortError") {
+      pushTimeline("Трассировка недоступна", error.message);
+    }
+    return;
+  }
   if (!isCurrentRequest(requestContext) || state.traceId !== traceId) {
     return;
   }
@@ -272,10 +293,24 @@ function renderClarification(question) {
   elements.clarificationQuestion.textContent = question;
 }
 
+function renderPreview(validation) {
+  const observations = validation?.observations || [];
+  const request = observations.find((item) => item.source === "request") ||
+    observations.find((item) => !item.source && Object.hasOwn(item, "actual"));
+  elements.previewBox.classList.toggle("hidden", !request);
+  elements.resultPreview.textContent = request ? JSON.stringify(request.actual, null, 2) : "";
+  const caller = observations.filter((item) => item.source === "caller").length;
+  const model = observations.filter((item) => item.source === "model").length;
+  elements.verificationScope.textContent = request
+    ? `Пробное выполнение на входном контексте. Пользовательских примеров: ${caller}; примеров модели: ${model}. Без заданного ожидания проверяются выполнение и форма результата.`
+    : "";
+}
+
 function renderResult(body) {
   state.sessionId = body.session_id;
   state.traceId = body.trace_id;
   state.latestValidation = body.validation || {};
+  renderPreview(body.validation);
   state.outputContract = body.output || null;
   if (state.outputContract) {
     elements.outputShape.value = state.outputContract.shape;
@@ -284,6 +319,9 @@ function renderResult(body) {
 
   elements.codeOutput.value = body.code || "";
   renderClarification(body.question || "");
+  elements.clarificationInput.placeholder = body.source_choices?.length
+    ? "Выберите источник данных в левой колонке и нажмите «Продолжить»."
+    : "Ответьте на вопрос или дополните входной JSON-контекст.";
   refreshMetaBadges();
   renderDiagnostics();
 
@@ -363,6 +401,9 @@ async function generate(requestContext) {
   clearSessionState();
   pushTimeline("Запрос принят", prompt, "POST /api/generate");
   const payload = { prompt, context };
+  if (selectedSourceRoots()) {
+    payload.source_roots = selectedSourceRoots();
+  }
   if (state.draftOutputContract) {
     payload.output = state.draftOutputContract;
   }
@@ -388,24 +429,26 @@ async function continueSession(requestContext) {
     throw new Error("Нет активной сессии для продолжения.");
   }
   const answer = elements.clarificationInput.value.trim();
-  if (!answer) {
-    throw new Error("Введите ответ на уточнение.");
+  const sourceRoots = selectedSourceRoots();
+  const context = parseContext();
+  if (!answer && !sourceRoots && context === null) {
+    throw new Error("Ответьте на вопрос, выберите источник или дополните контекст.");
   }
   const sessionId = state.sessionId;
+  const payload = { session_id: sessionId, context };
+  if (answer) payload.clarification_answer = answer;
+  if (sourceRoots) payload.source_roots = sourceRoots;
   const { body } = await apiFetch("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      session_id: sessionId,
-      clarification_answer: answer,
-    }),
+    body: JSON.stringify(payload),
     signal: requestContext.signal,
   });
   if (!isCurrentRequest(requestContext) || state.sessionId !== sessionId) {
     return;
   }
   renderResult(body);
-  pushTimeline("Уточнение учтено", answer || "Пустой ответ", body.status);
+  pushTimeline("Уточнение учтено", answer || sourceRoots?.join(", ") || "Контекст дополнен", body.status);
   await refreshSession(body.session_id, requestContext);
   await refreshTrace(body.trace_id, requestContext);
 }
@@ -456,6 +499,7 @@ async function validateCode(requestContext) {
     return;
   }
   state.latestValidation = body;
+  renderPreview(body.validation);
   renderDiagnostics();
   if (body.ok) {
     elements.validationSummary.textContent = "Проверка кода прошла успешно.";
@@ -482,6 +526,9 @@ async function copyCurl() {
     prompt: elements.promptInput.value,
     context: elements.contextInput.value.trim() ? JSON.parse(elements.contextInput.value) : null,
   };
+  if (selectedSourceRoots()) {
+    payload.source_roots = selectedSourceRoots();
+  }
   if (state.draftOutputContract) {
     payload.output = state.draftOutputContract;
   }
@@ -503,6 +550,7 @@ function clearSessionState(message = "Новая сессия готова.") {
   state.traceId = null;
   state.latestSession = {};
   state.latestValidation = {};
+  renderPreview(null);
   state.latestTrace = {};
   state.outputContract = null;
   state.timeline = [];
@@ -523,6 +571,7 @@ function clearSessionState(message = "Новая сессия готова.") {
 function resetSession(message = "Сессия сброшена.") {
   invalidateActiveRequest();
   state.draftOutputContract = null;
+  elements.sourceRoots.value = "";
   clearSessionState(message);
 }
 
@@ -576,6 +625,7 @@ function bindEvents() {
 
 function showError(error, clearObsoleteResult = true) {
   if (clearObsoleteResult) {
+    renderPreview(null);
     elements.codeOutput.value = "";
     state.latestValidation = {};
     state.outputContract = null;

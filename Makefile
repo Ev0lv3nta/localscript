@@ -1,13 +1,20 @@
 UV ?= uv
 
-.PHONY: install lua-bootstrap lock-check license-check dependency-audit eval-integrity lint format-check type-check quality-check policy-check test test-unit \
-	build package-check build-check container-check check smoke run
+.PHONY: install lua-bootstrap model-setup compose-model-setup lock-check license-check dependency-audit eval-integrity lint format-check type-check quality-check policy-check test test-unit \
+	build package-check build-check container-check check smoke run start
 
 install:
 	$(UV) sync --frozen --all-extras
 
 lua-bootstrap:
 	./scripts/bootstrap_lua54.sh
+
+model-setup:
+	./scripts/setup_model.sh
+
+compose-model-setup:
+	docker compose up -d ollama
+	docker compose exec ollama ollama pull "$$($(UV) run --frozen python -c 'from app.core.config import get_runtime_profile; print(get_runtime_profile().model)')"
 
 lock-check:
 	$(UV) lock --check
@@ -45,7 +52,7 @@ test-unit: lua-bootstrap
 build:
 	$(UV) build --clear
 
-package-check: build
+package-check: lua-bootstrap build
 	.venv/bin/python scripts/check_package_artifacts.py --dist-dir dist
 
 build-check: lock-check package-check
@@ -57,7 +64,9 @@ container-check:
 check: install quality-check policy-check eval-integrity test-unit build-check
 
 smoke:
-	./scripts/judge_smoke.sh
+	.venv/bin/python scripts/smoke.py
 
 run:
-	./scripts/judge_up.sh
+	./scripts/start.sh
+
+start: run

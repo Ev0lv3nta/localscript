@@ -12,6 +12,7 @@ from app.core.state import resolve_state_path
 from app.core.storage import (
     REDACTED,
     TRACE_PRIVATE_KEYS,
+    CorruptStateError,
     atomic_write_json,
     delete_file,
     ensure_directory,
@@ -29,13 +30,13 @@ from app.core.storage import (
 DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def _retention_value(explicit: int | None, environment_name: str) -> int | None:
+def _retention_value(explicit: int | None, environment_name: str, default: int) -> int:
     value: int | None
     if explicit is not None:
         value = int(explicit)
     else:
         configured = os.getenv(environment_name)
-        value = int(configured) if configured not in (None, "") else None
+        value = int(configured) if configured not in (None, "") else default
     if value is not None and value < 0:
         raise ValueError(f"{environment_name} must be non-negative")
     return value
@@ -56,10 +57,10 @@ class TraceStore:
         self._session_index = ensure_directory(self._index_root / "sessions")
         self._lock_path = self.root / ".locks" / "store.lock"
         self.retention_count = _retention_value(
-            retention_count, "LOCALSCRIPT_TRACE_RETENTION_COUNT"
+            retention_count, "LOCALSCRIPT_TRACE_RETENTION_COUNT", 1000
         )
         self.retention_ttl_seconds = _retention_value(
-            retention_ttl_seconds, "LOCALSCRIPT_TRACE_RETENTION_TTL_SECONDS"
+            retention_ttl_seconds, "LOCALSCRIPT_TRACE_RETENTION_TTL_SECONDS", 7 * 24 * 3600
         )
         self._clock = clock
 
@@ -211,7 +212,10 @@ class TraceStore:
         now = utc_now(self._clock)
         entries: list[tuple[datetime, Path, dict[str, Any]]] = []
         for path in self._iter_trace_paths_unlocked():
-            payload = read_json(path, expected_type=dict)
+            try:
+                payload = read_json(path, expected_type=dict)
+            except CorruptStateError:
+                continue
             try:
                 timestamp = parse_utc(payload.get("created_at"))
             except (TypeError, ValueError):

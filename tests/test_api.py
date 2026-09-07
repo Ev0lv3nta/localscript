@@ -50,7 +50,7 @@ def test_health_endpoint(tmp_path):
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "profile": "competition"}
+    assert response.json() == {"status": "ok", "profile": "local"}
 
 
 def test_ready_endpoint_reports_runtime_and_backend(tmp_path, monkeypatch):

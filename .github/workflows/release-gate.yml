@@ -10,6 +10,7 @@ on:
         type: string
 
 permissions:
+  checks: read
   contents: read
 
 concurrency:
@@ -21,11 +22,10 @@ jobs:
     name: live GPU
     runs-on: [self-hosted, linux, x64, gpu, localscript-release-gate]
     environment: release-gate
-    timeout-minutes: 360
+    timeout-minutes: 35
     env:
       LOCALSCRIPT_REQUIRE_LIVE: "1"
       LOCALSCRIPT_STATE_DIR: ${{ github.workspace }}/artifacts/state
-      LOCALSCRIPT_PRIVATE_HOLDOUT_PATH: ${{ secrets.LOCALSCRIPT_PRIVATE_HOLDOUT_PATH }}
       UV_FROZEN: "1"
       UV_NO_PROGRESS: "1"
     steps:
@@ -67,9 +67,11 @@ jobs:
         run: ./scripts/bootstrap_lua54.sh
 
       - name: Выполнить release gate
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: >-
           .venv/bin/python scripts/release_gate.py
-          --mode competition
+          --mode local
           --output artifacts/validation/release-gate.json
 
       - name: Сохранить отчёты
@@ -79,6 +81,5 @@ jobs:
           name: release-gate-${{ steps.revision.outputs.sha }}
           path: |
             artifacts/validation/release-gate.json
-            artifacts/state/runtime_profile.lock.json
           if-no-files-found: warn
           retention-days: 30

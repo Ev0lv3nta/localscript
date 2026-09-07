@@ -12,6 +12,13 @@ from tests.support_backends import DeterministicTestBackend
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def clear_runtime_profile_cache():
+    get_runtime_profile.cache_clear()
+    yield
+    get_runtime_profile.cache_clear()
+
+
 def _app(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALSCRIPT_STATE_DIR", str(tmp_path / "state"))
     profile = get_runtime_profile()
@@ -111,20 +118,29 @@ def test_request_body_limit_stops_chunked_stream_at_limit_plus_one():
 
 
 def test_runtime_scripts_default_to_loopback_and_compose_publishes_loopback():
-    judge_up = (PROJECT_ROOT / "scripts" / "judge_up.sh").read_text(encoding="utf-8")
+    start = (PROJECT_ROOT / "scripts" / "start.sh").read_text(encoding="utf-8")
     compose = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
 
-    assert "LOCALSCRIPT_BIND_HOST:-127.0.0.1" in judge_up
-    assert "non-loopback bind requires LOCALSCRIPT_REMOTE_MODE=1" in judge_up
+    assert '"UVI_HOST": profile.bind_host' in start
+    assert "non-loopback bind requires LOCALSCRIPT_REMOTE_MODE=1" in start
     assert '"127.0.0.1:${LOCALSCRIPT_PORT:-8080}' in compose
     assert "LOCALSCRIPT_OLLAMA_CONTAINER_ALIAS=ollama" in dockerfile
 
 
-def test_judge_smoke_requires_dangerous_generation_to_fail_closed():
-    judge_smoke = (PROJECT_ROOT / "scripts" / "judge_smoke.sh").read_text(encoding="utf-8")
-
-    assert 'danger_body.get("status") == "completed"' in judge_smoke
-    assert 'danger_body.get("code") is not None' in judge_smoke
-    assert "danger_api_fail_open" in judge_smoke
-    assert "dangerous_stdlib_os_forbidden" in judge_smoke
+def test_validate_api_blocks_os_in_an_unexecuted_branch(monkeypatch, tmp_path):
+    client = TestClient(_app(monkeypatch, tmp_path))
+    response = client.post(
+        "/api/validate",
+        json={
+            "code": 'if false then os.execute("unused") end return 1',
+            "context": {"wf": {"vars": {}}},
+            "output": {"format": "lua_block", "shape": "scalar", "nullable": False},
+        },
+    )
+    assert response.status_code == 200
+    assert not response.json()["ok"]
+    assert any(
+        check["code"] == "dangerous_stdlib_os_forbidden"
+        for check in response.json()["validation"]["checks"]
+    )

@@ -1,6 +1,9 @@
 import hashlib
 import re
+import subprocess
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 LEGACY_PROMPT_FINGERPRINTS = {
@@ -24,11 +27,16 @@ def _fingerprint(tokens: list[str]) -> str:
 
 
 def test_legacy_public_prompts_are_absent_from_repository_text():
+    if not (ROOT / ".git").exists():
+        pytest.skip("Publication guard applies to a Git checkout, not an installed package.")
     matches = []
     lengths = {length for length, _ in LEGACY_PROMPT_FINGERPRINTS}
-
-    for path in sorted(ROOT.rglob("*")):
-        if not path.is_file() or ".git" in path.parts:
+    # Scan only publishable files: virtualenvs, build output and downloaded tools are not
+    # repository content. Walking them dominated the CPU suite without protecting publication.
+    tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode().split("\0")
+    for name in sorted(filter(None, tracked)):
+        path = ROOT / name
+        if not path.is_file():
             continue
         try:
             tokens = _tokens(path.read_text(encoding="utf-8"))
